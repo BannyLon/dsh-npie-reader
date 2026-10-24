@@ -1,0 +1,1654 @@
+
+/* The article list remains available while a native Harness conversation is open. */
+.npr-workarea.has-companion > .npr-layout {
+  grid-template-columns: min(var(--npr-list-width), 38%) 1px minmax(0, 1fr);
+}
+.npr-workarea.has-companion > .npr-layout > .npr-sidebar { display: flex; }
+.npr-workarea.has-companion > .npr-layout > .npr-resize { display: block; }
+.npr-workarea.has-companion .npr-article { padding-inline: clamp(18px, 3%, 36px); }
+.npr-root .npr-channel { gap: 9px; }
+.npr-channel-mark { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--npr-muted); border-radius: 7px; }
+.npr-channel-mark.curated { color: var(--npr-fg); }
+.npr-channel-mark.all { color: var(--npr-fg); }
+/* 设置齿轮：0.20.1 起在侧栏**工具栏最右端**（原先挂在筛选 chip 行里）。
+   选择器带三层（.npr-root + 工具栏 + 按钮）是为了压住 `.npr-root .npr-icon` 那条
+   32×32 的基础尺寸 —— 两者特异度若相同，谁生效就只看源码顺序，而这种「看着生效了、
+   换个顺序就变」的规则最容易被后来的改动悄悄掀翻。 */
+.npr-root .npr-sidebar-toolbar .npr-settings-button { width: 30px; height: 30px; padding: 6px; border-radius: 7px; color: var(--npr-muted); }
+.npr-root .npr-sidebar-toolbar .npr-settings-button:hover { background: var(--npr-hover); color: var(--npr-fg); }
+.npr-root .npr-sidebar-toolbar .npr-settings-button svg { width: 17px; height: 17px; }
+
+/* Keep the reading measure stable while an article is fetched. */
+.npr-article-loading { animation: npr-skeleton-enter .16s ease .14s both; }
+.npr-skeleton-toolbar { gap: 11px; }
+.npr-skeleton-toolbar .npr-skeleton-pill { width: 94px; height: 26px; border-radius: 999px; margin-right: 6px; }
+.npr-skeleton-icon { width: 28px; height: 28px; border-radius: 7px; }
+.npr-article-skeleton { padding-top: 34px; }
+.npr-skeleton { background: color-mix(in srgb, var(--npr-fg) 8%, var(--npr-bg)); background-image: linear-gradient(100deg, transparent 18%, color-mix(in srgb, var(--npr-bg) 65%, transparent) 50%, transparent 82%); background-size: 200% 100%; animation: npr-skeleton-shimmer 1.7s ease-in-out infinite; }
+.npr-skeleton-meta { width: 132px; height: 15px; border-radius: 5px; margin-bottom: 28px; }
+.npr-skeleton-title { width: 82%; height: 29px; border-radius: 6px; margin-bottom: 14px; }
+.npr-skeleton-title.short { width: 56%; margin-bottom: 50px; }
+.npr-skeleton-paragraph { display: grid; gap: 19px; margin-bottom: 51px; }
+.npr-skeleton-paragraph .npr-skeleton { height: 14px; border-radius: 5px; }
+.npr-skeleton-paragraph .npr-skeleton:nth-child(2) { width: 93%; }
+.npr-skeleton-paragraph .npr-skeleton:last-child { width: 67%; }
+@keyframes npr-skeleton-enter { from { opacity: 0; } to { opacity: 1; } }
+@keyframes npr-skeleton-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .npr-article-loading { animation: none; } .npr-skeleton { animation: none; background-image: none; } }
+.npr-article-load-error { display: grid; justify-items: start; gap: 9px; width: min(100% - 48px, 480px); margin: clamp(60px, 12vh, 140px) auto; color: var(--npr-muted); }
+.npr-article-load-error h2 { margin: 7px 0 0; color: var(--npr-fg); font-size: 19px; }
+.npr-article-load-error p { margin: 0 0 9px; font-size: 13px; }
+.npr-article-load-error button { min-height: 36px; padding: 0 13px; border: 1px solid color-mix(in srgb, var(--npr-fg) 18%, var(--npr-bg)); border-radius: 8px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; cursor: pointer; }
+.npr-article-load-error button:hover { background: color-mix(in srgb, var(--npr-fg) 5%, var(--npr-bg)); }
+
+/* Reading surfaces keep their paper/dark theme through hover and selection. */
+.npr-root button.npr-entry:hover,
+.npr-root .npr-filters button:hover,
+.npr-root .npr-icon:hover { background: color-mix(in srgb, var(--npr-fg) 5%, var(--npr-bg)); color: var(--npr-fg); }
+.npr-root button.npr-entry.npr-selected { background: color-mix(in srgb, var(--npr-fg) 8%, var(--npr-bg)); box-shadow: inset 2px 0 0 color-mix(in srgb, var(--npr-fg) 58%, var(--npr-bg)); }
+.npr-root .npr-filters button[aria-pressed=true] { background: color-mix(in srgb, var(--npr-fg) 8%, var(--npr-bg)); }
+.npr-prose::selection, .npr-prose *::selection, ::highlight(npr-reading-selection) { background: color-mix(in srgb, var(--npr-fg) 17%, var(--npr-bg)); color: var(--npr-fg); }
+
+/* Searchable, anchored channel switcher. */
+.npr-channel-backdrop { align-items: initial; justify-content: initial; padding: 0; background: transparent; }
+.npr-channel-picker {
+  position: absolute; width: min(480px, calc(100vw - 24px)); max-height: min(560px, calc(100vh - 24px));
+  padding: 0; gap: 0; border: 1px solid color-mix(in srgb, var(--npr-fg) 11%, var(--npr-bg)); border-radius: 12px;
+  background: var(--npr-bg); color: var(--npr-fg); box-shadow: 0 14px 42px rgba(0,0,0,.13), 0 1px 2px rgba(0,0,0,.04);
+}
+.npr-channel-heading { display: flex; align-items: center; justify-content: space-between; padding: 16px 17px 8px; }
+.npr-channel-heading > div { display: flex; flex-direction: column; gap: 2px; }
+.npr-channel-heading strong { font-size: 15px; letter-spacing: -.015em; }
+.npr-channel-heading small { color: var(--npr-muted); font-size: 11px; }
+.npr-channel-heading .npr-icon { width: 28px; height: 28px; }
+.npr-channel-top { height: 46px; min-height: 46px; margin: 10px 16px 10px; padding: 0 14px; gap: 10px; border: 1px solid color-mix(in srgb, var(--npr-fg) 13%, var(--npr-bg)); border-radius: 9px; color: var(--npr-muted); background: color-mix(in srgb, var(--npr-fg) 2%, var(--npr-bg)); }
+.npr-channel-top:focus-within { border-color: color-mix(in srgb, var(--npr-fg) 33%, var(--npr-bg)); box-shadow: none; }
+.npr-root .npr-channel-top input[type=search] { flex: 1; width: 100%; height: 100%; padding: 0; min-width: 0; border: 0 !important; border-radius: 0; background: transparent !important; color: var(--npr-fg); outline: 0 !important; box-shadow: none !important; appearance: none; font-size: 13px; }
+.npr-root .npr-channel-top input[type=search]:focus { border: 0 !important; outline: 0 !important; box-shadow: none !important; }
+.npr-channel-options { padding: 2px 10px 8px; }
+.npr-channel-section { padding: 14px 11px 6px; color: var(--npr-muted); font-size: 11px; letter-spacing: .02em; }
+.npr-channel-option-wrap { border-radius: 8px; }
+.npr-channel-option { min-height: 50px; padding: 9px 10px; gap: 9px; border-radius: 8px; }
+.npr-channel-option[aria-current=true] { background: color-mix(in srgb, var(--npr-fg) 8%, var(--npr-bg)); }
+.npr-channel-option:hover { background: color-mix(in srgb, var(--npr-fg) 5%, var(--npr-bg)); }
+.npr-channel-option[aria-current=true]:hover { background: color-mix(in srgb, var(--npr-fg) 11%, var(--npr-bg)); }
+.npr-channel-option:focus-visible { outline: 1px solid color-mix(in srgb, var(--npr-fg) 40%, var(--npr-bg)); outline-offset: -2px; }
+.npr-channel-option .npr-channel-mark { background: transparent; }
+.npr-channel-name { font-size: 13px; font-weight: 520; }
+.npr-channel-subtitle { font-size: 11px; }
+.npr-channel-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 14px; border-top: 1px solid color-mix(in srgb, var(--npr-fg) 9%, var(--npr-bg)); background: color-mix(in srgb, var(--npr-fg) 2%, var(--npr-bg)); }
+.npr-channel-manage, .npr-channel-close { height: 30px; margin: 0; border: 0; background: transparent; padding: 0 8px; font-size: 12px; border-radius: 7px; }
+.npr-channel-manage:hover, .npr-channel-close:hover { background: color-mix(in srgb, var(--npr-fg) 7%, var(--npr-bg)); }
+.npr-channel-manage svg:last-child { transform: rotate(-90deg); margin-left: 4px; }
+
+/* 陈旧源在频道列表里点出来：第三方代理会悄悄停更，只列名字用户看不出来 */
+.npr-channel-option-wrap.is-stale .npr-channel-subtitle { color: var(--dsw-alias-state-error-primary); }
+
+/* 侧栏「+」的下拉：把「添加自己的订阅源」提到一级入口 */
+.npr-addmenu-backdrop { position: fixed; inset: 0; z-index: 39; }
+.npr-addmenu {
+  position: fixed; z-index: 40; width: 236px; padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--npr-fg) 12%, var(--npr-bg)); border-radius: 11px;
+  background: var(--npr-bg); color: var(--npr-fg);
+  box-shadow: 0 14px 42px rgba(0,0,0,.16), 0 1px 2px rgba(0,0,0,.05);
+}
+.npr-addmenu button {
+  display: flex; width: 100%; align-items: flex-start; gap: 9px; padding: 9px 10px;
+  border: 0; border-radius: 8px; background: transparent; color: inherit;
+  font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.npr-addmenu button:hover { background: color-mix(in srgb, var(--npr-fg) 6%, var(--npr-bg)); }
+.npr-addmenu button > svg { flex: 0 0 auto; margin-top: 2px; color: var(--npr-muted); }
+.npr-addmenu small { display: block; margin-top: 2px; color: var(--npr-muted); font-size: 11px; }
+
+/* 「有订阅源已经很久没更新」的提示。
+   ★ 它说的是「某个源陈旧了」，**不是错误** —— 以前却用了一整块错误红边框的
+     三行卡片压在列表顶上，视觉权重比下面的文章标题还高，读文章先被它拦一道。
+     现在压成**一行**、用中性色，明细挪进 `title`，并给一个「不再提示」。
+     判断依据仍然是 `staleNotice`（它同时给出稳定的 key 供记忆）。 */
+.npr-notice {
+  display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+  margin: 0 12px 8px; padding: 5px 6px 5px 9px;
+  border: 1px solid var(--npr-border); border-radius: 8px;
+  background: color-mix(in srgb, var(--npr-fg) 4%, var(--npr-bg));
+  color: var(--npr-muted); font-size: 11.5px; line-height: 1.5;
+}
+.npr-notice > svg { flex: 0 0 auto; color: var(--npr-faint); }
+.npr-notice-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npr-root .npr-notice-link {
+  flex: 0 0 auto; padding: 0 4px; border: 0; background: transparent;
+  color: var(--npr-accent-strong); font: inherit; font-size: 11.5px; cursor: pointer;
+}
+.npr-root .npr-notice-link:hover { text-decoration: underline; }
+.npr-root .npr-notice-close {
+  display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center;
+  width: 20px; height: 20px; padding: 0; border: 0; border-radius: 5px;
+  background: transparent; color: var(--npr-faint); cursor: pointer;
+}
+.npr-root .npr-notice-close:hover { background: var(--npr-hover); color: var(--npr-fg); }
+/* 多行变体：书架的「没找到书单文件」要同时说清三件事（结论、是哪个路径、怎么办），
+   一行装不下。与单行变体共用外框，区别只在内容形态 + 顶部对齐。
+   ★ 这段是补回来的：0.7.1 把 RSS 那条提示从多行压成单行时，顺手删了 `.npr-notice-body`
+   的规则，但**书架的这条用的是同一套类名** —— 于是那三行内容在界面上叠成一坨
+   （`<strong>` 不带强调、`<span>` 不带间距）。类名交叉比对（`scripts/check-classes.mjs`）
+   抓到了它，所以那种检查别只当成风格癖好。 */
+.npr-notice-body { display: grid; gap: 2px; min-width: 0; }
+.npr-notice-body strong { color: var(--npr-fg); font-size: 11.5px; font-weight: 620; }
+.npr-notice-body span { color: var(--npr-muted); font-size: 11.5px; word-break: break-word; }
+.npr-notice:has(.npr-notice-body) { align-items: flex-start; }
+.npr-notice:has(.npr-notice-body) > svg { margin-top: 1px; }
+
+/* 添加订阅：一次可以粘多个地址 */
+.npr-addfeed-hint { margin: -4px 0 0; color: var(--npr-muted); font-size: 12px; line-height: 1.6; }
+.npr-modal .npr-addfeed-urls { min-height: 96px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; resize: vertical; }
+.npr-addfeed-status { min-height: 16px; color: var(--npr-muted); font-size: 12px; line-height: 1.5; }
+/* 分组框：输入框 + 常驻可见的下拉按钮。
+   ★ 按钮**不叠在输入框上**（那要改输入框的 padding-right，而基样式
+     `.npr-modal input:not([type])` 的特异度更高，覆盖它得靠更长选择器）；
+     并排一个独立的方按钮反而更像「可下拉」的组合控件。
+   ★ 行高由输入框决定（`align-items: stretch`），不抄它的 padding 数值 ——
+     基样式以后改字号，按钮会自己跟着变高。 */
+.npr-groupfield { position: relative; display: flex; align-items: stretch; gap: 6px; }
+.npr-groupfield > input { flex: 1; min-width: 0; }
+.npr-groupfield-toggle { flex: 0 0 34px; display: grid; place-items: center; padding: 0; border: .5px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-bg-layer-2); color: var(--npr-muted); cursor: pointer; }
+.npr-groupfield-toggle:hover:not(:disabled), .npr-groupfield-toggle[aria-expanded=true] { background: var(--npr-hover); color: var(--npr-fg); }
+.npr-groupfield-toggle:disabled { opacity: .35; cursor: default; }
+.npr-groupfield-toggle[aria-expanded=true] svg { transform: rotate(180deg); }
+/* 向上弹：这个字段在弹窗里靠底部，向下弹会被 `.npr-modal` 的 `overflow: auto` 裁掉。 */
+.npr-groupfield-menu { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 5; display: grid; gap: 2px; max-height: 150px; overflow-y: auto; padding: 5px; border: .5px solid var(--dsw-alias-border-l2); border-radius: 9px; background: var(--dsw-alias-bg-base); box-shadow: 0 10px 28px rgba(0,0,0,.14); }
+.npr-groupfield-menu button { display: flex; align-items: center; min-height: 30px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.npr-groupfield-menu button:hover { background: var(--npr-hover); }
+.npr-groupfield-menu button.is-active { background: color-mix(in srgb, var(--npr-fg) 9%, var(--npr-bg)); font-weight: 600; }
+
+/* A wide drag target with a hairline instead of a heavy panel border. */
+.npr-workarea .npr-companion-divider { position: relative; width: 8px; flex-basis: 8px; background: transparent; }
+.npr-workarea .npr-companion-divider::after { content: ''; position: absolute; top: 0; bottom: 0; left: calc(50% - .5px); width: 1px; background: color-mix(in srgb, var(--npr-fg) 12%, var(--npr-bg)); pointer-events: none; }
+.npr-workarea .npr-companion-divider:hover,
+.npr-workarea .npr-companion-divider:focus-visible,
+.npr-workarea .npr-companion-divider[data-dragging=true] { background: transparent; outline: none; }
+.npr-workarea .npr-companion-divider:hover::after,
+.npr-workarea .npr-companion-divider:focus-visible::after,
+.npr-workarea .npr-companion-divider[data-dragging=true]::after { width: 2px; background: color-mix(in srgb, var(--npr-fg) 34%, var(--npr-bg)); }
+
+/* Reading theme also colors the embedded Harness conversation. Host controls stay native. */
+.npr-companion { background: var(--npr-bg); color: var(--npr-fg); }
+.npr-root[data-reading-theme]:not([data-reading-theme=auto]) .npr-companion {
+  --dsw-alias-bg-base: var(--npr-chat-bg);
+  --dsw-alias-bg-layer-1: color-mix(in srgb, var(--npr-chat-fg) 3%, var(--npr-chat-bg));
+  --dsw-alias-bg-layer-2: color-mix(in srgb, var(--npr-chat-fg) 6%, var(--npr-chat-bg));
+  --dsw-alias-bg-overlay: color-mix(in srgb, var(--npr-chat-fg) 8%, var(--npr-chat-bg));
+  --dsw-alias-label-primary: var(--npr-chat-fg);
+  --dsw-alias-label-secondary: color-mix(in srgb, var(--npr-chat-fg) 67%, var(--npr-chat-bg));
+  --dsw-alias-border-l1: color-mix(in srgb, var(--npr-chat-fg) 12%, var(--npr-chat-bg));
+  --dsw-alias-border-l2: color-mix(in srgb, var(--npr-chat-fg) 20%, var(--npr-chat-bg));
+  --dsw-alias-brand-primary: var(--npr-chat-fg);
+}
+.npr-companion-header { min-height: 52px; padding: 9px 14px; border-bottom: 1px solid color-mix(in srgb, var(--npr-fg) 10%, var(--npr-bg)); }
+.npr-companion-header strong { color: var(--npr-fg); font-size: 14px; }
+.npr-companion-context { padding: 11px 16px; border-bottom-color: color-mix(in srgb, var(--npr-fg) 9%, var(--npr-bg)); color: var(--npr-muted); }
+.npr-companion-context strong { color: var(--npr-fg); font-size: 12px; }
+.npr-companion-prompt-anchor { min-width: 0; width: 100%; flex: none; }
+.npr-companion-prompt-strip { display: flex; align-items: center; gap: 5px; min-width: 0; width: 100%; padding: 7px 14px 8px; white-space: nowrap; color: var(--npr-fg); }
+.npr-companion-prompt-scroll { display: flex; align-items: center; gap: 5px; min-width: 0; flex: 1; overflow-x: auto; overflow-y: hidden; overscroll-behavior-inline: contain; scrollbar-width: none; }
+.npr-companion-prompt-scroll::-webkit-scrollbar { display: none; }
+.npr-native-chat .npr-companion-prompt-strip button { appearance: none; display: inline-flex; align-items: center; justify-content: center; flex: none; min-height: 34px; padding: 0 11px; border: 0; border-radius: 8px; background: transparent; box-shadow: none; color: var(--npr-muted); font: inherit; font-size: 12px; font-weight: 500; line-height: 1; white-space: nowrap; cursor: pointer; transition: background-color .14s ease, color .14s ease; }
+.npr-native-chat .npr-companion-prompt-strip .npr-companion-prompt-ghost { background: color-mix(in srgb, var(--npr-fg) 5%, var(--npr-bg)); color: var(--npr-fg); }
+.npr-native-chat .npr-companion-prompt-strip button:hover:not(:disabled) { background: color-mix(in srgb, var(--npr-fg) 7%, var(--npr-bg)); color: var(--npr-fg); }
+.npr-native-chat .npr-companion-prompt-strip button:active:not(:disabled) { background: color-mix(in srgb, var(--npr-fg) 11%, var(--npr-bg)); }
+.npr-native-chat .npr-companion-prompt-strip button:focus-visible { outline: 1px solid color-mix(in srgb, var(--npr-fg) 45%, var(--npr-bg)); outline-offset: -1px; }
+.npr-native-chat .npr-companion-prompt-strip button:disabled { opacity: .45; cursor: not-allowed; }
+.npr-native-chat .npr-companion-prompt-strip .npr-companion-add-prompt { width: 32px; padding: 0; }
+.npr-companion-error { margin: 20px 16px; padding: 18px; border: 1px solid var(--npr-border); border-radius: 12px; background: var(--npr-bg-2); color: var(--npr-fg); }
+.npr-companion-error strong { display: block; font-size: 13px; font-weight: 600; }
+.npr-companion-error p { margin: 7px 0 14px; color: var(--npr-muted); font-size: 12px; line-height: 1.6; }
+.npr-companion-error button { margin: 0; min-height: 32px; padding: 0 11px; border: 1px solid var(--npr-border); border-radius: 7px; background: var(--npr-bg); color: var(--npr-fg); font: inherit; font-size: 12px; cursor: pointer; }
+.npr-companion-error button:hover { background: var(--npr-hover); }
+.npr-companion-notice { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 16px 0; padding: 9px 11px; border-radius: 8px; background: var(--npr-bg-2); color: var(--npr-muted); font-size: 11px; line-height: 1.5; }
+.npr-companion-notice button { display: grid; place-items: center; flex: none; width: 24px; height: 24px; border: 0; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; }
+.npr-companion-notice button:hover { background: var(--npr-hover); color: var(--npr-fg); }
+.npr-native-chat { position: relative; }
+.npr-native-chat [data-conversation-scroll] :has(> [data-chat-flow]) { padding-inline: 16px; }
+.npr-companion-opening { position: absolute; inset: 0 0 172px; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 0; padding: 18px 24px 0; overflow: hidden; text-align: center; pointer-events: none; color: var(--npr-fg); }
+.npr-companion-book { width: 112px; height: 88px; margin-bottom: 22px; color: color-mix(in srgb, var(--npr-fg) 42%, var(--npr-bg)); }
+.npr-companion-book svg { display: block; width: 100%; height: 100%; stroke: currentColor; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
+.npr-companion-book-spark { color: color-mix(in srgb, #ad7e49 68%, var(--npr-fg)); stroke: currentColor; }
+.npr-companion-opening-label { color: color-mix(in srgb, #ad7e49 54%, var(--npr-muted)); font-size: 11px; font-weight: 600; letter-spacing: .12em; }
+.npr-companion-opening h2 { margin: 10px 0 0; color: var(--npr-fg); font-family: 'Songti SC', 'STSong', 'Noto Serif CJK SC', serif; font-size: clamp(20px, 2vw, 26px); font-weight: 600; line-height: 1.5; letter-spacing: .045em; }
+.npr-companion-opening p { margin: 14px 0 0; color: var(--npr-muted); font-size: 12px; line-height: 1.9; letter-spacing: .015em; }
+@media (max-height: 660px) { .npr-companion-book { width: 80px; height: 63px; margin-bottom: 10px; } .npr-companion-opening p { margin-top: 6px; } }
+/* Harness centers a blank-session Hero. Embedded reading keeps its native composer at the same bottom position as an active conversation. */
+.npr-native-chat [data-content-phase="hero"] [data-conversation-scroll] { justify-content: flex-end; }
+.npr-native-chat [data-content-phase="hero"] [data-composer-seat] { position: sticky; bottom: 0; z-index: 7; background: var(--npr-bg); }
+.npr-native-chat [data-content-phase="hero"] [class*="composerHero"] { padding-bottom: 0; }
+.npr-native-chat [data-content-phase="hero"] [class*="composerHero"] > :first-child,
+.npr-native-chat [data-content-phase="hero"] [class*="heroWorkspaceRow"] { display: none; }
+.npr-discover-actions { display: flex; align-items: center; flex: none; gap: 8px; }
+.npr-discover-read { min-height: 32px; padding: 0 11px; border: 0; border-radius: 7px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.npr-discover-read:hover { background: var(--npr-hover); }
+.npr-discover-subscribed { color: var(--npr-muted); font-size: 11px; white-space: nowrap; }
+
+/* 筛选条上的「订阅分组」选项卡。
+   与目录分类（Newsletter / 独立博客）**并列在同一条上**，是另一个筛选维度：
+   分类来自内置目录，分组来自用户自己的订阅。点分组会把分类退回「全部」——
+   两个维度同时生效只会得到一个空列表。
+
+   ★ 分组标签前面带文件夹图标：用户的分组里常常有一个就叫 `Newsletter`，
+     与左侧目录分类同名不同义（一个是自己订的 10 个，一个是目录里的 100+ 个），
+     并排时不加图标根本分不清点的是哪个。
+   ★ 放不下时由 JS（`groupTabCutoff`）算出「前 N 个 + 一个 ⋯」：
+     这一行虽然还能横向滚，但滚动条不会告诉用户「右边还有东西」，
+     用户也想不到去拖 —— 所以溢出必须换成一个看得见的「····」。 */
+.npr-discover-group-tab { display: inline-flex; align-items: center; gap: 4px; }
+.npr-discover-group-tab > svg { flex: 0 0 auto; opacity: .68; }
+.npr-root .npr-discover-group-tab.active > svg { opacity: 1; }
+.npr-discover-group-more {
+  flex: 0 0 auto; min-width: 38px; padding: 6px 9px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--npr-muted); font: inherit; font-size: 13px;
+  line-height: 1; letter-spacing: .06em; cursor: pointer;
+}
+.npr-discover-group-more:hover { background: var(--npr-discover-hover); color: var(--npr-fg); }
+/* 「···」弹出的分组清单：fixed 定位（对话框是 fixed 遮罩里的层，层级压过 z-index 57）。 */
+.npr-discover-more-scrim { position: fixed; inset: 0; z-index: 58; }
+.npr-discover-more-menu {
+  position: fixed; z-index: 59; width: 224px; max-height: 328px; overflow-y: auto;
+  padding: 6px; border: 1px solid color-mix(in srgb, var(--npr-fg) 12%, var(--npr-bg));
+  border-radius: 10px; background: var(--npr-bg); color: var(--npr-fg);
+  box-shadow: 0 14px 36px rgba(0,0,0,.16);
+}
+.npr-discover-more-heading { padding: 4px 10px 6px; color: var(--npr-muted); font-size: 11px; }
+.npr-discover-more-menu > button {
+  display: flex; width: 100%; align-items: center; gap: 8px; padding: 8px 10px;
+  border: 0; border-radius: 7px; background: transparent; color: inherit;
+  font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.npr-discover-more-menu > button:hover { background: var(--npr-discover-hover); }
+.npr-discover-more-menu > button.active { background: color-mix(in srgb, var(--npr-fg) 8%, var(--npr-bg)); }
+.npr-discover-more-menu > button > svg { flex: 0 0 auto; color: var(--npr-muted); }
+.npr-discover-more-menu > button > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npr-discover-more-menu > button > small { flex: 0 0 auto; color: var(--npr-muted); font-size: 11px; }
+/* 离屏测量带：与真实标签同字体同内边距，只用来量宽度。
+   量「真实行」不行 —— 放不下的标签已经被移除了，窗口拉宽时它们再也回不来。 */
+.npr-discover-tab-measure {
+  position: absolute; left: -9999px; top: 0; display: flex; gap: 6px;
+  visibility: hidden; pointer-events: none;
+}
+.npr-discover-tab {
+  display: inline-flex; align-items: center; gap: 4px; box-sizing: border-box;
+  padding: 6px 11px; border: 0; border-radius: 7px;
+  font: inherit; font-size: 13px; line-height: normal; white-space: nowrap;
+}
+
+/* 目录体检结论。`is-fresh` 与 `is-stale` 是**同一维度**（多久没更新）的两个取值 ⇒ 同一款式；
+   `is-unreachable` 是**另一个维度**（上次没测到，不是测得旧）⇒ 必须视觉上分开，
+   否则「探不通」会被读成「比较旧」，用户就会去等一个永远不来的更新。 */
+.npr-discover-health { color: var(--npr-muted); font-size: 11px; white-space: nowrap; }
+.npr-discover-health.is-fresh { color: var(--npr-muted); }
+.npr-discover-health.is-stale { color: var(--npr-muted); }
+.npr-discover-health.is-unreachable { color: var(--dsw-alias-state-error-primary); }
+.npr-root .npr-discover-row.is-stale .npr-discover-info strong,
+.npr-root .npr-discover-row.is-unreachable .npr-discover-info strong { opacity: .62; }
+.npr-discover-health-note { font-size: 11px; line-height: 1.5; }
+.npr-discover-health-note.is-expired { color: var(--dsw-alias-state-error-primary); }
+
+/* The subscription library uses the active reading palette, including focus and hover states. */
+.npr-root .npr-dialog.npr-discover {
+  --npr-discover-tint: color-mix(in srgb, var(--npr-fg) 3%, var(--npr-bg));
+  --npr-discover-hover: color-mix(in srgb, var(--npr-fg) 5%, var(--npr-bg));
+  background: var(--npr-bg); color: var(--npr-fg);
+  border: 1px solid color-mix(in srgb, var(--npr-fg) 12%, var(--npr-bg));
+  box-shadow: 0 18px 55px rgba(0,0,0,.16), 0 1px 2px rgba(0,0,0,.05);
+}
+.npr-discover-head p, .npr-discover-info > span, .npr-discover-filter-line, .npr-discover-foot { color: var(--npr-muted); }
+.npr-root .npr-discover-search { height: 44px; background: var(--npr-discover-tint); border: 1px solid color-mix(in srgb, var(--npr-fg) 12%, var(--npr-bg)); color: var(--npr-muted); transition: border-color .14s ease, background-color .14s ease; }
+.npr-root .npr-discover-search:focus-within { border-color: color-mix(in srgb, var(--npr-fg) 45%, var(--npr-bg)); background: var(--npr-bg); box-shadow: none; outline: none; }
+.npr-root .npr-dialog .npr-discover-search input, .npr-root .npr-dialog .npr-discover-search input:focus-visible { min-width: 0; height: 100%; padding: 0; border: 0 !important; border-radius: 0; background: transparent !important; box-shadow: none !important; outline: none !important; color: var(--npr-fg); }
+.npr-root .npr-dialog .npr-discover-search input::placeholder { color: var(--npr-muted); opacity: .8; }
+.npr-root .npr-discover-categories button { min-height: 34px; color: var(--npr-muted); }
+.npr-root .npr-discover-categories button:hover { background: var(--npr-discover-hover); color: var(--npr-fg); }
+.npr-root .npr-discover-categories button.active, .npr-root .npr-discover-categories button.active:hover { background: color-mix(in srgb, var(--npr-fg) 8%, var(--npr-bg)); color: var(--npr-fg); }
+.npr-root .npr-dialog .npr-discover-filter-line select { min-height: 32px; color: var(--npr-fg); }
+.npr-root .npr-dialog .npr-discover-filter-line select:hover:not(:disabled) { background: var(--npr-discover-hover); }
+.npr-root .npr-discover-row { border-bottom: 1px solid color-mix(in srgb, var(--npr-fg) 9%, var(--npr-bg)); transition: background-color .14s ease; }
+.npr-root .npr-discover-row:hover, .npr-root .npr-discover-row:focus-within { background: var(--npr-discover-tint); }
+.npr-root .npr-discover-avatar { background: color-mix(in srgb, var(--npr-fg) 6%, var(--npr-bg)); color: var(--npr-muted); }
+.npr-root .npr-discover-add { min-height: 34px; border-color: color-mix(in srgb, var(--npr-fg) 16%, var(--npr-bg)); color: var(--npr-fg); }
+.npr-root .npr-discover-add:hover:not(:disabled), .npr-root .npr-discover-read:hover { background: var(--npr-discover-hover); }
+/* 「移除/隐藏」按钮：跟列表里既有的按钮共用同一套阅读调色板。
+   漏掉这条，它会拿宿主默认色，跟旁边同排的按钮看起来像两套东西。 */
+.npr-root .npr-discover-drop { color: var(--npr-muted); }
+.npr-root .npr-discover-drop:hover:not(:disabled) { background: var(--npr-discover-hover); color: var(--npr-fg); }
+.npr-root .npr-discover-provenance { color: var(--npr-muted); }
+/* 「转 RSS 服务」配置块。2026-10-08 从探索页的「添加信息源」表单搬到设置页的「订阅管理」，
+   所以这里**不能**用 --npr-discover-hover / --npr-discover-tint：那两个变量只在
+   `.npr-root .npr-dialog.npr-discover` 作用域里定义，设置页取不到 —— 声明会整条失效，
+   背景静默变透明。改走全局面板变量 --npr-hover。 */
+.npr-root .npr-service { background: var(--npr-hover); color: var(--npr-muted); }
+.npr-root .npr-service-row button { border-color: color-mix(in srgb, var(--npr-fg) 16%, var(--npr-bg)); color: var(--npr-fg); }
+.npr-root .npr-service-note code { background: var(--npr-bg); color: var(--npr-fg); }
+.npr-root .npr-discover-foot { border-top: 1px solid color-mix(in srgb, var(--npr-fg) 10%, var(--npr-bg)); background: var(--npr-discover-tint); }
+.npr-root .npr-discover-results { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--npr-fg) 20%, transparent) transparent; }
+.npr-root .npr-discover-results::-webkit-scrollbar { width: 6px; }
+.npr-root .npr-discover-results::-webkit-scrollbar-thumb { border-radius: 99px; background: color-mix(in srgb, var(--npr-fg) 20%, transparent); }
+@media (prefers-reduced-motion: reduce) { .npr-native-chat .npr-companion-prompt-strip button, .npr-root .npr-discover-row, .npr-root .npr-discover-search { transition: none; } }
+.npr-native-chat :is(textarea,[contenteditable=true],[role=textbox]) { color: var(--npr-fg); }
+.npr-native-chat button[aria-label="发送消息"] { background: var(--npr-fg); color: var(--npr-bg); }
+.npr-native-chat button[aria-label="发送消息"]:hover { background: color-mix(in srgb, var(--npr-fg) 83%, var(--npr-bg)); color: var(--npr-bg); }
+
+/* 滚动条统一细条。`.npr-book-stage` 必须在这张名单里：它现在是**真的会滚的容器**
+   （适宽 + 长页），漏掉它就会在面板中间冒出一根 15px 的系统粗滚动条，而旁边书单
+   那根是 6px 细的 —— 同一个面板里两套滚动条，看起来像插件坏了。 */
+.npr-root :is(.npr-list, .npr-reader, .npr-book-stage, .npr-channel-options, .npr-settings-content, .npr-native-chat, .npr-native-chat *) { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--npr-fg) 18%, transparent) transparent; }
+.npr-root :is(.npr-list, .npr-reader, .npr-book-stage, .npr-channel-options, .npr-settings-content, .npr-native-chat, .npr-native-chat *)::-webkit-scrollbar { width: 6px; height: 6px; }
+.npr-root :is(.npr-list, .npr-reader, .npr-book-stage, .npr-channel-options, .npr-settings-content, .npr-native-chat, .npr-native-chat *)::-webkit-scrollbar-thumb { border-radius: 99px; background: color-mix(in srgb, var(--npr-fg) 18%, transparent); }
+.npr-root :is(.npr-list, .npr-reader, .npr-book-stage, .npr-channel-options, .npr-settings-content, .npr-native-chat, .npr-native-chat *)::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--npr-fg) 31%, transparent); }
+.npr-root :is(.npr-list, .npr-reader, .npr-book-stage, .npr-channel-options, .npr-settings-content, .npr-native-chat, .npr-native-chat *)::-webkit-scrollbar-track { background: transparent; }
+
+/* A quiet, host-themed settings workspace with a stable side navigation. */
+.npr-settings-backdrop { background: rgba(17,17,17,.38); }
+.npr-settings-page { width: min(980px, 100%); height: min(810px, 100%); border-radius: 16px; background: var(--dsw-alias-bg-base); box-shadow: 0 22px 70px rgba(0,0,0,.20); }
+.npr-settings-head { flex: none; padding: 20px 24px; border-bottom: 1px solid var(--npr-border); }
+.npr-settings-head > div { display: flex; align-items: center; gap: 12px; }
+.npr-settings-head span { padding-right: 12px; border-right: 1px solid var(--npr-border); font-size: 10px; font-weight: 700; letter-spacing: .18em; color: var(--npr-muted); }
+.npr-settings-head strong { font-size: 17px; letter-spacing: -.025em; }
+.npr-settings-body { display: grid; grid-template-columns: 190px minmax(0,1fr); flex: 1; min-height: 0; }
+.npr-settings-tabs { display: flex; flex-direction: column; align-items: stretch; gap: 3px; padding: 23px 12px; border: 0; border-right: 1px solid var(--npr-border); background: var(--dsw-alias-bg-layer-1); }
+.npr-settings-nav-caption { padding: 0 11px 10px; color: var(--npr-muted); font-size: 11px; }
+.npr-settings-tabs button { display: flex; align-items: center; gap: 10px; padding: 10px 11px; font-size: 13px; text-align: left; border-radius: 8px; }
+.npr-settings-tabs button:hover { background: var(--npr-hover); color: var(--npr-fg); }
+.npr-settings-tabs button[aria-current=page] { background: var(--dsw-alias-bg-base); color: var(--npr-fg); box-shadow: 0 0 0 1px var(--npr-border); font-weight: 600; }
+.npr-settings-content { min-width: 0; padding: 30px clamp(22px, 4%, 42px) 40px; background: var(--dsw-alias-bg-base); }
+.npr-settings-content section { gap: 18px; }
+.npr-settings-intro { margin-bottom: 7px; }
+.npr-settings-intro h2 { margin: 0 0 4px; font-size: 24px; font-weight: 650; letter-spacing: -.035em; }
+.npr-settings-intro p { margin: 0; color: var(--npr-muted); font-size: 13px; }
+.npr-settings-card { padding: 20px; border: 1px solid var(--npr-border); border-radius: 12px; background: var(--dsw-alias-bg-base); }
+.npr-settings-card-head { margin-bottom: 18px; }
+.npr-settings-content .npr-settings-card h3 { margin: 0; font-size: 14px; font-weight: 620; letter-spacing: -.01em; }
+.npr-settings-card-head p, .npr-settings-hint { margin: 4px 0 0; color: var(--npr-muted); font-size: 12px; line-height: 1.6; }
+.npr-settings-reading-card .npr-reading-settings-fields { max-width: none; gap: 0; }
+.npr-settings-reading-card .npr-reading-setting { display: grid; grid-template-columns: 110px minmax(0,1fr) 58px; align-items: center; gap: 10px; min-height: 56px; padding: 10px 0; border-bottom: 1px solid var(--npr-border); font-size: 12px; }
+.npr-settings-reading-card .npr-reading-setting > span:first-child { color: var(--npr-muted); }
+.npr-settings-reading-card .npr-reading-setting select { grid-column: 2 / 4; height: 34px; max-width: 300px; padding: 0 10px; border: 1px solid var(--npr-border); border-radius: 7px; background: var(--npr-bg); color: var(--npr-fg); font: inherit; }
+.npr-settings-reading-card .npr-reading-setting output { grid-column: 3; grid-row: 1; text-align: right; font-size: 11px; color: var(--npr-muted); }
+.npr-settings-reading-card .npr-reading-setting input[type=range] { grid-column: 2; grid-row: 1; accent-color: var(--npr-fg); }
+.npr-settings-reading-card .npr-reading-setting-check { border: 0; }
+.npr-settings-reading-card .npr-reading-reset { margin-top: 13px; padding: 5px 0; border: 0; background: none; color: var(--npr-muted); font-size: 12px; cursor: pointer; }
+.npr-settings-reading-card .npr-reading-reset:hover { color: var(--npr-fg); }
+.npr-segmented { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--npr-border); border-radius: 8px; background: var(--npr-bg-2); width: max-content; max-width: 100%; }
+.npr-segmented button, .npr-settings-content .npr-segmented button { min-width: 37px; height: 28px; padding: 0 10px; border: 0; border-radius: 5px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; cursor: pointer; white-space: nowrap; }
+.npr-segmented button[aria-pressed=true], .npr-settings-content .npr-segmented button[aria-pressed=true] { background: var(--dsw-alias-bg-base); color: var(--npr-fg); box-shadow: 0 1px 3px rgba(0,0,0,.08); font-weight: 600; }
+.npr-settings-reading-card .npr-segmented { grid-column: 2 / 4; }
+.npr-settings-reading-card .npr-theme-setting { display: block; padding: 18px 0; }
+.npr-settings-reading-card .npr-theme-setting > span { display: block; margin-bottom: 12px; }
+.npr-theme-options { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); gap: 8px; }
+.npr-theme-options button { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 0; padding: 5px; border: 1px solid var(--npr-border); border-radius: 8px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 10px; text-align: center; cursor: pointer; }
+.npr-theme-options button[aria-pressed=true] { border-color: var(--npr-fg); color: var(--npr-fg); }
+.npr-theme-swatch { display: grid; place-items: center; height: 44px; border-radius: 5px; font-family: Georgia,serif; font-size: 15px; }
+.npr-theme-swatch-auto { background: var(--dsw-alias-bg-layer-2); color: var(--npr-fg); }
+.npr-switch { position: relative; display: inline-flex; align-items: center; cursor: pointer; }
+.npr-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.npr-switch span { display: block; width: 34px; height: 20px; border-radius: 999px; background: var(--npr-border-strong); transition: background .15s; }
+.npr-switch span::after { content: ''; display: block; width: 16px; height: 16px; margin: 2px; border-radius: 50%; background: white; box-shadow: 0 1px 2px rgba(0,0,0,.18); transition: transform .15s; }
+.npr-switch input:checked + span { background: var(--npr-fg); }
+.npr-switch input:checked + span::after { transform: translateX(14px); }
+.npr-switch input:focus-visible + span { outline: 1px solid var(--npr-accent); outline-offset: 2px; }
+.npr-settings-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.npr-settings-toggle-row p, .npr-settings-model-row p { margin: 4px 0 0; color: var(--npr-muted); font-size: 12px; line-height: 1.6; }
+/* 卡片里的二级标题（h4）：比 h3 小一档，用在同一张卡内部再分小节时。 */
+.npr-settings-content .npr-settings-card h4 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -.01em; }
+/* 「翻译用哪个模型」：说明在左、下拉框在右。窄容器下换行堆叠，别把 select 压成一条缝。 */
+.npr-settings-model-row { display: grid; grid-template-columns: minmax(0,1fr) minmax(190px,280px); align-items: center; gap: 16px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--npr-border); }
+.npr-ai-model { width: 100%; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--npr-border); border-radius: 7px; background: var(--npr-bg); color: var(--npr-fg); font: inherit; font-size: 12px; }
+.npr-ai-model:disabled { opacity: .55; }
+.npr-settings-source-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.npr-settings-source-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.npr-settings-source-actions button { display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 9px; border: 1px solid var(--npr-border); border-radius: 7px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 11px; cursor: pointer; }
+.npr-settings-source-actions button:hover { background: var(--npr-hover); }
+.npr-settings-import { padding: 15px; margin-bottom: 14px; border: 1px solid var(--npr-border); border-radius: 9px; background: var(--npr-bg-2); }
+.npr-settings-content .npr-opml-import { display: grid; gap: 9px; border: 0; padding: 0; }
+.npr-opml-import legend { padding: 0 0 8px; font-size: 12px; font-weight: 600; }
+.npr-opml-import input, .npr-opml-import textarea { width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--npr-border); border-radius: 7px; background: var(--npr-bg); color: var(--npr-fg); font: inherit; font-size: 12px; }
+.npr-opml-import input[type=file] { border-style: dashed; }
+.npr-opml-import .npr-btn { width: max-content; }
+.npr-opml-results { max-height: 200px; overflow: auto; }
+.npr-opml-results label { display: block; padding: 5px; font-size: 12px; }
+/* Audio dock: the <audio> element carries the layout, this only spaces it. */
+.npr-article-audio { display: block; }
+/* Prompt manager: the list is the card body, so it owns the top border only once. */
+.npr-prompt-manager { display: grid; gap: 4px; }
+.npr-prompt-list { display: grid; }
+.npr-prompt-list > p { margin: 0; padding: 18px 2px; color: var(--npr-muted); font-size: 12px; }
+.npr-settings-about-brand { display: flex; gap: 14px; align-items: center; }
+.npr-settings-about-brand > span { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; background: var(--npr-fg); color: var(--npr-bg); font-size: 21px; font-family: Georgia,serif; }
+.npr-settings-about-brand p, .npr-settings-about-card > p { margin: 4px 0 0; font-size: 12px; color: var(--npr-muted); }
+.npr-settings-links { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+.npr-settings-links a { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 11px; border: 1px solid var(--npr-border); border-radius: 8px; color: var(--npr-fg); font-size: 12px; text-decoration: none; }
+.npr-settings-links a:hover { background: var(--npr-hover); text-decoration: none; }
+.npr-settings-footer { flex: none; min-height: 62px; padding: 12px 23px; background: var(--dsw-alias-bg-base); }
+.npr-settings-footer button { min-width: 86px; height: 34px; background: var(--npr-fg); color: var(--npr-bg); font-size: 12px; }
+
+/* Manage feeds as a searchable list, with actions only where they are useful. */
+.npr-subscriptions { display: block !important; }
+.npr-subscriptions-toolbar { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.npr-subscriptions-search { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: 42px; padding: 0 12px; border: 1px solid var(--npr-border); border-radius: 8px; color: var(--npr-muted); }
+.npr-subscriptions-search:focus-within { border-color: color-mix(in srgb, var(--npr-fg) 34%, var(--npr-border)); }
+.npr-subscriptions-search input { min-width: 0; flex: 1; height: 100%; border: 0; outline: 0; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; }
+.npr-root .npr-settings-page .npr-subscriptions-search input:focus-visible { outline: none; box-shadow: none; border: 0; }
+.npr-subscriptions-selection { display: flex; justify-content: space-between; align-items: center; padding: 8px 0 4px; color: var(--npr-muted); font-size: 11px; }
+.npr-subscriptions-selection button { border: 0; background: transparent; color: var(--npr-muted); padding: 3px 0; font: inherit; cursor: pointer; }
+.npr-subscriptions-selection button:hover { color: var(--npr-fg); }
+.npr-subscriptions-list { max-height: 310px; overflow-y: auto; }
+.npr-subscription-row { display: flex; align-items: center; gap: 10px; min-height: 64px; padding: 8px 2px; border-bottom: 1px solid var(--npr-border); }
+.npr-subscription-row input[type=checkbox] { accent-color: var(--npr-fg); }
+.npr-subscription-avatar { flex: 0 0 31px; width: 31px; height: 31px; display: grid; place-items: center; border-radius: 8px; background: var(--npr-bg-2); font-size: 13px; font-weight: 600; }
+.npr-subscription-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.npr-subscription-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+.npr-subscription-copy > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--npr-muted); font-size: 11px; }
+.npr-subscription-copy small { color: var(--dsw-alias-state-error-primary); font-size: 11px; }
+.npr-subscription-actions { display: flex; gap: 2px; }
+.npr-subscription-actions button, .npr-subscription-editor > div:first-child button { display: grid; place-items: center; width: 29px; height: 29px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--npr-muted); cursor: pointer; }
+.npr-subscription-actions button:hover:not(:disabled), .npr-subscription-editor > div:first-child button:hover:not(:disabled) { background: var(--npr-hover); color: var(--npr-fg); }
+/* ★ 这三个图标按钮原来**没有** `:disabled` 样式，而「补全历史」一跑十几秒 ——
+   于是禁用只发生在 DOM 上，视觉上它还是个能点的按钮：用户点了第二次、第三次，
+   每次都被闸门挡掉，读到的就是「点了没反应」。禁用必须有可见的形态。 */
+.npr-subscription-actions button:disabled, .npr-subscription-editor > div:first-child button:disabled { opacity: .45; cursor: default; }
+/* ★ 关键帧叫 `npr-icon-spin` 而不是 `npr-spin`：`npr-spin` 这个**名字**在
+   ReaderPage 的 PANEL_CSS 里已经定义过两遍（`.npr-icon.is-loading` / `.npr-translating`）。
+   两份同名 keyframes 都是合法的，但谁生效取决于样式注入顺序 —— 以后只改其中一份，
+   另一处会静默不生效。这里换个名字，两边互不干扰。 */
+@keyframes npr-icon-spin { to { transform: rotate(360deg); } }
+/* 进行中：图标换成 `refresh-cw` 并转起来。转圈本身不依赖任何文案，
+   所以「正在干活」这件事在缩略视图里也成立。 */
+.npr-icon-spin { animation: npr-icon-spin .9s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .npr-icon-spin { animation-duration: 2.4s; } }
+/* 行内进度：写在被点的动作旁边，比只把按钮变灰更能解释「为什么还没弹窗」。 */
+.npr-subscription-copy .npr-subscription-progress { color: var(--npr-muted); font-size: 11px; }
+/* 图标按钮的悬停提示：`fixed` 定位，避开 .npr-subscriptions-list 的滚动裁剪。 */
+.npr-tip { position: fixed; z-index: 90; transform: translate(-50%, -100%); display: grid; gap: 2px; width: max-content; max-width: 240px; padding: 6px 9px; border-radius: 7px; background: var(--npr-fg); color: var(--npr-bg); font-size: 11px; line-height: 1.45; text-align: center; white-space: nowrap; pointer-events: none; box-shadow: 0 6px 18px rgba(0,0,0,.18); }
+.npr-tip em { font-style: normal; white-space: normal; opacity: .72; font-size: 10px; }
+.npr-subscriptions-empty { padding: 36px 8px; color: var(--npr-muted); text-align: center; font-size: 12px; }
+.npr-subscriptions-batch { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px; margin: 8px 0; border: 1px solid var(--npr-border); border-radius: 8px; background: var(--npr-bg-2); }
+.npr-subscriptions-batch strong { margin-right: 4px; font-size: 11px; }
+.npr-subscriptions-batch label { display: flex; align-items: center; gap: 5px; min-width: 150px; flex: 1; padding: 0 7px; border: 1px solid var(--npr-border); border-radius: 6px; background: var(--npr-bg); }
+.npr-subscriptions-batch input { width: 100%; height: 28px; border: 0; outline: 0; background: transparent; color: var(--npr-fg); font-size: 11px; }
+.npr-subscriptions-batch button, .npr-subscriptions-confirm button, .npr-subscription-editor-actions button { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 8px; border: 1px solid var(--npr-border); border-radius: 6px; background: var(--npr-bg); color: var(--npr-fg); font: inherit; font-size: 11px; cursor: pointer; }
+.npr-subscriptions-batch button.danger, .npr-subscriptions-confirm button.danger { color: var(--dsw-alias-state-error-primary); }
+.npr-subscriptions-batch button.icon { width: 28px; justify-content: center; padding: 0; }
+.npr-subscriptions-confirm { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px; border: 1px solid var(--npr-border); border-radius: 7px; font-size: 11px; }
+.npr-subscription-editor-backdrop { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 20px; background: rgba(0,0,0,.35); }
+.npr-subscription-editor { display: grid; gap: 16px; width: min(430px, 100%); max-height: min(600px,90vh); overflow: auto; padding: 22px; border: 1px solid var(--npr-border); border-radius: 13px; background: var(--dsw-alias-bg-base); box-shadow: 0 18px 54px rgba(0,0,0,.17); color: var(--npr-fg); }
+.npr-subscription-editor > div:first-child { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
+.npr-subscription-editor label { display: grid; gap: 4px; color: var(--npr-muted); font-size: 11px; }
+.npr-subscription-editor input, .npr-subscription-editor textarea { width: 100%; min-height: 42px; padding: 10px 12px; border: 1px solid var(--npr-border); border-radius: 8px; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; }
+.npr-root .npr-subscription-editor :is(input,textarea):focus-visible { outline: 0; box-shadow: none; border-color: var(--dsw-alias-label-secondary); }
+.npr-subscription-editor textarea { resize: vertical; line-height: 1.5; }
+.npr-subscription-editor p { margin: 0; color: var(--npr-muted); font-size: 12px; line-height: 1.5; }
+.npr-subscription-editor-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.npr-subscription-editor-actions button:last-child { background: var(--npr-fg); color: var(--npr-bg); }
+.npr-subscription-editor-actions button { min-height: 36px; padding: 0 13px; }
+.npr-subscription-editor-hint { margin: -2px 0 0; color: var(--npr-muted); font-size: 11px; line-height: 1.6; }
+/* 补全历史的样例清单：最多露 5 条，标题单行省略，日期右对齐且不换行。 */
+.npr-backfill-sample { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; max-height: 176px; overflow-y: auto; }
+.npr-backfill-sample li { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 7px 9px; border: 1px solid var(--npr-border); border-radius: 7px; background: var(--npr-bg-2); color: var(--npr-fg); font-size: 11px; }
+.npr-backfill-sample li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npr-backfill-sample li small { flex: 0 0 auto; color: var(--npr-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.npr-group-manager { margin-top: 20px; }
+.npr-group-heading { display: flex; justify-content: space-between; padding: 0 2px 8px; font-size: 12px; }
+.npr-group-heading span, .npr-group-row small { color: var(--npr-muted); font-size: 11px; }
+.npr-group-row { display: flex; align-items: center; gap: 9px; min-height: 40px; border-top: 1px solid var(--npr-border); color: var(--npr-fg); font-size: 12px; }
+.npr-group-row span { flex: 1; }
+.npr-group-row button, .npr-prompt-row button { display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 7px; background: transparent; color: var(--npr-muted); cursor: pointer; }
+.npr-group-row button:hover, .npr-prompt-row button:hover { background: var(--npr-hover); color: var(--npr-fg); }
+.npr-prompt-add { display: inline-flex; align-items: center; gap: 5px; height: 36px; padding: 0 12px; border: 1px solid var(--npr-border); border-radius: 8px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; cursor: pointer; }
+.npr-prompt-add:hover { background: var(--npr-hover); }
+.npr-prompt-row { display: flex; align-items: center; gap: 3px; min-height: 58px; border-top: 1px solid var(--npr-border); }
+.npr-prompt-row > div { display: grid; gap: 4px; flex: 1; min-width: 0; }
+.npr-prompt-row strong { font-size: 12px; }
+.npr-prompt-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--npr-muted); font-size: 11px; }
+
+@container (max-width: 820px) {
+  .npr-workarea.has-companion { flex-direction: column; }
+  .npr-workarea.has-companion > .npr-layout { flex: 1; min-height: 220px; grid-template-columns: min(var(--npr-list-width), 38%) 1px minmax(0,1fr); }
+  .npr-workarea.has-companion .npr-companion-divider { flex: 0 0 8px; width: 100%; cursor: row-resize; }
+  .npr-workarea.has-companion .npr-companion-divider::after { top: calc(50% - .5px); bottom: auto; left: 0; right: 0; width: 100%; height: 1px; }
+  .npr-workarea.has-companion .npr-companion-divider:hover::after,
+  .npr-workarea.has-companion .npr-companion-divider:focus-visible::after,
+  .npr-workarea.has-companion .npr-companion-divider[data-dragging=true]::after { width: 100%; height: 2px; }
+  .npr-workarea.has-companion .npr-companion { width: 100%; flex: 0 0 var(--npr-companion-width,44%); min-height: 170px; }
+  .npr-settings-page { width: min(900px,100%); }
+  /* ★ 书页区那几条窄容器规则**不在这里**：它们与基础规则同特异度（都是单个类），
+     谁生效只看**源码顺序**，而这个块写在书页区的规则之前 —— 于是
+     `.npr-book-digest{width:306px}` 一直压着这里的 `width:100%`。
+     症状：窄窗口下面板只有 306px 宽、右边空一大块，而文本断言（把同选择器的
+     多条规则合并起来看）**全绿**。0.19.0 用真 Chrome 量出来才现形。
+     ⇒ 它们挪到了书页区规则**之后**那个 `@container (max-width: 820px)` 块里。
+     教训：同特异度的覆盖规则，位置就是语义。 */
+}
+@container (max-width: 700px) {
+  .npr-settings-body { grid-template-columns: 1fr; grid-template-rows: auto minmax(0,1fr); }
+  .npr-settings-tabs { flex-direction: row; gap: 4px; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--npr-border); overflow-x: auto; }
+  .npr-settings-nav-caption { display: none; }
+  .npr-settings-tabs button { white-space: nowrap; padding: 8px; }
+  .npr-settings-content { padding: 22px; }
+  .npr-theme-options { grid-template-columns: repeat(4,minmax(0,1fr)); }
+  /* 窄容器下「说明 + 下拉框」两列会把 select 压成一条缝，改成上下堆叠。 */
+  .npr-settings-model-row { grid-template-columns: minmax(0,1fr); }
+}
+@container (max-width: 460px) {
+  .npr-workarea.has-companion > .npr-layout { grid-template-columns: minmax(0,1fr); }
+  .npr-workarea.has-companion > .npr-layout > .npr-sidebar, .npr-workarea.has-companion > .npr-layout > .npr-resize { display: none; }
+  .npr-settings-page { border-radius: 0; height: 100%; }
+  .npr-settings-head { padding: 14px 16px; }
+  .npr-settings-content { padding: 18px 16px; }
+  .npr-settings-reading-card .npr-reading-setting { grid-template-columns: 80px minmax(0,1fr) 48px; }
+  .npr-settings-source-head, .npr-subscriptions-toolbar { flex-direction: column; align-items: stretch; }
+  .npr-settings-source-actions { justify-content: flex-start; }
+}
+
+/* The selected passage belongs inside the native composer card, separate from its draft. */
+.npr-companion-quote-anchor { flex: none; min-width: 0; width: 100%; }
+.npr-companion-quote-anchor:empty { display: none; }
+.npr-companion-quote { margin: 12px 14px 4px; padding: 9px 11px; border: 0; border-radius: 8px; background: color-mix(in srgb, var(--npr-fg) 5%, var(--npr-bg)); color: var(--npr-fg); }
+.npr-companion-quote-heading { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 11px; line-height: 1.5; }
+.npr-companion-quote-heading strong { font-weight: 500; }
+.npr-companion-quote-heading span { margin-left: auto; color: var(--npr-muted); font-size: 10px; }
+.npr-companion-quote-heading button { display: grid; place-items: center; flex: none; width: 30px; height: 30px; padding: 0; }
+.npr-native-chat .npr-companion-quote button { appearance: none; border: 0; border-radius: 6px; background: transparent; color: var(--npr-muted); box-shadow: none; font: inherit; cursor: pointer; }
+.npr-native-chat .npr-companion-quote button:hover:not(:disabled) { background: color-mix(in srgb, var(--npr-fg) 7%, var(--npr-bg)); color: var(--npr-fg); }
+.npr-native-chat .npr-companion-quote button:active:not(:disabled) { background: color-mix(in srgb, var(--npr-fg) 11%, var(--npr-bg)); }
+.npr-native-chat .npr-companion-quote button:focus-visible { outline: 1px solid color-mix(in srgb, var(--npr-fg) 45%, var(--npr-bg)); outline-offset: -1px; }
+.npr-native-chat .npr-companion-quote button:disabled { opacity: .45; cursor: not-allowed; }
+.npr-companion-quote blockquote { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin: 3px 0 0; padding: 0; border: 0; color: var(--npr-fg); font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.npr-companion-quote blockquote.is-expanded { display: block; max-height: 160px; overflow-y: auto; }
+.npr-native-chat .npr-companion-quote .npr-companion-quote-expand { min-height: 28px; margin: 3px 0 -3px; padding: 0 4px; font-size: 11px; }
+
+
+/* ══════════════════════════════════════════════════════════════════════
+   书架（电子书）：书单 + 原版式阅读器
+   ──────────────────────────────────────────────────────────────────────
+   两条纪律：
+   ① **视觉同级会被读成语义同级**。所以「订阅 / 书架」是连体的分段控件，形状和颜色都
+      与旁边那排图标按钮不同 —— 它是换整个视图，不是对当前内容做一个动作。
+   ② 阅读区要**稳定**：翻页时画布尺寸变化会带着滚动位置一起跳，所以画布宽度由
+      「适应宽度 × 缩放」决定，容器本身只负责滚动，不做自适应抖动。
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── 模式开关 ───────────────────────────────────────────────────────── */
+.npr-viewswitch { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 1px; padding: 1px; border: 1px solid var(--npr-border); border-radius: 7px; background: var(--npr-bg); }
+.npr-root .npr-viewswitch button { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--npr-faint); cursor: pointer; }
+.npr-root .npr-viewswitch button:hover { color: var(--npr-fg); background: var(--npr-hover); }
+/* 选中态用中性填充而不是品牌色：品牌色当浅底文字/小图标会掉对比度，
+   而这里是 15px 的线性图标，最容易被吃掉。 */
+.npr-root .npr-viewswitch button[aria-pressed=true] { color: var(--npr-fg); background: color-mix(in srgb, var(--npr-fg) 11%, transparent); }
+.npr-root .npr-viewswitch button:focus-visible { outline-offset: 1px; }
+
+/* ── 书单侧栏 ───────────────────────────────────────────────────────── */
+/* 工具栏里那个「重新读取书单」。
+   ★ 0.9.3 搜索框搬走之后它靠 `margin-left: auto` 顶到右端；**0.20.2 起取消**：
+     右端留给设置齿轮（两处侧栏统一，见上面 `.npr-sidebar-toolbar .npr-settings-button`），
+     它自己回到 ViewSwitch 右边跟随排布。两个 `auto` 同时存在时它们会平分空档 ——
+     结果是齿轮不贴边、刷新也不贴边，两个都悬在中间。
+   ★ 它与 ViewSwitch 仍是两件事（一个换页面、一个重新取数）：靠 `gap` 之外那条
+     不写 auto 的排布隔开就够，不需要再把它推到右端才能区分。 */
+.npr-lib-refresh { margin-left: 2px; }
+
+/* 搜索系统 + 结果行：**两行**，每行 =「一个可伸缩项 + 一个按内容定宽的下拉」。
+   宽面板： 搜索框 ———————— │ 分类      阅读页 / 窄面板：每行各自堆成一列（见文件末尾）
+            结果行 ———————— │ 排序
+   ★ 「块外 14px / 块内 6px」这个差是**唯一**在说「这四件是一套」的东西 ——
+     块外那 14px 由 `.npr-filters` 自带的 8px 下内边距 + 这里的 `padding-top: 6px` 合成。
+     ★ 这个比例是**真 Chrome 量出来的**，不是估的：`padding-top: 2px` 那一版实测块外
+       只有 2px（比块内的 6px 还小 ⇒ 搜索框看起来是粘在上面的 chip 条上的），
+       见 `scripts/check-library-sidebar-layout.mjs` 判据 ⑨。
+     ★ 量的必须是**画出来的边**：`.npr-filters` 自带 8px 下内边距，拿容器的盒边当
+       「上面那条的底」，这 8px 会被算进「块内」，判据就与眼睛相反了。
+   ★★ 两行**各自独立**，不是 0.9.5 那个 2×2 具名区域网格：网格的**列是共享的**，
+     右列要同时容下「分类」和「排序」⇒ 右列宽 = 分类要的宽（真实标签最长的是
+     「系列丛书全套（1419）」，11px 字号下约 144px —— 几乎就是整列 146px），于是
+     **排序永远不可能变窄**、结果行也拿不回那几十像素。用户实测截图里结果行
+     正因此折成了两行。两行独立之后：排序缩到自己的内容宽（「最近在读」约 76px），
+     结果行拿到剩下的全部（320px 侧栏下约 216px，真 Chrome 判据量着它必须单行）。
+   ★ 为什么「可伸缩项」用 `flex: 1 1 0` + `min-width: 0`：`flex-basis: 0` 让**固有宽度**
+     不参与计算（`<input>` 的 `size` ≈ 20ch、状态行文字的单行宽度都算固有宽度），
+     再配 `min-width: 0` 关掉「自动最小尺寸」—— 少任何一个，这一项都会撑破整行。
+   ★ 下拉用 `flex: 0 0 auto` 按内容定宽，**不再写 `width: 100%`**：写满列宽正是上一版
+     让排序看着过宽的原因。
+   ★ `align-items: center` 是给第二行用的：结果行是**文字**（≈19px），排序是**控件**
+     （28px），不居中的话两者顶边对齐、看起来一高一低。
+   ★ DOM 顺序按「从上到下、从左到右」写（搜索框 → 分类 → 结果 → 排序），所以视觉顺序
+     与读序一致（`order` / `*-reverse` 会让两者分叉，那种分叉不报错 —— 本项目为它专门
+     写过几何判据，见 deep §四）。 */
+.npr-lib-controls { display: flex; flex-direction: column; gap: 6px; padding: 6px 10px 8px; flex-shrink: 0; }
+.npr-lib-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.npr-lib-row > .npr-lib-search, .npr-lib-row > .npr-status { flex: 1 1 0; min-width: 0; }
+.npr-lib-row > .npr-lib-dir, .npr-lib-row > .npr-lib-sort { flex: 0 0 auto; }
+/* ★ 结果行进了行容器后要**交出自己的内边距**：`.npr-status` 原来是独占一行的
+   （`8px 12px`，定义在 ReaderPage 的 PANEL_CSS 里，阅读区也在用同一份）。
+   留着它，左边就比搜索框的边框多缩进 12px、上下各多 8px（行高从 28 涨到 35）。
+   ⇒ 只在这个块里清零，不动阅读区那一份。 */
+.npr-lib-controls .npr-status { padding: 0; }
+.npr-lib-search { min-width: 0; height: 28px; padding: 0 9px; border: 1px solid var(--npr-border); border-radius: 7px; background: var(--npr-bg); color: var(--npr-fg); font: inherit; font-size: 12px; }
+.npr-lib-search::placeholder { color: var(--npr-faint); }
+/* 「筛选：xxx ✕」—— 搜索词生效时**自己说出来**，并且是清除入口。
+   ★ 不能让它把输入框挤没：`flex: 0 1 auto` + `max-width` + 省略号。
+   ★ 与输入框同一个高度（28px），否则这一行会以高的那个为准、输入框看起来歪着。 */
+.npr-lib-querychip { display: inline-flex; align-items: center; gap: 4px; flex: 0 1 auto; max-width: 46%; min-width: 0; height: 28px; padding: 0 8px; border: 1px solid var(--npr-border-strong); border-radius: 999px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; cursor: pointer; }
+.npr-lib-querychip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npr-lib-querychip:hover { color: var(--npr-fg); }
+.npr-lib-dir select, .npr-lib-sort select { min-width: 0; height: 28px; padding: 0 6px; border: 1px solid var(--npr-border); border-radius: 7px; background: var(--npr-bg); color: var(--npr-fg); font: inherit; font-size: 11px; }
+/* ★ 分类下拉在 0.20.4 变成「来源 ▸ 分类」后**必须有宽度上限**。
+   原因是一行里那个下拉是 `flex: 0 0 auto`（按内容定宽、不参与压缩），而 `<select>`
+   的固有宽度取的是**最长那个选项**的文字宽度：
+     `网盘 · E书拾取 · 系列丛书全套（1419）` 在 11px 下实测要 239px，
+     320px 侧栏的内宽只有 300px ⇒ 搜索框（`flex: 1 1 0` + `min-width: 0`）
+     会被压到 **53px**（实测），「搜索书名 / 丛书…」连占位符都放不下。
+   上限 176px 之后搜索框仍有约 116px（真 Chrome 量出来的），而下拉**仍能显示到源名**
+   （`网盘 · E书拾取 · 系列丛书全套`）—— 被截掉的只是分类尾部的计数。
+   ★ 截断不是信息丢失：全称在 `title` 上（悬停可见），且选中项的分类同时作用于列表。
+   ★ `<select>` 在 Chromium 里**不会**给超长文字画省略号（`text-overflow` 对原生下拉
+     无效），是硬截断 —— 所以还要靠 `padding-right: 14px` 给原生箭头留出空隙，
+     否则文字会顶到箭头下面，看起来像「字被箭头压住了」。
+   ★ 数字 176 与 `scripts/check-library-sidebar-layout.mjs` 里的 `DIR_MAX` 是同一条
+     判据的两半，改一处必须改两处（那边会当场红）。 */
+.npr-lib-dir select { max-width: 176px; padding-right: 14px; }
+
+/* 分页（阅读 / 书架）。与下面那排状态筛**形状不同**：这一条是满宽连体 + 选中框，
+   换句话说它是「换整页内容」，而非「对当前列表做一个动作」（同 ViewSwitch 的说明）。 */
+.npr-libtabs { display: flex; gap: 3px; flex-shrink: 0; padding: 0 10px 8px; }
+.npr-root .npr-libtabs button { flex: 1; min-width: 0; height: 28px; padding: 0 6px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 12px; cursor: pointer; }
+.npr-root .npr-libtabs button:hover { background: var(--npr-hover); color: var(--npr-fg); }
+.npr-root .npr-libtabs button[aria-pressed=true] { border-color: var(--npr-border-strong); background: color-mix(in srgb, var(--npr-fg) 7%, transparent); color: var(--npr-fg); font-weight: 600; }
+
+/* 一行两个按钮：主按钮（打开这本书）＋右缘的「阅读 / 已在阅读」切换。
+   行本身是 div 而不是 button —— `<button>` 里套 `<button>` 是非法 HTML，
+   浏览器的拆法各版本不同，拆完两个按钮的点击区会重叠。 */
+.npr-bookrow { display: flex; align-items: stretch; gap: 2px; width: 100%; padding-right: 8px; border-bottom: 1px solid var(--npr-border); background: transparent; }
+.npr-bookrow.npr-selected { background: color-mix(in srgb, var(--npr-fg) 7%, transparent); }
+/* 一行的**可点性**。
+   ★ `inert` = 这一行不可点开。书架页**整页**都是（用户 2026-10-09：「书架就是电子书的
+     一个展示，不能点击电子书取书阅读」），阅读页只有「读完」「弃读」两格（0.9.4 起：
+     弃读也改成「点行无动作、恢复只能点按钮」）。
+   ★ hover 高亮必须跟着去掉 —— 高亮着却点不动，正是「看起来像功能」。 */
+.npr-bookrow:not(.npr-bookrow-inert):hover { background: var(--npr-hover); }
+.npr-bookrow-inert .npr-bookrow-main { cursor: default; }
+/* `dim` 只给「同一页里有的能点、有的不能点」那些格子（阅读页的「读完」「弃读」）。
+   ★ 书架页整页都不可点，把 2634 个标题全压暗只会像坏了 —— 所以那边不加 `dim`。
+   ★ 阅读页上 `dim` 与 `openable` **恒好相反**：两格不可点的行必须都压暗，
+     只压一格会让「压暗」变成随机的（由 bookRowView 给，test/library.test.mjs 钉住）。
+   ★ 只加 `disabled` 是**看不出来**的：`.npr-bookrow-main` 的 `color` 是显式写死的，
+     禁用态与可点态外观一模一样 ⇒ 看起来能点、点了没反应。 */
+.npr-bookrow-dim .npr-bookrow-title { color: var(--npr-muted); }
+.npr-bookrow-main { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; padding: 10px 4px 10px 14px; border: 0; background: transparent; color: var(--npr-fg); font: inherit; text-align: left; cursor: pointer; }
+.npr-bookrow-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; font-weight: 600; line-height: 1.5; }
+.npr-bookrow-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; color: var(--npr-muted); font-size: 11px; }
+.npr-bookrow-series { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--npr-faint); font-size: 11px; }
+/* 「暂不支持阅读」用告警色而不是普通灰：它是一句**结论**，不是元数据。
+   ★ 令牌真名是 `warn`，不是 `warning` —— 写错时声明会**整条静默失效**（退化成继承色），
+     肉眼看不出来。`scripts/check-host-contract.mjs` 会拿主题包里的真实定义逐条比对。 */
+.npr-bookrow-warn { color: var(--dsw-alias-state-warn-primary); }
+/* 「扫描版·无文字层」：用**普通灰**而不是告警色 —— 它不是错误，书照样能读，
+   只是目录与解读不可用。用告警色会和「暂不支持阅读」混成同一档严重程度。 */
+.npr-bookrow-scan { color: var(--npr-faint); border-bottom: 1px dashed var(--npr-border-strong); cursor: help; }
+.npr-bookrow-plain .npr-bookrow-title { font-weight: 500; }
+.npr-bookrow-badge { padding: 1px 6px; border: 1px solid var(--npr-border-strong); border-radius: 999px; font-size: 10px; line-height: 1.5; }
+/* 来源徽章（0.20.4）：「这本书从哪份书单来」。
+   ★ 与状态徽章**长得不一样**：状态是描边胶囊、来源是**实底**胶囊 —— 两个维度不能用
+     同一款样式（同「+ 阅读」与「已开始阅读」那一对）。用户 2026-10-23 的原话是
+     「分不清楚哪个是本地目录下的电子书，哪个是百度网盘的电子书」，所以它必须
+     一眼就能和「在读 / 读完」区分开，而不是又一个灰牌子。
+   ★ `max-width` + 省略号：书单名是**用户自己起的**，长度不可控（「百度网盘 · NPIE
+     电子书全库备份」这种完全可能存在）。没有上限时它会把这一行元信息挤成一团，
+     2634 行里每一行都要为此换行。全称与路径都在 `title` 里（见 LibraryApp 的说明）。
+   ★ 底色从**令牌**派生出淡色，不写死颜色：主题包浅/深两套都要成立，写死一个
+     `#eef` 在深色主题下就是一块发白的疤。 */
+.npr-bookrow-source { flex: 0 1 auto; max-width: 112px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 6px; border-radius: 999px; font-size: 10px; line-height: 1.5; }
+/* 本地 = 强调色底：那是**用户自己机器上**的书，扫一眼就知道这本不用联网。 */
+.npr-bookrow-source.is-local { background: color-mix(in srgb, var(--npr-accent-strong) 14%, transparent); color: var(--npr-accent-strong); }
+/* 网盘 = 中性底：这是常态，不该天天喊。 */
+.npr-bookrow-source.is-pan { background: color-mix(in srgb, var(--npr-fg) 8%, transparent); color: var(--npr-muted); }
+/* 外部书单 / 旧版合并单：虚线描边 —— 它们**不是**用户配的那个目录，用实底会误导。 */
+.npr-bookrow-source.is-other { border: 1px dashed var(--npr-border-strong); color: var(--npr-faint); }
+/* 加入 / 移出「阅读」。沿用探索页「订阅 / 已订阅」的写法：**显示状态、点它是切换**。
+   未加入时是低调的描边胶囊（2634 行都挂着一个醒目按钮会很吵），已加入才用强调色。
+   ★ 0.9.4 起「弃读」那一行有**两个**（「+ 阅读」+「移出」）：`.npr-bookrow` 的
+     `gap: 2px` 是给「正文 ↔ 动作」用的，两枚胶囊之间照它摆会**粘成一片** ——
+     所以在第二个动作上再补 4px（合计 6px），两枚才读得出是两个独立按钮。
+     这条有真 Chrome 的几何断言守着（`scripts/check-library-sidebar-layout.mjs` 判据 ⑩）。 */
+.npr-root .npr-bookrow-action { flex: 0 0 auto; align-self: center; height: 24px; padding: 0 9px; border: 1px solid var(--npr-border); border-radius: 999px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; white-space: nowrap; cursor: pointer; }
+.npr-root .npr-bookrow-action:hover { border-color: var(--npr-border-strong); background: var(--npr-bg); color: var(--npr-fg); }
+.npr-root .npr-bookrow-action.is-on { border-color: var(--npr-accent-strong); color: var(--npr-accent-strong); }
+.npr-root .npr-bookrow-action + .npr-bookrow-action { margin-left: 4px; }
+/* 书架页「已加入」那一格是**状态标签**，不是按钮（用户 2026-10-09：「『+ 阅读』就变为
+   『已开始阅读』」—— 说的是状态）。所以它**看起来不能像按钮**：没有边框、没有 hover
+   变化、光标默认。左边那个「+ 阅读」才是有边框的胶囊 —— 两种维度不能用同一款样式。 */
+.npr-bookrow-status { flex: 0 0 auto; align-self: center; padding: 0 9px; color: var(--npr-muted); font-size: 11px; white-space: nowrap; }
+/* 四个状态各一个类名（不是拼出来的）：check-classes 从字面量收类名，拼接会被判成
+   「定义了但没人用」而报错，见 LibraryApp.jsx 里 BADGE_CLASS 的说明。 */
+.npr-badge-unread { color: var(--npr-faint); }
+.npr-badge-reading { border-color: var(--npr-accent-strong); color: var(--npr-accent-strong); }
+.npr-badge-read { border-color: var(--npr-border-strong); color: var(--npr-muted); }
+.npr-badge-dropped { border-style: dashed; color: var(--npr-faint); }
+
+/* ── 阅读区 ─────────────────────────────────────────────────────────── */
+/* ★ 面板高度链的**起点**：`.npr-reader` 默认是普通块盒（订阅那半边要靠它的
+   `overflow: auto` 滚整篇文章，不能动它），而书那一半的高度链是
+   `.npr-reader` → `.npr-book{flex:1}` → `.npr-book-main{flex:1}` → `.npr-book-stage`，
+   这条链**只有在 flex/grid 上下文里才成立**。写在块盒里时它们全是死代码，
+   舞台高度于是退化成「画布自己撑出来的高度」（自指量），后果肉眼可见：
+     ① 点「适应窗口」页面尺寸**一点不变** —— 判据量到的「可用高度」就是画布自己的
+        高度，怎么算都"正好放得下"（真机实测 1047×1490 的页面在 813 高的面板里）；
+     ② 窄面板下面板底部空出一大块（实测书页区只占 473 / 734）。
+   所以这条规则和 LibraryApp.jsx 上那个类名是一对，删任何一个都会静默回到上面两个症状。 */
+.npr-reader-book { display: flex; flex-direction: column; }
+.npr-book { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--npr-bg); position: relative; --npr-book-brightness: 1; }
+.npr-book-toolbar { display: flex; align-items: center; gap: 10px; height: 44px; flex-shrink: 0; padding: 5px 10px 5px 14px; }
+/* ---- 阅读器的顶部：一条 10px 拖动条 + 一颗**居中的工具胶囊**（0.22.0 起）----
+   ★ 分工（用户 2026-10-23 定的）：**开关类**动作（标记读完 / 伴读 / 划线 / 目录 /
+     配色 / 沉浸）留在顶上这颗胶囊里；**调档类**动作（页码 / 上下页 / 适宽 / 适应窗口 /
+     放大 / 缩小）搬到右下角那颗圆按钮，悬停时以它为圆心扇出（见下面 `.npr-book-fab`）。
+   ★ 拖动条保留 10px 而**不是 0**：`data-window-drag` 的元素必须有面积，0 高度拿不到
+     命中测试，整块窗口拖动区会当场消失（宿主对拖动区做的是「先求并、再求差」）。
+   ★ 只限定 `.npr-book >`：`.npr-book-toolbar` 还被书架欢迎页当**空拖动行**用
+     （`LibraryApp.jsx` 的 `{!selected && <div className="npr-book-toolbar" …/>}`），
+     把 10px 写进基础规则，那一页的拖动区会跟着缩成一条。 */
+.npr-book > .npr-book-toolbar { height: 10px; padding: 0; background: transparent; border: 0; }
+
+/* 胶囊所在的一行：**居中**、左右留白。它是正常流里的一行，不是浮层 ——
+   浮起来就会压住下面那行元信息，而元信息带 `pointer-events: none`，
+   被压住的地方连划选都点不到。
+   ★ 但它必须是 `position: relative` + `z-index: 30`：
+     配色面板从胶囊里往下弹，而 `.npr-book-pill` 有 `backdrop-filter` ——
+     **backdrop-filter 会创建栈上下文**，面板那个 `z-index: 50` 就被关在胶囊里面了，
+     整个胶囊相对后面的元信息行只是一个普通流元素 ⇒ 元信息行（后绘制）把面板盖住，
+     面板只剩最上面那半截滑块露出一点，「颜色」和四个色块根本看不见。
+     `30` 是刻意取在 FAB 的 `40` 之下的：胶囊永远不压住右下角那颗按钮。 */
+.npr-book-chrome { position: relative; z-index: 30; display: flex; justify-content: center; flex-shrink: 0; padding: 0 12px 5px; }
+.npr-book-pill { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; height: 36px; padding: 0 6px 0 12px; border: 1px solid color-mix(in srgb, var(--npr-fg) 12%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--npr-bg) 86%, transparent); backdrop-filter: blur(16px) saturate(1.6); -webkit-backdrop-filter: blur(16px) saturate(1.6); box-shadow: 0 6px 18px rgb(0 0 0 / 10%), 0 1px 0 rgb(255 255 255 / 26%) inset; }
+/* 书名可以被挤，但**不能挤出省略号以外的东西**：挤没了就等于「不知道在读哪一本」。 */
+.npr-book-pill-title { min-width: 0; max-width: 160px; margin-right: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--npr-fg); font-size: 12px; font-weight: 600; }
+.npr-book-pill-item { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11.5px; white-space: nowrap; cursor: pointer; }
+.npr-book-pill-item:hover { background: var(--npr-hover); color: var(--npr-fg); }
+.npr-book-pill-item:focus-visible { outline: 2px solid var(--npr-accent-strong); outline-offset: 1px; }
+/* `is-on` = 这一项对应的面板正开着 / 这个状态正生效。用**强调色描边 + 文字**而不是
+   整块填充：胶囊里并排六个动作，块状高亮会让眼睛找不到「现在开着哪个」。 */
+.npr-book-pill-item.is-on { border-color: color-mix(in srgb, var(--npr-accent-strong) 55%, transparent); color: var(--npr-accent-strong); }
+/* 配色按钮的父节点：面板要从**这一颗**下面掉下来，所以它得有 `position: relative`。 */
+.npr-book-pill-tint { position: relative; display: inline-flex; }
+
+/* 元信息行：胶囊下面细细一行（标题 / 格式 / 进度 / 当前档位）。 */
+.npr-book-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex-shrink: 0; padding: 0 14px 8px; border-bottom: 1px solid var(--npr-border); color: var(--npr-muted); font-size: 11px; }
+.npr-book > .npr-book-meta { padding: 0 14px 6px; border-bottom: 0; gap: 10px; font-size: 10.5px; justify-content: center; }
+
+/* ---- 右下角：一颗圆按钮 + **向上摊开的一列**（0.23.0 重做）----
+   ★ 形态照用户给的 iPad 截图：每格 = 圆形图标 + **左侧文字标签**，7 格竖直排成一条
+     微微向内收的带子，最下面那格紧贴按钮，一条细导轨把它们串起来。
+     0.22.0 那版是绕按钮 90° 扇开的 7 个光圆片：不知道是干什么的、还挤在书页右下角
+     （用户原话「丑爆了」）。竖排是最省空间的排法 —— 面板纵向本来就富裕。
+   ★ **悬停展开**（0.24.3，用户：「鼠标移到图标上就弹出，不要点击」）。
+     开合仍然只认 `.is-open` 这一个类 —— **不写 `:hover` 规则**：这个几何里 CSS 的
+     `:hover` 天然不成立（按钮与第一格之间有空隙，指针在空隙里既不在按钮上也不在格子上，
+     `:hover` 当场掉、整列开始回收，等鼠标到达目标格已经 `visibility: hidden`）。
+     改由 JS 的 `pointerenter` / `pointerleave` 驱动，并在离开后等
+     `FAB_HOVER_GRACE`（220ms）再收 —— 越过空隙只要几十毫秒，落到格子上会取消定时器。
+     ★ 点击仍保留：触屏与键盘没有 hover，点一下是「钉住 / 收起」的显式开关。
+   ★ 收起态：7 格**收到按钮圆心里**（`translate(0, 0) scale(.6)` + 透明 + 不可见）。
+     写死 `transform` 就没有「归位值」，动画会变成凭空出现。
+   ★ `visibility: hidden` 而不是只写 `opacity: 0`：只写透明的话，7 块看不见的圆片
+     仍然盖在书页右下角，划选到那儿就断（这坑在 0.22.0 之前踩过）。
+   ★ 尺寸由 **`--npr-fab-size`** 给（`fabStack` 回传），不是写死 38px：矮面板里
+     直径会缩到 26px，写死 38 会让相邻两格叠在一起。 */
+.npr-book-fab { position: absolute; z-index: 40; right: 14px; bottom: 14px; width: 44px; height: 44px; pointer-events: none; transition: opacity .18s ease; }
+.npr-book-fab-button { position: relative; z-index: 2; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border: 1px solid color-mix(in srgb, var(--npr-fg) 12%, transparent); border-radius: 50%; background: color-mix(in srgb, var(--npr-bg) 88%, transparent); backdrop-filter: blur(16px) saturate(1.6); -webkit-backdrop-filter: blur(16px) saturate(1.6); color: var(--npr-fg); box-shadow: 0 8px 22px rgb(0 0 0 / 18%), 0 1px 0 rgb(255 255 255 / 30%) inset; cursor: pointer; pointer-events: auto; transition: transform .26s cubic-bezier(.34, 1.4, .5, 1), box-shadow .18s ease, background .18s ease, color .18s ease; }
+.npr-book-fab-button:hover { box-shadow: 0 12px 28px rgb(0 0 0 / 24%), 0 1px 0 rgb(255 255 255 / 34%) inset; }
+.npr-book-fab-button:focus-visible { outline: 2px solid var(--npr-accent-strong); outline-offset: 2px; }
+/* 展开时按钮自己转 45°（齿轮变 ✕ 的手感）+ 换成强调色实心：一眼看得出「现在是摊开的」。 */
+.npr-book-fab.is-open .npr-book-fab-button { background: var(--npr-accent-strong); border-color: transparent; color: #fff; }
+.npr-book-fab.is-open .npr-book-fab-button svg { transform: rotate(45deg); }
+.npr-book-fab-button svg { transition: transform .26s ease; }
+
+/* 0×0 的定位原点，钉在**按钮圆心**上（`right/bottom: 22px` = 44/2）。
+   7 格都相对这个点做 `translate`，所以「以按钮为圆心」这件事是 CSS 自己成立的。 */
+.npr-book-fab-list { position: absolute; right: 22px; bottom: 22px; width: 0; height: 0; pointer-events: none; }
+/* 竖直导轨：一条从按钮圆心往上、逐渐淡出的细线。
+   ★ 它的作用是把 7 个圆「串成一组」，否则它们还是像浮在书页上的散点。
+   ★ 长度取 `--npr-fab-span`（= 最上面那格的圆心距），由 `fabStack` 同一份结果算出。 */
+.npr-book-fab-list::before { content: ''; position: absolute; left: 0; bottom: 0; width: 1px; height: var(--npr-fab-span, 0px); background: linear-gradient(to top, color-mix(in srgb, var(--npr-fg) 30%, transparent), color-mix(in srgb, var(--npr-fg) 30%, transparent) 70%, transparent); opacity: 0; transition: opacity .2s ease; }
+.npr-book-fab.is-open .npr-book-fab-list::before { opacity: 1; }
+
+/* 每一格：圆形图标。`margin` 负半宽把它的圆心对到定位原点上。
+   ★ 用 `margin` 而不是 `translate(-50%, -50%)`：`transform` 已经被位移与缩放占满了。 */
+.npr-book-fab-slot { position: absolute; left: 0; top: 0; z-index: 1; display: inline-flex; align-items: center; justify-content: center; width: var(--npr-fab-size, 38px); height: var(--npr-fab-size, 38px); margin: calc(var(--npr-fab-size, 38px) / -2) 0 0 calc(var(--npr-fab-size, 38px) / -2); padding: 0; border: 1px solid color-mix(in srgb, var(--npr-fg) 14%, transparent); border-radius: 50%; background: color-mix(in srgb, var(--npr-bg) 94%, transparent); backdrop-filter: blur(14px) saturate(1.5); -webkit-backdrop-filter: blur(14px) saturate(1.5); color: var(--npr-fg); box-shadow: 0 6px 16px rgb(0 0 0 / 14%); cursor: pointer; opacity: 0; visibility: hidden; pointer-events: none; transform: translate(0, 0) scale(.6); transition: transform .28s cubic-bezier(.34, 1.32, .5, 1), opacity .16s ease, visibility .16s ease, background .14s ease, color .14s ease; }
+/* 展开：**只有 `.is-open` 一条入口**。贴着按钮的那格先出来（`6 - i` 越小越早），
+   整列看起来像被从按钮里抽出来。 */
+.npr-book-fab.is-open .npr-book-fab-slot { opacity: 1; visibility: visible; pointer-events: auto; transform: translate(var(--npr-fab-x, 0px), var(--npr-fab-y, 0px)) scale(1); transition-delay: calc((6 - var(--npr-fab-i, 0)) * 20ms); }
+/* 收起时**倒序**：最上面那格先动，延迟跟着倒过来，否则外圈几格会在最后 100ms 一起消失。 */
+.npr-book-fab:not(.is-open) .npr-book-fab-slot { transition-delay: calc(var(--npr-fab-i, 0) * 12ms); }
+.npr-book-fab-slot:hover { background: var(--npr-hover); }
+.npr-book-fab-slot:disabled { opacity: .35; cursor: default; }
+.npr-book-fab-slot:focus-visible { outline: 2px solid var(--npr-accent-strong); outline-offset: 1px; }
+/* `is-on` = 当前档位（适宽 / 适应窗口）。 */
+.npr-book-fab-slot.is-on { border-color: var(--npr-accent-strong); color: var(--npr-accent-strong); }
+/* 页码那一格：整组里唯一要手输的东西，所以它是一格输入框而不是按钮。 */
+.npr-book-fab-slot.is-page { padding: 0 2px; }
+.npr-book-page { width: 30px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; font-size: 10.5px; font-weight: 600; text-align: center; }
+.npr-book-page:focus { outline: 2px solid var(--npr-accent-strong); outline-offset: 0; background: color-mix(in srgb, var(--npr-fg) 7%, transparent); }
+
+/* 文字标签：在圆**左侧**（照那张 iPad 截图的样子）。
+   ★ `pointer-events: none`：标签只是说明，点击目标永远是那个圆；
+     让标签可点会在它比圆更靠左的那几个像素上抢走命中。
+   ★ `white-space: nowrap` + 不设宽度：中文标签最长四个字（适应窗口），写死宽度
+     会换行成两行，在 38px 高的圆旁边支棱出来。 */
+.npr-book-fab-label { position: absolute; right: calc(100% + 8px); top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; height: 24px; padding: 0 9px; border: 1px solid color-mix(in srgb, var(--npr-fg) 12%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--npr-bg) 96%, transparent); color: var(--npr-fg); font-size: 11px; line-height: 1; white-space: nowrap; box-shadow: 0 4px 12px rgb(0 0 0 / 12%); pointer-events: none; }
+/* 标签也参与「从按钮里长出来」：收起时贴在圆心、略微内缩，展开时跟着走过去。
+   不做这一层的话，标签会在格子到达前先出现在半路上（父元素的 `opacity` 是同步的，
+   但视觉上它悬在空气里更刺眼）。 */
+.npr-book-fab:not(.is-open) .npr-book-fab-label { opacity: 0; }
+.npr-book-fab-slot .npr-book-fab-label { transition: opacity .14s ease; }
+
+/* ---- 配色面板：亮度滑杆 + 四档色块（0.22.0 起）----
+   ★ 从**配色那颗按钮下面**展开（父节点 `.npr-book-pill-tint` 是定位基准）：
+     挂到胶囊上会从整颗胶囊的中间掉下来，看起来不像「这个按钮的」。
+   ★ 为什么是「色块」而不是继续按 N 轮转：用户给的那张图就是一块调色板。轮转回答的是
+     「下一个是什么」，色块回答的是「我要哪一个」—— 四档之后轮转要点 1–3 次才到位。 */
+.npr-book-palette { position: absolute; z-index: 50; top: calc(100% + 8px); right: 0; width: 208px; display: grid; gap: 8px; padding: 10px 12px 12px; border: 1px solid color-mix(in srgb, var(--npr-fg) 12%, transparent); border-radius: 14px; background: color-mix(in srgb, var(--npr-bg) 96%, transparent); backdrop-filter: blur(18px) saturate(1.6); -webkit-backdrop-filter: blur(18px) saturate(1.6); box-shadow: 0 14px 34px rgb(0 0 0 / 24%); }
+.npr-book-palette-dim { display: flex; align-items: center; gap: 8px; color: var(--npr-muted); font-size: 11px; }
+/* `min-width: 0` 是滑杆在 flex 里的必需项：它默认 `min-width: auto`（按内容宽），
+   写死 208px 的容器里会把右侧那个百分比挤出面板。 */
+.npr-book-palette-dim input[type="range"] { flex: 1; min-width: 0; height: 4px; accent-color: var(--npr-accent-strong); cursor: pointer; }
+.npr-book-palette-label { margin: 0; color: var(--npr-muted); font-size: 10.5px; }
+.npr-book-swatches { display: flex; gap: 8px; }
+.npr-book-swatch { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 1px solid var(--npr-border-strong); border-radius: 8px; cursor: pointer; transition: box-shadow .14s ease, transform .14s ease; }
+.npr-book-swatch:hover { transform: translateY(-1px); }
+/* 色块必须是**真的那档颜色**：用变量而不是图标，用户才能一眼看出「夜间是什么样」。 */
+.npr-book-swatch[data-tint="paper"] { background: #fdfdfb; }
+.npr-book-swatch[data-tint="sepia"] { background: #f6ead2; }
+.npr-book-swatch[data-tint="mint"] { background: #e2f0e5; }
+.npr-book-swatch[data-tint="night"] { background: #16181c; color: #e6e8ea; border-color: #2a2f36; }
+/* 选中：双层 box-shadow 画一圈「底色 + 强调色」，比 2px 边框稳 —— 换档时不会因为
+   边框变化让四个色块**尺寸跳动**（那会让整行跟着抖一下）。 */
+.npr-book-swatch[aria-checked="true"] { box-shadow: 0 0 0 2px var(--npr-bg), 0 0 0 4px var(--npr-accent-strong); }
+
+/* ---- 书页配色：护眼 / 夜间（`<div class="npr-book" data-tint="…">`）----
+   ★ 只能**整层 filter**：电子书是一张 pdf.js 画出来的位图，改 CSS 背景色对已经画好
+     的白底页毫无作用（这正是 `readingTheme` 那套纸色在书里一点不生效的原因）。
+   ★ 夜间必须 `invert` + `hue-rotate(180deg)` 两步：只反相会让书里的彩色插图变成
+     底片（红变青、肤色变蓝绿）；先反相再转回色相，「白↔黑互换」的同时彩色大致归位。
+   ★ filter 加在**画布**上，不加在 `.npr-book-sheet`（画布 + 透明文字层的共同父级）：
+     文字层里那 700 多个 span 是透明的，但 `::selection` 的高亮不是 —— 父级一滤镜，
+     暗底上就会出现一块被反色的选区，反而看不清选中了什么。
+   ★ 舞台底色跟着换：书页比舞台窄时，四周那条空隙必须同为米黄 / 近黑，
+     否则夜间阅读会得到「一张黑纸镶一圈白边」。 */
+.npr-book[data-tint="sepia"] .npr-book-stage { background: #e9dfc9; }
+.npr-book[data-tint="sepia"] .npr-book-canvas { filter: sepia(.3) saturate(1.35) brightness(1.02) contrast(.95); }
+/* 薄荷：往绿里拉，但**别拉成荧光绿** —— 底色的 `hue-rotate` 只要动一点点，
+   白纸就会变成卫生纸颜色。压饱和 + 微微提亮，读起来比纯白柔和。
+   ★ 不用 `invert` 系：它会把彩色插图也翻成负片，而这一档是**白天**用的。 */
+.npr-book[data-tint="mint"] .npr-book-stage { background: #dfeee2; }
+.npr-book[data-tint="mint"] .npr-book-canvas { filter: sepia(.18) hue-rotate(58deg) saturate(.82) brightness(1.02); }
+.npr-book[data-tint="night"] .npr-book-stage { background: #16181c; }
+.npr-book[data-tint="night"] .npr-book-canvas { filter: invert(1) hue-rotate(180deg) brightness(.92) contrast(.88); }
+
+/* ---- 纸色覆盖层（0.24.3）：把**书页内容自己的底色**也染上 ---------------------
+   ★ 用户报的：「护眼颜色选择为什么改变不了电子书内容的背景，也要同步改变。」
+     原因是 PDF 是**位图** —— 那页白纸是画在像素里的，上面那几条 `filter` 只能给
+     位图整体加色偏（`sepia(.3)` 很淡，白纸看上去还是白的），改不了「纸是什么颜色」。
+   ★ 正解是压一层**乘算**的颜色：白纸 × 米黄 = 米黄，黑字 × 米黄 ≈ 黑字。
+     `mix-blend-mode: multiply` 就是这个乘法；用普通半透明覆盖会把黑字也一起提亮
+     （文字发灰，比白纸更难受）。
+   ★ 位置在**画布之上、文字层与划线层之下**（DOM 顺序决定，不需要 z-index）：
+     那两层必须保持原色，否则选中的高亮、划线的色块也会被染成纸色。
+   ★ 取色比舞台底色**略浅**：书页与四周完全同色时，那一页的边界就消失了
+     （只剩阴影），读起来像「整块区域都是纸」；浅一点才看得出这是一张纸。
+   ★ `paper` 档不覆盖（原色就是白纸）；`night` 档也不覆盖 —— 它是 `invert` 出来的
+     黑纸，再乘一层深色只会把整页压成死黑，白字反而看不清。 */
+.npr-book-tint { position: absolute; inset: 0; pointer-events: none; mix-blend-mode: multiply; background: transparent; }
+.npr-book[data-tint="sepia"] .npr-book-tint { background: #f7ecd6; }
+.npr-book[data-tint="mint"] .npr-book-tint { background: #e6f3e9; }
+
+/* 配色档位要**管到顶部的两行**（拖动条 + 元信息行 + 胶囊所在行）：
+   ★ 它们现在在**正常流**里，底色来自 `.npr-book` 的 `--npr-bg`（宿主浅色主题）——
+     夜间档会在黑纸上方留一条白带，护眼档在米黄纸上压一条白边。
+   ★ **只染这三条，不染 `.npr-book` 整块**：左侧划线面板与目录面板都没有自己的
+     底色（它们继承 `.npr-book`），整块染黑之后那两栏里的字（`--npr-fg`，跟随
+     宿主浅色主题）就成了黑底黑字 —— 配色只管书页，别把面板一起拖下水。 */
+.npr-book[data-tint="sepia"] > :is(.npr-book-meta, .npr-book-toolbar, .npr-book-chrome) { background: #e9dfc9; }
+.npr-book[data-tint="mint"] > :is(.npr-book-meta, .npr-book-toolbar, .npr-book-chrome) { background: #dfeee2; }
+.npr-book[data-tint="night"] > :is(.npr-book-meta, .npr-book-toolbar, .npr-book-chrome) { background: #16181c; }
+
+/* 胶囊与扇出按钮也要跟着档位走：夜间时它们若还是 `--npr-bg`（白），黑纸正中一块
+   白板就是手电筒 —— 而它恰恰是用户为了「看清楚」才打开的。
+   ★ 不动 `.npr-book-pill-item.is-on` / `.npr-book-fab-slot.is-on` 的强调色：
+     那是「当前开着哪个面板」的状态标记，换掉它会让选中态消失在深底里。 */
+.npr-book[data-tint="sepia"] :is(.npr-book-pill, .npr-book-fab-slot, .npr-book-palette) { background: color-mix(in srgb, #fbf5e7 95%, transparent); border-color: rgb(120 100 60 / 22%); }
+.npr-book[data-tint="mint"] :is(.npr-book-pill, .npr-book-fab-slot, .npr-book-palette) { background: color-mix(in srgb, #eef7ef 95%, transparent); border-color: rgb(60 120 80 / 20%); }
+.npr-book[data-tint="night"] :is(.npr-book-pill, .npr-book-fab-slot, .npr-book-palette) { background: color-mix(in srgb, #0e1013 94%, transparent); border-color: rgb(255 255 255 / 14%); }
+.npr-book[data-tint="night"] :is(.npr-book-pill-item, .npr-book-fab-slot, .npr-book-palette, .npr-book-palette-label, .npr-book-palette-dim) { color: #cfd3d8; }
+/* ★ 悬停底色也得跟着换：它取自 `--npr-hover`（宿主浅色主题派生的浅灰），夜间模式下
+   那一格会变成一块**白** —— 黑面板上最亮的东西正好在鼠标底下。 */
+.npr-book[data-tint="night"] .npr-book-pill-item:hover { background: rgb(255 255 255 / 12%); color: #f2f4f6; }
+.npr-book[data-tint="night"] .npr-book-fab-slot:hover { background: rgb(255 255 255 / 14%); }
+.npr-book[data-tint="night"] .npr-book-fab-button { background: color-mix(in srgb, #0e1013 88%, transparent); border-color: rgb(255 255 255 / 16%); color: #e6e8ea; }
+.npr-book[data-tint="night"] .npr-book-fab.is-open .npr-book-fab-button { background: var(--npr-accent-strong); color: #fff; }
+/* 文字标签的夜间接管：它有自己的底色（不是从槽位继承的），不换的话夜间那 7 个标签
+   会是 7 块小白板 —— 比看不见更难受。 */
+.npr-book[data-tint="sepia"] .npr-book-fab-label { background: color-mix(in srgb, #fbf5e7 96%, transparent); border-color: rgb(120 100 60 / 22%); }
+.npr-book[data-tint="mint"] .npr-book-fab-label { background: color-mix(in srgb, #eef7ef 96%, transparent); border-color: rgb(60 120 80 / 20%); }
+.npr-book[data-tint="night"] .npr-book-fab-label { background: color-mix(in srgb, #0e1013 96%, transparent); border-color: rgb(255 255 255 / 14%); color: #cfd3d8; }
+.npr-book[data-tint="night"] .npr-book-page { color: #e6e8ea; }
+.npr-book[data-tint="night"] .npr-book-meta { color: #8d949c; }
+.npr-book[data-tint="night"] .npr-book-swatch[aria-checked="true"] { box-shadow: 0 0 0 2px #0e1013, 0 0 0 4px var(--npr-accent-strong); }
+
+/* ---- 沉浸式阅读：**只留书页**（0.22.0 起；0.24.2 起**不再自动全屏**）----
+   ★ 用户对这一档的定义：「左边两列缩掉，只显示阅读的这一列，**但是点沉浸的时候
+     窗口大小不动**，要全屏由用户自己点」。
+   ★ 0.22.0 那版进沉浸会 `requestFullscreen()` —— 那是**另一件事**（全屏是用户对
+     窗口的决定，macOS 还换 Space、有动画），0.24.2 删掉了。代价：宿主自己那一列
+     在插件的挂载点之外，**插件改不到它的 CSS** ⇒ 不进全屏就收不掉它。要连它一起
+     收掉，用户自己按绿灯 / ⌃⌘F（写进了胶囊那颗的 title）。
+   ★ 所以这里藏掉胶囊那一行与元信息行、右下角按钮压到 `opacity: 0`。
+   ★ 为什么敢压到 0：退出入口不再是「那颗要看得见的按钮」。出口有三条，且第一条是
+     进入时**主动弹了提示**的：Esc / I 键、以及鼠标回到右下角（那颗按钮的位置没变，
+     hover 就恢复）。
+   ★ 舞台内边距同时收到最小：沉浸态的意义就是把这几十像素还给书页。 */
+.npr-book.is-immersive .npr-book-meta,
+.npr-book.is-immersive .npr-book-chrome { display: none; }
+.npr-book.is-immersive .npr-book-fab { opacity: 0; }
+/* 展开态也要能看见：点开之后鼠标可能离开那个角去看列表，`:hover` 一丢就整块消失 ——
+   那正好是「点不到」的另一个版本。`.is-open` 是持久态，不受鼠标位置影响。 */
+.npr-book.is-immersive .npr-book-fab:hover,
+.npr-book.is-immersive .npr-book-fab:focus-within,
+.npr-book.is-immersive .npr-book-fab.is-open { opacity: 1; }
+.npr-book.is-immersive .npr-book-stage { padding: 8px 10px 12px; }
+
+/* ---- 沉浸时把**书架那一列**也收掉 ----
+   ★ 用户原话「左边两列缩掉，只显示阅读的这一列」：第二列就是这个 `.npr-sidebar`；
+     第一列是宿主自己的侧栏 —— 插件改不到（0.24.2 起也不再借全屏去盖它，
+     见上面那段注释）。
+   ★ 类名 `is-book-immersive` 由 `LibraryApp` 根据阅读器回调写在 `.npr-workarea` 上 ——
+     阅读器只是它的后代，改不到祖先的类。
+   ★ 特异性必须够（三个类），因为 `@container` 里还有一条 `.npr-layout` 的列宽规则。
+     那一条是 0-1-0，这里是 0-3-0，谁在后面都没关系。 */
+.npr-workarea.is-book-immersive > .npr-layout { grid-template-columns: minmax(0, 1fr); }
+.npr-workarea.is-book-immersive .npr-sidebar,
+.npr-workarea.is-book-immersive .npr-resize { display: none; }
+/* ---- 书页亮度（`--npr-book-brightness`，0.7–1.3）----
+   ★ 加在**舞台**上而不是画布上：加在画布上时，舞台底色（书页比面板窄时四周那条空隙）
+     不会跟着变 —— 调暗之后得到「一张灰纸镶一圈白边」，比不调更刺眼。
+   ★ 也不能挂在 `.npr-book` 根节点：那会把胶囊、扇出按钮和左侧划线面板一起调暗，
+     而它们是**控件**，不是书页。
+   ★ 与各档配色的画布滤镜是**两层**（这里一层亮度、画布一层色相/反相），乘积生效、
+     互不覆盖 —— 0.20.6 那版把滤镜全写在画布上，加亮度就得改四档规则。 */
+.npr-book-stage { filter: brightness(var(--npr-book-brightness, 1)); }
+/* ---- 书页区 + 目录 / 伴读：一块面板 + 正文（面板**分居两侧**）----
+   ★ 目录在**左边**、伴读在**右边**（0.19.0 起；此前目录也在右边）：
+     · 目录是导航类 —— 电子书阅读器的通行摆法，视线从左上往下扫目录、
+       再落到右边的正文；
+     · 伴读是对话类 —— 与订阅那半边的伴读同侧，用户不必为同一件事在两个方向上
+       来回找。
+     位置由 DOM 决定（目录写在 stage 之前、伴读写在之后，见 BookReader.jsx 的注释）。
+     两者互斥，所以正文永远只有一栏。
+   `scrollbar-gutter: stable` 不是装饰：没有它，滚动条一出现，可用宽度就少一条滚动条，
+   「适应宽度」会跟着重算一次 —— 看起来是页面自己抖了一下。
+   ★ 居中靠画布的 `margin:auto`，不靠容器的 `justify-content:center`：
+     容器是滚动容器，`justify-content:center` 在内容比容器大时会让**起始边永远滚不到**
+     （页面比面板宽时左边一截就再也看不见了）。`margin:auto` 是 flex 里的安全居中 ——
+     装得下就居中，装不下自动退化成 0，两端都能滚到。
+   ★ `position: relative` 是给 `.npr-digest-card`（章节要点浮层）当定位基准用的：
+     浮层必须挂在**舞台这一格**上，而不是挂在整个阅读器上 —— 否则它会盖住工具栏与
+     元信息行。 */
+.npr-book-main { display: flex; flex: 1; min-height: 0; min-width: 0; position: relative; }
+/* ---- 阅读区：舞台 + 右下角浮动按钮的**共用定位基准**（0.24.3）------------------
+   ★ 用户原话：「悬浮按钮要始终显示在电子书阅读的区域。」
+     以前按钮是 `.npr-book` 的直接子节点 ⇒ 钉在**整个面板**的右下角：一开伴读
+     （右侧多一栏）它就跑到伴读面板的角上，看着像伴读的按钮。
+   ★ 为什么不直接把按钮放进 `.npr-book-stage`：舞台是 `overflow: auto` 的滚动容器，
+     绝对定位的子节点会**跟着内容滚走** —— 往下翻两页按钮就没了。
+   ★ 所以中间这一层：`flex: 1` 撑满、自己不滚、也不画东西，只当定位基准。
+     它的高度 = 舞台高度，`fabStack` 的预算（面板高 − 顶部预留）仍然对得上。 */
+.npr-book-view { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; }
+/* ★ `padding-top` 从 76 收到 14（0.22.0）：那个 76 是给「浮在书页上方的胶囊 + 元信息行」
+   让位的，现在两条都不在书页上面了（顶部只剩一条 10px 的拖动条，元信息行在正常流里），
+   留着它只会在书页上方空出一条谁都不用的白带 —— 一屏少两行正文，且没有任何理由。 */
+.npr-book-stage { flex: 1; min-width: 0; min-height: 0; overflow: auto; scrollbar-gutter: stable; display: flex; justify-content: flex-start; align-items: flex-start; padding: 14px 16px 16px; background: color-mix(in srgb, var(--npr-fg) 6%, var(--npr-bg)); }
+
+
+/* 快捷键提示：只在宽处出现（窄面板下这一行本来就挤）。 */
+.npr-book-keys { color: var(--npr-faint); }
+
+/* ---- 伴读面板（复用 .npr-companion 的骨架，只改宽度与分栏方式）----
+   ★ 伴读在**书页右边**（对话类，与订阅那半边的伴读同侧），所以分隔线在**左边**：
+     它是这块面板与正文之间那条线。写成 border-right 的话，线会贴到面板与窗口
+     边缘之间，看上去像一条没意义的竖线。
+   ★ 与目录面板方向相反是**有意**的：目录（`border-right`）在左、伴读（`border-left`）
+     在右，两块各自把线贴在自己**朝内**的那一侧。两者互斥，不会同时出现。 */
+.npr-book-companion { flex: 0 0 348px; width: 348px; min-width: 0; border-left: 1px solid var(--npr-border); }
+.npr-book-companion-chat { flex: 1; min-height: 0; }
+.npr-book-companion-hint { padding: 16px; color: var(--npr-muted); font-size: 12px; line-height: 1.7; }
+
+/* ---- 目录面板：与伴读**互斥占同一格**（不开第三列，正文宽度是读字用的）---- */
+.npr-book-digest { flex: 0 0 306px; width: 306px; min-width: 0; border-right: 1px solid var(--npr-border); display: flex; flex-direction: column; }
+.npr-digest-progress { display: grid; gap: 6px; padding: 10px 14px; }
+.npr-digest-bar { height: 4px; border-radius: 999px; background: var(--npr-hover); overflow: hidden; }
+.npr-digest-bar i { display: block; height: 100%; background: var(--npr-accent-strong); transition: width .2s ease; }
+.npr-digest-progress small { color: var(--npr-muted); font-size: 11px; }
+.npr-digest-empty { display: grid; justify-items: center; gap: 8px; padding: 24px 18px; text-align: center; color: var(--npr-muted); }
+.npr-digest-empty p { margin: 0; font-size: 12px; line-height: 1.7; }
+.npr-digest-empty small { color: var(--npr-faint); font-size: 11px; line-height: 1.7; }
+.npr-digest-start { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 1px solid var(--npr-accent-strong); border-radius: 999px; background: transparent; color: var(--npr-accent-strong); font: inherit; font-size: 12px; cursor: pointer; }
+.npr-digest-start:hover { background: var(--npr-hover); }
+/* 分段方式那一行是**必须存在**的：用户看到「19 章」会以为那是书的目录，
+   而它可能是按页硬切的。这一行就是用来拆掉这个误会的。 */
+.npr-digest-mode { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-bottom: 1px solid var(--npr-border); color: var(--npr-faint); font-size: 11px; }
+.npr-digest-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 6px 0; list-style: none; }
+/* 一行 = 「跳到那一页」按钮 + 「看要点」箭头。两者是**兄弟**，不是嵌套：
+   `<button>` 里套 `<button>` 是非法结构（React 会警告，真机上点击归属也不确定）。
+   ★ 点行的行为从 0.17.0 起就是「跳页」，所以展开必须是另一个热区 ——
+     同一位置在两版之间做两件不同的事，用户必然误解。 */
+/* 展开的那一条整体着色：要点浮层是**另一处**（阅读区上），所以行上的着色负责
+   「你正在看的就是这一章」这层指认 —— 浮层没有别的锚点能告诉用户它属于哪一行。 */
+.npr-digest-item.is-expanded { background: var(--npr-hover); }
+.npr-digest-line { display: flex; align-items: baseline; }
+/* ★ 行首那个勾选框（0.19.0）。与行按钮**平级**、不嵌套：`<button>` 里套 `<input>`
+   既非法，点击归属在真机上也不确定（点一下可能既勾上又跳页）。
+   热区按 13px 字号 + 4px 内边距给到 ~20px 见方，再小就只能瞄准了。 */
+/* 勾选框：**自绘**，不用原生外观。
+   ★ 原来的原生框是 13px 的浅灰方框：在 `--npr-bg` 那一档浅灰底上几乎看不见，
+     用户的原话是「目录列表是不是就没有选择框了」—— 它不是没渲染，是**看不出来**。
+     而它恰恰是「重做某一章」的唯一入口（解读完之后每章都成了 `done`，只能靠勾它
+     再生成一次），存在感太弱就等于这个功能不存在。
+   ★ 自绘后两个状态都明确：未勾是 1.5px 的深色描边方框，勾上是实心强调色 + 白勾。
+   ★ 对勾用 `clip-path` 而不是背景图：一处定义、跟随 `--npr-accent-strong` 变色，
+     且不用在 CSS 里塞一段 data URI（那东西在剥离注释的构建步骤里很脆）。 */
+.npr-digest-check { appearance: none; -webkit-appearance: none; flex: 0 0 auto; display: inline-grid; place-content: center; width: 14px; height: 14px; margin: 0 4px 0 8px; border: 1.5px solid color-mix(in srgb, var(--npr-fg) 38%, transparent); border-radius: 4px; background: transparent; cursor: pointer; transition: border-color .12s ease, background .12s ease; }
+.npr-digest-check:hover:not(:disabled) { border-color: var(--npr-accent-strong); }
+.npr-digest-check::before { content: ''; width: 9px; height: 9px; transform: scale(0); transition: transform .12s ease; background: #fff; clip-path: polygon(14% 45%, 0 62%, 38% 100%, 100% 18%, 84% 4%, 37% 72%); }
+.npr-digest-check:checked { border-color: var(--npr-accent-strong); background: var(--npr-accent-strong); }
+.npr-digest-check:checked::before { transform: scale(1); }
+.npr-digest-check:disabled { opacity: .4; cursor: not-allowed; }
+.npr-digest-row { display: flex; align-items: baseline; gap: 8px; flex: 1; min-width: 0; padding: 6px 4px 6px 6px; border: 0; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.npr-digest-row:hover { background: var(--npr-hover); }
+.npr-digest-row.is-active { background: var(--npr-hover); box-shadow: inset 2px 0 0 var(--npr-accent-strong); }
+/* 卷标题页（「上册」）不是可读的一章：弱化但不删 —— 删掉会让章节序号跳号。 */
+.npr-digest-row.is-section { color: var(--npr-muted); }
+.npr-digest-row.is-section .npr-digest-title { font-weight: 600; }
+.npr-digest-n { flex: 0 0 auto; color: var(--npr-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.npr-digest-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npr-digest-page { flex: 0 0 auto; color: var(--npr-faint); font-size: 10px; font-variant-numeric: tabular-nums; }
+/* 「看要点」箭头。热区 26px 见方：比字号大一圈，才点得准（列表行高只有 ~26px，
+   箭头再小就只能瞄准了）。 */
+.npr-digest-peek { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; margin-right: 6px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--npr-muted); cursor: pointer; }
+.npr-digest-peek:hover { background: var(--npr-hover); color: var(--npr-fg); }
+/* 「这一章已解读」的对勾。与右边的箭头分工：对勾是**状态**，箭头是**动作**。 */
+.npr-digest-done { display: inline-flex; flex: 0 0 auto; color: var(--npr-accent-strong); }
+/* 状态徽章。**文案优先、颜色只是辅助**：色弱用户读到的「失败」「略过」和
+   别人读到的是同一句话，而只靠颜色的标记对他们等于不存在。 */
+.npr-digest-status { flex: 0 0 auto; padding: 0 5px; border-radius: 999px; font-size: 10px; line-height: 15px; white-space: nowrap; }
+.npr-digest-status.is-running { background: var(--npr-hover); color: var(--npr-muted); }
+.npr-digest-status.is-failed { background: var(--npr-hover); color: var(--dsw-alias-state-error-primary); }
+.npr-digest-status.is-skipped, .npr-digest-status.is-stale { color: var(--npr-faint); }
+/* 生成块：预检（调用次数）→ 进度 + 停止 → 完成。 */
+.npr-digest-generate { display: grid; gap: 6px; justify-items: start; padding: 10px 14px; border-bottom: 1px solid var(--npr-border); }
+.npr-digest-generate.is-running { justify-items: stretch; }
+.npr-digest-generate-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.npr-digest-generate small { color: var(--npr-muted); font-size: 11px; }
+.npr-digest-generate.is-done small { color: var(--npr-faint); }
+.npr-digest-hint { color: var(--npr-faint) !important; font-size: 10px; line-height: 1.6; }
+.npr-digest-hint.is-warn { color: var(--npr-muted) !important; }
+.npr-digest-stop { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 9px; border: 1px solid var(--npr-border); border-radius: 999px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; cursor: pointer; }
+.npr-digest-stop:hover { background: var(--npr-hover); color: var(--npr-fg); }
+/* ---- 勾选那一行：已选几章 + 全选 / 全不选 ----
+   ★ 「已选 N 章」放在最前面而不是塞进按钮里：按钮上的数字会随勾选变化，用户
+     改勾选时视线正落在列表上，需要一个不动的数字告诉他「现在选了几个」。 */
+.npr-digest-select { display: flex; align-items: center; gap: 8px; width: 100%; }
+.npr-digest-select-count { flex: 1; min-width: 0; color: var(--npr-fg); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.npr-digest-link { flex: 0 0 auto; padding: 0; border: 0; background: transparent; color: var(--npr-accent-strong); font: inherit; font-size: 11px; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.npr-digest-link:disabled { color: var(--npr-faint); text-decoration: none; cursor: default; }
+/* 禁用态必须**看得出来**：只加 `disabled` 属性的话，按钮和能点时长得一样，
+   用户点了没反应只会以为坏了（本项目踩过这个坑）。 */
+.npr-digest-start:disabled { opacity: .5; cursor: not-allowed; }
+.npr-digest-start:disabled:hover { background: transparent; }
+/* ---- 0.24.1：「生成解读」+「book-to-skill」同一排 ----
+   ★ 两颗按钮**不同级**：左边是主按钮（accent 描边，会花钱），右边是次要动作
+     （细边框 + muted 字，纯拼装不花钱）。做成同级会被读成「两个都要点一遍」。
+   ★ `.npr-digest-start` 在这里必须 `min-width: 0` 且允许收缩：它是 flex 子项，
+     默认 `min-width: auto` 不肯缩，长文案（`继续生成（120 章）`）会把右边那颗
+     顶出面板 —— 而 panel 是 306px，没有任何滚动条能救。
+   ★ 收缩时用 ellipsis 截断**按钮文案**，不截断章数以外的信息：`title` 里留着全量。 */
+.npr-digest-actions { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; }
+.npr-digest-actions .npr-digest-start { flex: 0 1 auto; min-width: 0; }
+.npr-digest-actions .npr-digest-start > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npr-digest-skill { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 9px; border: 1px solid var(--npr-border); border-radius: 999px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; letter-spacing: .2px; white-space: nowrap; cursor: pointer; }
+.npr-digest-skill:hover { background: var(--npr-hover); border-color: var(--npr-border-strong); color: var(--npr-fg); }
+/* 没有解读时不可点。灰**看得出来**，并且 `title` 说清为什么 —— 否则用户只会觉得坏了。 */
+.npr-digest-skill:disabled { opacity: .5; cursor: not-allowed; }
+.npr-digest-skill:disabled:hover { background: transparent; border-color: var(--npr-border); color: var(--npr-muted); }
+/* ---- 模型选择：与设置页那个下拉框同款（`npr-ai-model`），因为它就是同一件事 ---- */
+.npr-digest-model { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 2px; }
+.npr-digest-model > span { flex: 0 0 auto; color: var(--npr-muted); font-size: 11px; }
+.npr-digest-model .npr-ai-model { flex: 1; min-width: 0; height: 28px; font-size: 11px; }
+/* 解读正文：缩进对齐标题（14px 行内边距 + 序号宽度），让「这一段属于上一行」看得出来。 */
+.npr-digest-body { display: grid; gap: 7px; padding: 2px 14px 10px 32px; }
+.npr-digest-summary { margin: 0; color: var(--npr-fg); font-size: 12px; line-height: 1.75; }
+.npr-digest-points { margin: 0; padding-left: 16px; color: var(--npr-fg); font-size: 12px; line-height: 1.7; }
+.npr-digest-points li { margin: 2px 0; }
+.npr-digest-terms { display: grid; gap: 5px; margin: 2px 0 0; padding: 7px 9px; border-radius: 8px; background: var(--npr-hover); }
+.npr-digest-terms dt { color: var(--npr-fg); font-size: 11px; font-weight: 600; }
+.npr-digest-terms dd { margin: 1px 0 0; color: var(--npr-muted); font-size: 11px; line-height: 1.6; }
+.npr-digest-format { color: var(--npr-faint); font-size: 10px; line-height: 1.6; }
+.npr-digest-loading { color: var(--npr-faint); font-size: 11px; }
+.npr-digest-body-error { color: var(--npr-muted); font-size: 11px; line-height: 1.6; }
+/* 生成时用的模型。用户就是为了「别烧默认模型」才去选的，所以要把实际用的那个
+   写出来 —— 只有他说得出名字，他才敢确认这一章不是默认模型跑的。 */
+.npr-digest-model-tag { color: var(--npr-faint); font-size: 10px; }
+
+/* ---- 章节要点浮层（0.19.0）----
+   挂在 `.npr-book-main` 上（它有 `position: relative`），所以只盖住书页那一格，
+   不会压到工具栏与元信息行。
+   ★ 宽度用 `min()` 而不是固定值：窄窗口下 380px 会把整页盖住，而用户此刻可能正在
+     对着原文看要点。`max-height` 与 `overflow-y` 让长解读自己滚，不撑破面板。
+   ★ 不参与布局（`position: absolute`）⇒ 舞台宽度不变 ⇒ 不触发 pdf.js 重画。 */
+/* ★ `top:56px` 是给**浮动**工具栏让位（0.20.6）：它原来写 10px，因为工具栏当时是一行
+   占位的横带 —— 现在工具栏浮起来了、不占位，`main` 从面板顶端开始，卡片顶在 10px
+   就会盖住那颗胶囊。48px（胶囊底）+ 8px 间隙 = 56。 */
+.npr-digest-card { position: absolute; z-index: 3; top: 56px; right: 10px; bottom: 10px; display: flex; flex-direction: column; width: min(380px, 58%); min-height: 0; border: 1px solid var(--npr-border-strong); border-radius: 10px; background: var(--npr-bg); box-shadow: 0 8px 28px rgb(0 0 0 / 18%); overflow: hidden; }
+.npr-digest-card-head { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; padding: 8px 8px 8px 12px; border-bottom: 1px solid var(--npr-border); }
+.npr-digest-card-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--npr-fg); font-size: 12px; font-weight: 600; }
+.npr-digest-card-body { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 0 4px; }
+/* 浮层里的正文不再缩进对齐列表行（那里是 32px 的左内边距，这里没有序号要躲）。 */
+.npr-digest-card-body .npr-digest-body { padding: 0 14px 10px; }
+/* `margin:auto` 同时负责「整页适应窗口」时的居中：这时页面比面板矮，居中才像一页纸
+   摊在桌上；页面比面板高（适宽 + 长页）时它会退化成 0，页面顶端对齐、可以上下滚。
+   ★ 居中改由外面的 `.npr-book-sheet` 承担（0.20.5 起画布与透明文字层要共用一块
+     定位基准），所以画布自己不再吃 auto —— 否则两者各居中一次，文字层会偏出半页。 */
+.npr-book-canvas { display: block; background: #fff; box-shadow: 0 1px 3px rgb(0 0 0 / 22%); }
+.npr-book-canvas.is-hidden { visibility: hidden; height: 0; }
+
+/* 书页定位容器：画布 + 透明文字层 + 划词气泡，三者共用这一块基准。
+   ★ 为什么不直接挂在 `.npr-book-stage` 上：那是**会滚的**容器（适宽 + 长页时必然滚），
+     而文字层的 span 是绝对定位 —— 基准一旦是滚动容器，滚过之后选区与字形就整体错开。
+   ★ `flex: 0 0 auto` 是必须的：它要按画布撑开，不能被 flex 压扁。 */
+.npr-book-sheet { position: relative; flex: 0 0 auto; margin: auto; }
+.npr-book-sheet.is-hidden { visibility: hidden; }
+
+/* ---- PDF 透明文字层（0.20.5）--------------------------------------------
+   这就是「PDF 明明是文字版却一个字都选不中」的修法：位图里没有任何可选文本节点，
+   能选、能复制、能 ⌘F 的，是叠在它上面这一层**透明的 DOM span**。
+   ★ 样式必须在调用方写全：`vendor/pdfjs` 里只有 `pdf.mjs`，**没有**官方 viewer 的
+     `text_layer_builder.css`。pdf.js 只负责摆位置（`left`/`top` 用百分比），其余全靠这里。
+   ★ `--font-height` 的单位是**PDF 单位**（未乘缩放）。字号必须在这里乘
+     `--total-scale-factor` —— 漏乘的后果是 2× 屏上字号只有一半大，一个字的选区
+     会把半个字框进去，看起来像「选到了邻居」。
+   ★ `--scale-round-x/y` 必须给：`setLayerDimensions()` 用
+     `round(down, var(--total-scale-factor) * Npx, var(--scale-round-x))` 算容器宽高，
+     这两个变量缺失时那条声明**整条失效**。
+   ★ `--scale-x` / `--rotate`：pdf.js 只 `setProperty` 写进去，消费它们的 CSS 在官方
+     viewer 里，vendor 里没有 —— 不在这里消费，多字 span 的宽度与旋转文字就都不对。 */
+.npr-book-text {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  text-align: initial;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  --min-font-size: 1;
+}
+.npr-book-text :is(span, br) {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  font-size: calc(var(--font-height) * var(--total-scale-factor));
+  transform: scaleX(var(--scale-x, 1)) rotate(var(--rotate, 0deg));
+}
+.npr-book-text span.markedContent { top: 0; height: 0; }
+/* 选中色用强调色的半透明版：叠在书页位图上要能看清「选了哪几行」，
+   同时不把字本身盖糊（字在位图里，这一层只有底色）。 */
+.npr-book-text ::selection { background: color-mix(in srgb, var(--npr-accent) 38%, transparent); }
+.npr-book-text br::selection { background: transparent; }
+
+/* 划词气泡：以选区水平中心居中，贴在选区上沿或下沿（上下由 `quoteBarPlacement` 判，
+   那是几何，写在 `book-text.js` 里以便单测 + 真 Chrome 脚本共用）。 */
+.npr-book-quotebar {
+  position: absolute;
+  z-index: 3;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: min(320px, 92%);
+  padding: 3px 4px 3px 10px;
+  border: 1px solid var(--npr-border-strong);
+  border-radius: 999px;
+  background: var(--npr-bg);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
+  font-size: 11px;
+}
+.npr-book-quotebar-text { min-width: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--npr-muted); }
+.npr-book-quotebar button { flex: 0 0 auto; height: 24px; padding: 0 8px; border: 0; border-radius: 999px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 11px; cursor: pointer; }
+.npr-book-quotebar button:hover { background: var(--npr-hover); }
+
+/* 扫描页说明（0.20.5）：文字版能选了，扫描版**本来就没有字可选** —— 不说这一句，
+   用户会得到和修复之前完全一样的观感，然后合理地认为没修。
+   ★ `pointer-events:none` 是必须的：它压在书页下沿，挡住选区就等于把这句话变成了障碍。 */
+.npr-book-notice {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  z-index: 2;
+  margin: 0;
+  padding: 3px 9px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--npr-bg) 90%, transparent);
+  color: var(--npr-muted);
+  font-size: 10px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.npr-book-hint, .npr-book-error { align-self: center; margin: auto; max-width: 420px; color: var(--npr-muted); font-size: 12px; line-height: 1.7; text-align: center; }
+.npr-book-error { display: grid; justify-items: center; gap: 8px; text-align: left; }
+.npr-book-error h2 { margin: 4px 0 0; color: var(--npr-fg); font-size: 16px; }
+.npr-book-error p { margin: 0; }
+.npr-book-error button { min-height: 32px; padding: 0 12px; border: 1px solid var(--npr-border-strong); border-radius: 8px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; cursor: pointer; }
+.npr-book-error button:hover { background: var(--npr-hover); }
+.npr-book-empty { display: grid; justify-items: start; gap: 8px; width: min(100% - 48px, 520px); margin: clamp(50px, 10vh, 120px) auto; color: var(--npr-muted); font-size: 13px; line-height: 1.75; }
+.npr-book-empty h2 { margin: 6px 0 0; color: var(--npr-fg); font-size: 18px; }
+.npr-book-empty p { margin: 0; }
+.npr-book-path { display: grid; gap: 5px; margin-top: 6px; }
+.npr-book-path span { color: var(--npr-faint); font-size: 11px; }
+.npr-book-path code { padding: 7px 9px; border: 1px solid var(--npr-border); border-radius: 7px; background: var(--npr-bg-2); color: var(--npr-fg); font-size: 11px; word-break: break-all; user-select: text; }
+
+/* ---- 书页区的窄容器（竖排）：书页在上，面板在下 ----
+   ★★ 这个块**必须**写在上面那些基础规则之后。理由不是审美：这里每一条与它的
+     基础规则都是**同特异度**（单个类），谁生效只看源码顺序。第一版写在文件前半截，
+     于是 `.npr-book-digest{width:306px}` 稳稳压着这里的 `width:100%` ——
+     症状是窄窗口下面板只有 306px 宽、右边空一大块，而文本断言把同选择器的多条
+     规则**合并**起来看，`width:100%` 明明「在」，于是全绿。
+     0.19.0 用真 Chrome 量 `getBoundingClientRect()` 才把它逼出来
+     （`scripts/check-book-panel-layout.mjs` 判据 ⑩）。
+   ★ 竖排时 DOM 是「目录 → 书页 → 伴读」，直接把目录顶到最上面，把正文挤到屏幕
+     下半截 —— 而窄屏里用户首先想看书。所以用 `order` 把书页提到第一位：
+     **只在竖排时**生效，横排仍由 DOM 决定。
+     两块面板都给 order 2（它们互斥，先后无关；真同时出现时按 DOM 顺序，
+     目录在前、伴读在后 —— 与横排的左/右一致）。
+     `order` 只吃整数（`.5` 会被整条声明静默丢弃）。 */
+@container (max-width: 820px) {
+  .npr-book-main { flex-direction: column; }
+  /* ★ 0.24.3：舞台外面多了一层 `.npr-book-view`（舞台 + 浮动按钮的定位基准），
+     所以 order 要落在**那一层**上 —— 落在舞台上就不再是 `.npr-book-main` 的直接子节点，
+     这条规则会静默失效，竖排时正文被两块面板挤到最下面。 */
+  .npr-book-main > .npr-book-view { order: 1; }
+  .npr-book-main > .npr-companion { order: 2; }
+  .npr-book-view { min-height: 120px; }
+  /* 伴读在右，横排时线贴左缘；竖排里线改到上边，否则左边会多一条竖线。 */
+  .npr-book-companion { width: 100%; flex: 0 1 320px; min-height: 0; border-left: 0; border-top: 1px solid var(--npr-border); }
+  /* 目录面板：`flex: 0 0 306px` 在竖排里是**高度** 306px、而 `width: 306px` 又把它
+     钉在左边 —— 不覆盖就是「306 宽 + 右边空一大块」。 */
+  .npr-book-digest { width: 100%; flex: 0 1 320px; min-height: 0; border-right: 0; border-top: 1px solid var(--npr-border); }
+  /* 划线面板：与目录同款。★ 必须写在**同一个 820px 块**里 —— 另写一个 700px 的
+     块会让 700–820 这个区间出现「目录已经竖排、划线面板还在横排」的两副样子。 */
+  .npr-marks { width: 100%; flex: 0 1 300px; min-height: 0; border-right: 0; border-top: 1px solid var(--npr-border); order: 2; }
+}
+
+/* ---- 电子书书架：页级开关 + 三步 ----------------------------------------
+   ★ 间距用**一套刻度**，不是每条规则各写一个数。旧版这一块混用了 4/8/12/14/16/18px
+     六种值，结果就是"每块看着都对、整页看着不齐"。现在只有四档：
+       卡片内元素之间  12px
+       卡片内分区块    16px（`.npr-src-sep` 上下各一次）
+       步骤之间        28px
+       卡片内边距      16px 18px
+   布局全部用「自适应」而不是容器查询：设置弹窗的宽度会随窗口变，而 @container 量的是
+   外层面板的宽度 —— 面板很宽、弹窗很窄时那条规则根本不会触发，于是两栏格子挤成一团。
+   `auto-fit` + `flex-wrap` 不依赖任何外部宽度，怎么写都对。 */
+.npr-lib-switch { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 2px 18px; margin-bottom: 4px; border-bottom: 1px solid var(--npr-border); }
+.npr-lib-switch h3 { margin: 0; font-size: 14px; font-weight: 620; letter-spacing: -.01em; }
+.npr-lib-switch p { margin: 4px 0 0; color: var(--npr-muted); font-size: 12px; line-height: 1.6; }
+
+.npr-src { display: grid; gap: 28px; }
+
+/* 步骤头：编号徽章是「顺序」唯一的视觉载体。去掉它，三段还是一样重。 */
+.npr-src-step { display: grid; gap: 10px; }
+.npr-src-step-head { display: flex; align-items: center; gap: 9px; }
+.npr-src-step-n { flex: none; display: grid; place-items: center; width: 21px; height: 21px; border-radius: 50%; background: color-mix(in srgb, var(--npr-accent) 15%, transparent); color: var(--npr-accent-strong); font-size: 11px; font-weight: 620; font-variant-numeric: tabular-nums; }
+.npr-src-step-head h4 { margin: 0; font-size: 13px; font-weight: 620; letter-spacing: -.01em; }
+/* 右上角的计数：让「这一步做到哪儿了」不用点进去看。 */
+.npr-src-step-meta { margin-left: auto; color: var(--npr-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.npr-src-card { padding: 16px 18px; border: 1px solid var(--npr-border); border-radius: 11px; background: var(--dsw-alias-bg-base); }
+.npr-src-card > * + * { margin-top: 12px; }
+/* 卡片里的小标题（本地目录 / 百度网盘 / 外部书单）。 */
+.npr-src-sub { margin: 0; font-size: 12px; font-weight: 620; }
+.npr-src-subhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.npr-src-subhead .npr-src-mini { margin-left: auto; }
+/* 状态胶囊。四态而不是「已连接 / 未连接」：每种要用户做的事都不一样。
+   「还没配」是待办、不是故障 —— 两者同色会让用户以为插件坏了，去修一个没坏的东西。 */
+.npr-src-chip { padding: 2px 8px; border-radius: 999px; background: var(--npr-bg-2); color: var(--npr-muted); font-size: 11px; }
+.npr-src-chip.is-ok { background: color-mix(in srgb, var(--npr-accent) 12%, transparent); color: var(--npr-accent-strong); }
+.npr-src-chip.is-bad { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent); color: var(--dsw-alias-state-error-primary); }
+.npr-src-chip.is-todo { color: var(--npr-muted); }
+
+/* 分隔线：卡片内部再分小节用。比另起一张卡轻，又比空行明确。 */
+.npr-src-sep { height: 1px; background: var(--npr-border); }
+
+/* 行：名字在上、路径在下，右侧状态与操作。两行而不是一行 —— 一行时路径会把名字挤掉，
+   而用户扫这几十行时看的是**名字**，路径只在认不出名字时才需要。 */
+.npr-src-rows { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.npr-src-row { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 5px 2px; border-bottom: 1px solid var(--npr-border); }
+.npr-src-rows > li:last-child > .npr-src-row { border-bottom: 0; }
+.npr-src-row.is-pick { cursor: pointer; }
+.npr-src-row.is-pick input { flex: none; }
+.npr-src-row-main { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.npr-src-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--npr-fg); font-size: 13px; }
+/* 可点改名：样式上必须**看不出是按钮**（它读起来是标题），但悬停要给出可点的信号。 */
+button.npr-src-row-name.is-editable { display: block; width: 100%; padding: 0; border: 0; background: none; font: inherit; font-size: 13px; text-align: left; cursor: text; }
+button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
+.npr-src-rename { width: 100%; min-width: 0; height: 26px; padding: 0 7px; border: 1px solid var(--npr-border-strong); border-radius: 6px; background: var(--npr-bg); color: var(--npr-fg); font: inherit; font-size: 13px; }
+/* 路径用等宽 + 可选中：用户经常要把它复制出去（去访达 / 网盘客户端里找那本书）。 */
+.npr-src-row-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--npr-muted); font-size: 11px; font-family: var(--npr-mono, ui-monospace, SFMono-Regular, Menlo, monospace); user-select: text; }
+.npr-src-row-meta { flex: none; color: var(--npr-muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* ★ 待办/警告色不能直接用令牌原色。`--dsw-alias-state-warn-primary` 是 `#f59e0b`，
+   在白底上实测对比度只有 **2.15** —— 11–12px 的小字根本读不清（WCAG AA 要 4.5）。
+   按 `color-mix` 往**正文色**方向压一档：浅色下压深、深色下提亮，
+   一个声明同时管两种主题（实测浅色 4.7 / 深色 11.2）。 */
+.npr-src-row-meta.is-todo { color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 62%, var(--npr-fg)); }
+.npr-src-row .npr-icon { flex: 0 0 auto; }
+/* 行内小按钮（生成 / 重新生成 / 解除授权）：比正文按钮轻一档，否则一行里两个主按钮。 */
+.npr-src-mini { flex: none; height: 27px; padding: 0 10px; border: 1px solid var(--npr-border); border-radius: 7px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 11px; white-space: nowrap; cursor: pointer; }
+.npr-src-mini:hover:not(:disabled) { background: var(--npr-hover); }
+.npr-src-mini:disabled { opacity: .45; cursor: default; }
+
+.npr-src-empty { margin: 0; color: var(--npr-muted); font-size: 12px; }
+.npr-src-add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.npr-src-add input { flex: 1 1 240px; min-width: 0; }
+.npr-src-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* ★ 正文按钮必须显式**画**出来，不能靠浏览器默认。
+   踩过：`is-primary` 这个类在 JSX 里用了 **4 处**、CSS 里**一处都没有**，
+   而 `scripts/check-classes.mjs` 只认 `npr-` 前缀（`CLASS_RE = /\.(npr-…)/`），
+   **结构上看不见 `is-`** ⇒ 门禁全绿。
+   后果是这些按钮落回 UA 的 `2px outset` 按钮灰 —— 实测浅色与深色算出来**一模一样**的
+   `#000000 / #efefef / 13.33px`，也就是「主题根本没生效」。
+   症状是深色主题下卡片中间杵着一块浅灰原生按钮；而它在浅色下看着「还行」，
+   所以**只审浅色截图发现不了**。 */
+.npr-src-add button,
+.npr-src-actions button,
+.npr-src-picker-head button { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 12px; border: 1px solid var(--npr-border-strong); border-radius: 7px; background: var(--npr-bg-2); color: var(--npr-fg); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.npr-src-add button:hover:not(:disabled),
+.npr-src-actions button:hover:not(:disabled),
+.npr-src-picker-head button:hover:not(:disabled) { background: var(--npr-hover); }
+.npr-src-add button:disabled,
+.npr-src-actions button:disabled,
+.npr-src-picker-head button:disabled { opacity: .45; cursor: default; }
+/* 主按钮：**一个动作块里只该有一个**。用它跟 `.npr-src-mini` 拉开一档 ——
+   否则「生成全部」与「重新生成」看起来一样重，用户会去点那个更省事的。
+   取「品牌色作底 + 页面底色作字」，一个声明在明暗两种主题下都自动反相（实测两处都 ≥ 12:1）。 */
+.npr-src-actions button.is-primary { border-color: transparent; background: var(--npr-accent); color: var(--npr-bg); font-weight: 600; }
+.npr-src-actions button.is-primary:hover:not(:disabled) { background: var(--npr-accent-strong); }
+/* 说明文字。三档语气分开：普通（灰）、待办（黄）、错误（红）——
+   合成一句「状态异常」等于什么都没说。 */
+.npr-src-hint { margin: 0; color: var(--npr-muted); font-size: 12px; line-height: 1.7; word-break: break-word; }
+.npr-src-hint code { color: var(--npr-fg); font-family: var(--npr-mono, ui-monospace, SFMono-Regular, Menlo, monospace); user-select: text; }
+/* 同上：警告色要压一档才够对比度（见 `.npr-src-row-meta.is-todo` 上面的说明）。 */
+.npr-src-hint.is-todo { color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 62%, var(--npr-fg)); }
+.npr-src-hint.is-bad { color: var(--dsw-alias-state-error-primary); }
+.npr-src-note { margin: 0; min-height: 17px; color: var(--npr-muted); font-size: 12px; text-align: right; }
+
+/* 网盘应用的准备说明。必须看起来「有几步」——否则用户会以为填完 AppKey 就完事了。
+   ★ `padding-left: 22px` 是给序号留位：默认的 40px 在窄弹窗里换行后会参差。 */
+.npr-src-steps { margin: 0; padding-left: 22px; color: var(--npr-muted); font-size: 12px; line-height: 1.75; }
+.npr-src-steps li + li { margin-top: 3px; }
+.npr-src-steps code { color: var(--npr-fg); }
+.npr-src-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.npr-src-grid label { display: grid; gap: 4px; color: var(--npr-muted); font-size: 11px; }
+/* 网盘目录选择器。列表限高滚动：网盘根目录下可能有几十个文件夹。 */
+.npr-src-picker { padding: 12px; border: 1px solid var(--npr-border); border-radius: 9px; background: var(--npr-bg-2); }
+.npr-src-picker-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.npr-src-picker-head code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--npr-fg); font-size: 12px; user-select: text; }
+.npr-src-picker-list { display: grid; gap: 1px; max-height: 220px; overflow: auto; margin: 0 0 8px; padding: 0; list-style: none; }
+.npr-src-picker-list li button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.npr-src-picker-list li button:hover { background: var(--npr-hover); }
+/* 「进入下一层」的箭头推到最右，与「上一层」区分开。 */
+.npr-src-picker-list li button svg:last-child { margin-left: auto; color: var(--npr-muted); }
+.npr-src-picker-none { padding: 8px; color: var(--npr-muted); font-size: 12px; }
+/* 扫描里失败的源：逐条说「哪个源、为什么」。只说「部分失败」等于没说，用户不知道修哪个。 */
+.npr-src-errors { margin: 0; padding-left: 18px; color: var(--dsw-alias-state-error-primary); font-size: 12px; line-height: 1.7; }
+.npr-src-errors code { user-select: text; }
+
+
+@container (max-width: 700px) {
+  /* 欢迎页那条空的拖动行照旧换行（它没有内容，换行只是让高度撑开）。 */
+  .npr-book-toolbar { flex-wrap: wrap; height: auto; gap: 6px; }
+  /**
+   * 窄面板下阅读器做三件事（0.22.0 起）：
+   *   ① **胶囊里的按钮只留图标** —— 六项带文字的胶囊实测要 ~640px，420px 的面板里
+   *      必然把右边裁掉，而溢出部分不接收点击（用户 2026-10-23 报的正是这个）。
+   *      图标版约 220px，六项都在视野内，`title` 里仍有全名。
+   *   ② 胶囊里的书名让位：文字版被挤成省略号时只剩两三个字，不如把位置给按钮；
+   *      书名在下面那行元信息里还有一份。
+   *   ③ 扇出的贴边收到 10px、色块缩一档 —— 420px 的面板里，右下角这块要留出书页。
+   * ★ 这里**不再**有 `.npr-book > .npr-book-toolbar` 的两行圆角板规则：那一整条在
+   *   0.22.0 已经不存在了（只剩一条 10px 的拖动条），留着它等于给一个不存在的
+   *   元素写样式。
+   */
+  .npr-book-pill-title { display: none; }
+  .npr-book-pill-item { padding: 0 7px; }
+  .npr-book-pill-item > span { display: none; }
+  .npr-book > .npr-book-meta { gap: 8px; }
+  /* 窄面板只留第一项（格式 · 体积）。0.23.0 起元信息行里**没有书名**了，
+     原来那条 `:not(书名那个类)` 的反向选择器会把整行都藏掉，剩一条空白条。 */
+  .npr-book > .npr-book-meta > span { display: none; }
+  .npr-book > .npr-book-meta > span:first-of-type { display: inline; }
+  .npr-book-keys { display: none; }
+  .npr-book-fab { right: 10px; bottom: 10px; }
+  .npr-book-palette { width: 186px; }
+  .npr-book-swatch { width: 27px; height: 27px; }
+  /* 窄面板：两条行各自堆成一列（顺序与 DOM 一致：搜索框 → 分类 → 结果 → 排序，
+     所以堆出来的读序与视觉仍然同向）。★ 下拉也要放开成满宽 —— 它们平时是
+     `flex: 0 0 auto`（按内容定宽），堆起来时若还按内容宽，右半边会空着。 */
+  .npr-lib-row { flex-direction: column; align-items: stretch; }
+  .npr-lib-row > .npr-lib-dir select, .npr-lib-row > .npr-lib-sort select { width: 100%; }
+  /* ★ 这里**刻意没有**书源面板（`npr-src-*`）的规则。它挂在固定 820px 的设置弹窗里，
+     而 `@container` 量的是外层**面板**的宽度 —— 面板宽、弹窗窄时规则不触发，
+     表现是「大窗口里排版正常、弹窗里挤成一坨」，还随窗口大小变。
+     窄了要堆叠就靠 `flex-wrap` + `flex-basis`（见上面那一行输入框），
+     那套不依赖任何外部宽度。这条在 `book-sources-ui.test.mjs` 里有断言守着。 */
+}
+
+/* ---- 导出成技能包（0.20.0；0.20.1 重做视觉）-------------------------------
+   放在目录列表**之后**，所以它自带一条上边线，把自己和「章节列表」分开 ——
+   列表是 `flex: 1`，滚动到最底时若没有这条线，最后一行章节会贴着按钮。
+   ★ **默认折叠**是量出来的结论：展开时这一块在 306px 的栏里实测高 210px，
+     而小窗口的目录面板只有 401px 高 —— 展开着放会把章节列表压到 12px、
+     自己还溢出面板 57px。折叠后只占一行，列表还剩 3 行多。
+     这条由 `scripts/check-book-panel-layout.mjs` 的判据 ⑫⑬ 守着。
+
+   ★★ 0.20.1：用户截图反馈「这个设计得太不明显了」。当时的问题不是配色，
+     是**层级反了**，三条一起改：
+     ① 整块与页面同色、只有一条 1px 上边线 ⇒ 读成「列表末尾的一段说明」。
+        底色改成**品牌色调和**（`color-mix` 到 `--npr-bg` 上），不压字、明暗两套都成立。
+        ★ 不能用 `--npr-bg-2`：浅色主题下 bg-base / layer-1 / layer-2 / layer-3
+          是**同一个白**（本项目 §8 记过），用它当卡片底色等于没改。
+     ② 最显眼的控件是**下拉框**（它占满剩余宽度），而真正要点的「导出」只是一圈
+        1px 描边 —— 视线落在错的地方。改成**实心主按钮**（`--npr-accent-strong` +
+        白字，与设置页页脚那颗主按钮同一套取值），下拉退回 30px 高度、不再抢戏。
+     ③ 标题只说「导出成技能包」这个**术语**，不说点了会得到什么。折叠态补一行
+        副标题（索引 + 每章一份 + 术语表）—— 它必须在**折叠时**就可见，因为那才是
+        默认状态；展开体里一行都不加（展开态本来就已经把列表压到 21.6px）。
+
+   ★ 颜色全部走既有变量：`--npr-accent-strong` 是**深底文字 / 承载白字**那一档
+     （品牌色本身在浅色主题下当文字不够深，本项目为此专门分了两档）。 */
+.npr-skill { flex: 0 0 auto; border-top: 1px solid color-mix(in srgb, var(--npr-accent) 22%, var(--npr-border)); background: color-mix(in srgb, var(--npr-accent) 7%, var(--npr-bg)); }
+/* summary 默认带 `display: list-item` + 一个三角。去掉三角、自己给一个图标 ——
+   两套指示器叠在一起看着像没对齐。`list-style:none` 对 Safari 还要 `::-webkit-`。 */
+.npr-skill > summary { display: flex; align-items: center; gap: 8px; padding: 9px 12px; color: var(--npr-fg); cursor: pointer; list-style: none; }
+.npr-skill > summary::-webkit-details-marker { display: none; }
+.npr-skill > summary:hover { background: var(--npr-hover); }
+.npr-skill > summary:focus-visible { outline: 1px solid var(--npr-border-strong); outline-offset: -2px; }
+/* 图标用 `-strong` 那一档：它比标题重一点，是「这一块是动作」的第一眼信号。 */
+.npr-skill-icon { display: inline-flex; flex: 0 0 auto; color: var(--npr-accent-strong); }
+.npr-skill-text { display: grid; gap: 1px; flex: 1; min-width: 0; }
+.npr-skill-title { color: var(--npr-fg); font-size: 12px; font-weight: 650; letter-spacing: .01em; }
+.npr-skill-sub { color: var(--npr-muted); font-size: 10.5px; line-height: 1.35; }
+/* ★★ 展开后**收起副标题** —— 不是为了省地方，是量出来的：
+   小窗口的目录面板只有 401px 高，展开态整块实测 **177.6px**，底边 1057.2 **超出面板底
+   1032.0 约 25px**（「已导出 …/skills/…」那一行被裁在外面，而它正是用户要拷的路径）。
+   副标题在 306px 栏里折成两行，正好占 28px ⇒ 收起它就够。
+   ★ 而且这在层级上也说得通：副标题是「**还没点开的人**需要知道会得到什么」，
+   点开之后那一块讲的是「怎么导出」，同一句话说两遍只会挤掉控件。
+   折叠态（默认状态）照样看得见 —— 那才是用户截图抱怨的那一屏。 */
+.npr-skill[open] .npr-skill-sub { display: none; }
+/* 展开指示器。★ 它必须存在：`<details>` 去掉三角之后，折叠态里**没有任何**视觉线索
+   说明「这块可以点开」，用户只会看到两行字。 */
+.npr-skill-chev { flex: 0 0 auto; color: var(--npr-faint); transition: transform .15s ease; }
+.npr-skill[open] .npr-skill-chev { transform: rotate(180deg); }
+/* 「已导出」小徽章：折叠时也要能看出这个功能用过了。 */
+.npr-skill-badge { flex: 0 0 auto; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--npr-accent) 14%, var(--npr-bg)); color: var(--npr-fg); font-size: 10px; line-height: 1.5; }
+/* gap 7 → 6：展开态在 401px 面板里余量只有 2.8px，留不住人；三条间隙省 3px。 */
+.npr-skill-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 2px 12px 12px; }
+/* 说明文字从 `--npr-faint` 提到 `--npr-muted`：这一行现在是**动作的注解**
+   （「默认不花钱」），不是可有可无的脚注，用最低对比度那一档读不清。 */
+.npr-skill-hint { margin: 0; color: var(--npr-muted); font-size: 10.5px; line-height: 1.5; }
+.npr-skill-hint code { color: var(--npr-fg); font-size: 10px; }
+.npr-skill-row { display: flex; align-items: center; gap: 7px; }
+/* 下拉放开成「占满剩余宽度」而不是固定值：306px 的栏在窄容器下会变成整行宽，
+   写死宽度的话右侧会空出一大块（本项目「壳不能自造固定宽」那条）。
+   ★ 高度 30px 与按钮对齐；底色回到 `--npr-bg`（比所在色带更亮），
+     读成「一个可改的输入」，而不是与按钮并列的第二颗按钮。 */
+.npr-skill-profile { flex: 1; min-width: 0; height: 30px; padding: 0 7px; border: 1px solid var(--npr-border-strong); border-radius: 8px; background: var(--npr-bg); color: var(--npr-fg); font: inherit; font-size: 11px; }
+.npr-skill-profile:disabled { opacity: .55; cursor: not-allowed; }
+/* ★ 主按钮：实心 + 白字。取值照抄设置页页脚那颗（`--npr-accent-strong` + `#fff`），
+   所以「主按钮长什么样」在这个插件里只有一种答案。 */
+.npr-skill-go { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; height: 30px; padding: 0 14px; border: 1px solid transparent; border-radius: 999px; background: var(--npr-accent-strong); color: #fff; font: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer; }
+/* hover / active 同特异度 ⇒ 按本项目惯例 hover 写在 active **之后**（两者同时命中时 hover 胜出）。 */
+.npr-skill-go:active:not(:disabled) { filter: brightness(.94); }
+.npr-skill-go:hover:not(:disabled) { filter: brightness(1.1); }
+/* ★ 置灰必须**看得出**：只有 `disabled` 属性而没有样式，按钮看着能点、点了没反应
+   （本项目记过这条）。`.npr-skill-go:disabled` 同时负责「正在导出…」那个状态。 */
+.npr-skill-go:disabled { opacity: .55; cursor: not-allowed; filter: none; }
+.npr-skill-synth { display: flex; align-items: center; gap: 5px; color: var(--npr-muted); font-size: 10.5px; line-height: 1.5; cursor: pointer; }
+.npr-skill-synth input { margin: 0; flex: 0 0 auto; accent-color: var(--npr-accent-strong); }
+.npr-skill-error { display: grid; gap: 3px; padding: 8px 9px; border: 1px solid var(--npr-border); border-radius: 8px; background: var(--npr-bg); }
+.npr-skill-error strong { color: var(--dsw-alias-state-error-primary); font-size: 11px; }
+.npr-skill-error p { margin: 0; color: var(--npr-muted); font-size: 10.5px; line-height: 1.55; }
+/* 上一次导出的结果。图标与多行文字要对齐到**第一行**（baseline 会让图标浮在
+   最后一行旁边），所以用 flex-start + 一点点上边距。 */
+.npr-skill-last { display: flex; align-items: flex-start; gap: 5px; min-width: 0; color: var(--npr-muted); font-size: 10.5px; line-height: 1.5; }
+.npr-skill-last > svg { flex: 0 0 auto; margin-top: 2px; color: var(--npr-accent-strong); }
+.npr-skill-last code { color: var(--npr-fg); font-size: 10px; user-select: text; word-break: break-all; }
+/* ★ 文字那一格必须 `flex: 1; min-width: 0`：不加的话长路径会把复制按钮挤出
+   容器（flex 子项的默认 `min-width: auto` 不肯缩），而挤出之后它既看不见
+   也点不到 —— 判据里量的是「复制按钮右缘 ≤ 面板右缘」。
+   ★ 再加单行截断：`slug` 最长 48 字符，让它折成两行会让整块高 15.7px，
+   而展开态在 470px 的极端夹具里只剩几像素余量（实测折行时底边正好贴面板底，
+   零余量）。单行截断之后高度与书名长度无关；完整路径在 `title` 里，
+   而且复制按钮给的就是完整路径 —— 这一行本来就不需要「读全」。 */
+.npr-skill-last-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 复制按钮：20×20 的幽灵方钮，靠负的 margin-top 把视觉重心对到文字第一行。
+   ★ 它和「已导出」那行文字是**平级热区**，不是把整行做成按钮：整行可点会把
+     「读路径」和「复制」绑在一起，想选中间一段路径时一按就复制了整串。 */
+.npr-skill-copy { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-top: -3px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--npr-muted); cursor: pointer; }
+.npr-skill-copy:hover { background: var(--npr-hover); color: var(--npr-fg); }
+.npr-skill-copy.is-ok { color: var(--npr-accent-strong); }
+.npr-skill-copy:disabled { opacity: .55; cursor: not-allowed; }
+
+/* ---- 划线 / 笔记（0.21.0）------------------------------------------------
+   三块：书页上的高亮层、划词气泡的主按钮、左边的划线面板。
+
+   ★ 高亮层必须 `pointer-events: none`：它一旦能接点击，划过线的文字就再也
+     拖选不了 —— 而「拖选下一句」正是划线这个功能的入口。编辑全在面板里做。
+   ★ 高亮用 `mix-blend-mode: multiply` 才像荧光笔（纸色透出来、字仍然清楚）；
+     夜间配色下必须换成 `screen`，否则「纸变黑 + 乘一个半透明色」＝ 什么都看不见。
+*/
+.npr-book-marks { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.npr-book-mark {
+  position: absolute;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--npr-mark-color, #f2c200) 38%, transparent);
+  mix-blend-mode: multiply;
+}
+.npr-book[data-tint="night"] .npr-book-mark { mix-blend-mode: screen; opacity: .5; }
+
+/* 色值只在这一处定义：卡片左边框、面板里的色点、书页上的高亮共用它。 */
+.npr-book-mark[data-tone="yellow"], .npr-mark-card[data-tone="yellow"], .npr-mark-tone[data-tone="yellow"] { --npr-mark-color: #f2c200; }
+.npr-book-mark[data-tone="green"], .npr-mark-card[data-tone="green"], .npr-mark-tone[data-tone="green"] { --npr-mark-color: #34c759; }
+.npr-book-mark[data-tone="blue"], .npr-mark-card[data-tone="blue"], .npr-mark-tone[data-tone="blue"] { --npr-mark-color: #3a96ff; }
+.npr-book-mark[data-tone="pink"], .npr-mark-card[data-tone="pink"], .npr-mark-tone[data-tone="pink"] { --npr-mark-color: #ff2d78; }
+
+/* 气泡里的「划线」是主操作：实心强调色，一眼能和旁边三颗区分开。 */
+.npr-book-quotebar button.is-primary { background: var(--npr-accent-strong); border-color: transparent; color: #fff; font-weight: 600; }
+.npr-book-quotebar button.is-primary:hover:not(:disabled) { filter: brightness(1.1); }
+
+.npr-marks { flex: 0 0 306px; width: 306px; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--npr-border); }
+.npr-marks-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 12px 12px 6px; }
+.npr-marks-head h2 { margin: 0; font-size: 13px; font-weight: 600; color: var(--npr-fg); }
+.npr-marks-head p { margin: 2px 0 0; font-size: 10.5px; line-height: 1.5; color: var(--npr-muted); }
+.npr-marks-tabs { display: flex; gap: 4px; padding: 0 12px 8px; }
+.npr-marks-tab {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  height: 26px; border: 1px solid transparent; border-radius: 8px;
+  background: color-mix(in srgb, var(--npr-fg) 5%, transparent);
+  color: var(--npr-muted); font: inherit; font-size: 11px; cursor: pointer;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+.npr-marks-tab:hover { color: var(--npr-fg); background: color-mix(in srgb, var(--npr-fg) 9%, transparent); }
+.npr-marks-tab.is-on {
+  background: color-mix(in srgb, var(--npr-accent-strong) 16%, transparent);
+  border-color: color-mix(in srgb, var(--npr-accent-strong) 42%, transparent);
+  color: var(--npr-fg);
+}
+.npr-marks-tab-count { font-size: 10px; font-variant-numeric: tabular-nums; opacity: .75; }
+.npr-marks-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 0 12px 14px; }
+.npr-marks-empty { margin: 6px 0; font-size: 11px; line-height: 1.65; color: var(--npr-muted); }
+
+.npr-mark-card {
+  display: grid; gap: 5px; padding: 8px 10px;
+  border: 1px solid var(--npr-border); border-left: 3px solid var(--npr-mark-color, #f2c200);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--npr-fg) 3%, transparent);
+}
+.npr-mark-card.is-editing { background: color-mix(in srgb, var(--npr-accent-strong) 7%, transparent); }
+/* 摘录本身是「跳到那一页」的按钮：用按钮承载是为了键盘可达（读屏会念出页码）。 */
+.npr-mark-quote {
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+  padding: 0; border: 0; background: none; text-align: left; cursor: pointer;
+  color: var(--npr-fg); font: inherit; font-size: 11.5px; line-height: 1.65;
+}
+.npr-mark-quote:hover { color: var(--npr-accent-strong); }
+.npr-mark-foot { display: flex; align-items: center; gap: 4px; }
+.npr-mark-page { flex: 0 0 auto; color: var(--npr-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.npr-mark-tones { display: flex; align-items: center; gap: 3px; margin-left: 2px; }
+.npr-mark-tone {
+  width: 11px; height: 11px; padding: 0; border-radius: 50%; cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--npr-fg) 18%, transparent);
+  background: var(--npr-mark-color, #f2c200);
+  opacity: .45; transition: opacity .15s ease, transform .15s ease;
+}
+.npr-mark-tone:hover { opacity: .8; }
+/* 当前颜色：实心 + 外圈。只靠透明度区分不够 —— 小圆点在半透明状态下几乎一样。 */
+.npr-mark-tone[aria-pressed="true"] { opacity: 1; box-shadow: 0 0 0 2px color-mix(in srgb, var(--npr-bg) 90%, transparent), 0 0 0 3px color-mix(in srgb, var(--npr-mark-color) 70%, transparent); }
+.npr-mark-action {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; margin-left: auto; padding: 0;
+  border: 0; border-radius: 6px; background: none; color: var(--npr-muted); cursor: pointer;
+}
+.npr-mark-action + .npr-mark-action { margin-left: 0; }
+.npr-mark-action:hover { background: color-mix(in srgb, var(--npr-fg) 8%, transparent); color: var(--npr-fg); }
+.npr-mark-note { margin: 0; padding: 5px 7px; border-radius: 6px; background: color-mix(in srgb, var(--npr-fg) 4%, transparent); color: var(--npr-muted); font-size: 10.5px; line-height: 1.6; white-space: pre-wrap; }
+.npr-mark-editor { display: grid; gap: 5px; }
+.npr-mark-editor textarea {
+  width: 100%; box-sizing: border-box; resize: vertical; min-height: 54px;
+  padding: 6px 7px; border: 1px solid var(--npr-border-strong); border-radius: 8px;
+  background: var(--npr-bg); color: var(--npr-fg); font: inherit; font-size: 11px; line-height: 1.6;
+}
+.npr-mark-editor textarea:focus-visible { outline: 2px solid color-mix(in srgb, var(--npr-accent-strong) 45%, transparent); outline-offset: 1px; }
+.npr-mark-editor-foot { display: flex; align-items: center; gap: 8px; }
+.npr-mark-editor-foot span { color: var(--npr-muted); font-size: 10px; }
+.npr-marks-primary {
+  height: 24px; padding: 0 10px; border: 1px solid transparent; border-radius: 999px;
+  background: var(--npr-accent-strong); color: #fff; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
+}
+.npr-marks-primary:hover { filter: brightness(1.1); }

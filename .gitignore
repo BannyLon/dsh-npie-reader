@@ -1,0 +1,15 @@
+node_modules/
+.DS_Store
+*.log
+coverage/
+.cache/
+# 构建产物（`npm run build` 生成；`prepack` 会重建，不进版本库）
+lib/
+# 测试用的构建产物（`test/helpers/host-bundle.mjs` 每次重新生成，不该进版本库）
+test/.build/
+# 测试临时目录（`mkdtemp` 落在 test/.tmp 下，跑完不保证清干净）
+test/.tmp/
+# 截图 / 出图草稿（crop.py、compose.py、p1a.png 这类临时工作区）
+.build/
+# 探测会话残留（`probe-<随机>/a.txt`）—— 不是本项目的文件，不该进版本库
+probe-*/

@@ -1,0 +1,117 @@
+{
+ "verifiedAt": "2026-10-09",
+ "verifiedBy": "逐条真实请求（HTTP 200 + XML 根元素 + 至少 1 个 item/entry）；探不通的另查 DNS 解析与 TCP 连通性。★ 必须用**直连**测（插件抓取不经过任何代理），借道能出去的通道测出的 200 不代表插件取得到 —— 「库里有、插件里没有」多半就差在这一步。",
+ "source": "https://mp.weixin.qq.com/s/pssEPL5LEfmi0V0wKEoa9A",
+ "note": "items 里是实测能直接抓到的；unavailable 里是没收录的，原因见 reason 字段。reason 取值互不重叠：network = 本机网络到不了（DNS 污染 / TCP 阻断）；partial = feed 抓得到但正文永远抓不到；blocked = 反爬拦截（应用层）；no-feed = 平台压根没开 feed。TLDR AI 与 Daily Dose of DS 由用户另行提供（不在上面那篇公众号清单里），2026-10-09 实测通过后补入。★ 这一目录 2026-10-09 起**也进体检**（快照是同目录的 catalog-health.json，category 为 Newsletter），删除线 365 天：停更超过一年直接裁掉，剪掉的条目先归档到 retired/newsletter-feeds-retired.json（AI Valley 停更 670 天、Grace Leung 727 天，已按此裁掉）。",
+ "items": [
+  {
+   "name": "The Rundown AI",
+   "url": "https://www.therundown.ai/feed",
+   "description": "每日 AI 行业速报：新模型、工具、应用案例",
+   "frequency": "每日"
+  },
+  {
+   "name": "The Keyword（News from Google）",
+   "url": "https://blog.google/rss",
+   "description": "Google 官方周报：Gemini、产品更新、技术故事",
+   "frequency": "每周"
+  },
+  {
+   "name": "The Batch @ DeepLearning.AI",
+   "url": "https://charonhub.deeplearning.ai/feed",
+   "description": "吴恩达主编的 AI 研究周报，权威综述",
+   "frequency": "每周",
+   "note": "官网 the-batch 路径下没有 feed，这是它真正的内容源地址"
+  },
+  {
+   "name": "MIT Technology Review（AI 主题）",
+   "url": "https://www.technologyreview.com/topic/artificial-intelligence/feed",
+   "description": "MIT 科技评论 AI 专栏，深度分析趋势与影响",
+   "frequency": "每周",
+   "note": "The Algorithm 专栏没有独立 feed，这条是它的 AI 主题源"
+  },
+  {
+   "name": "Towards AI（TAI）",
+   "url": "https://newsletter.towardsai.net/feed",
+   "description": "AI 研究与行业综合周报，覆盖模型发布和工程实践",
+   "frequency": "每周",
+   "note": "Substack 自定义域"
+  },
+  {
+   "name": "Latent Space",
+   "url": "https://www.latent.space/feed",
+   "description": "AI 工程师社区：深度采访 + 技术分析",
+   "frequency": "不定期"
+  },
+  {
+   "name": "Millie Adrian（It's Modern Millie）",
+   "url": "https://www.itsmodernmillie.com/feed",
+   "description": "内容创作者商业化 + 个人品牌",
+   "frequency": "不定期"
+  },
+  {
+   "name": "TLDR AI",
+   "url": "https://tldr.tech/api/rss/ai",
+   "description": "工程师向 AI 日报：论文、开源仓库与大厂头条并列，只有标题 + 两句摘要 + 直链",
+   "frequency": "工作日每日",
+   "note": "地址是 API 路径（/api/rss/ai）；官网常被猜的 tldr.tech/ai/rss 是 404。★ feed 只给标题 + 链接（20 条全无摘要），正文要靠「抓取原文全文」从 tldr.tech/ai/<日期> 现取（实测 HTTP 200、约 7300 字），所以列表里没有摘要预览是正常的"
+  },
+  {
+   "name": "Daily Dose of DS",
+   "url": "https://blog.dailydoseofds.com/feed",
+   "description": "数据科学与 ML 日报：两分钟讲清一个不太常见的技术点",
+   "frequency": "每日",
+   "note": "Avi Chawla 主笔的 Daily Dose of Data Science（订阅页在 avichawla.substack.com）。★ 地址故意不写订阅页所在的那个子域 —— `*.substack.com` 在本机被 DNS 污染 + TCP 阻断，而这条自定义域（Cloudflare 托管）是**直连 200**。经插件自己的解析器（parseFeed）实测：RSS 2.0、**20 条全部带正文**（`content:encoded`，最长一条正文 5.08 万字符）⇒ 列表里就能读全文，不依赖再抓原文页。"
+  }
+ ],
+ "unavailable": [
+  {
+   "name": "High Learning Rate",
+   "url": "https://highlearningrate.substack.com/feed",
+   "reason": "network",
+   "detail": "只有 `*.substack.com` 这一个入口，本机取不到：同一域名两次解析出的 IP 互相矛盾（31.13.82.33 / 96.44.137.28，都是污染结果），直连 000；另试的自定义域 `highlearningrate.com` 无 DNS 解析（域名根本不存在）、主笔的 `louisbouchard.ai/feed` 是 404。feed 本身是好的（换一条能出去的通道实测返回合法 RSS 2.0、约 187KB）⇒ 纯网络问题，不是这家不出 feed"
+  },
+  {
+   "name": "Deep Learning Weekly",
+   "url": "https://deeplearningweekly.substack.com/feed",
+   "reason": "network",
+   "detail": "同上"
+  },
+  {
+   "name": "Learn AI Together",
+   "url": "https://learnaitogethernewsletter.substack.com/feed",
+   "reason": "network",
+   "detail": "同上"
+  },
+  {
+   "name": "The Neuron",
+   "url": "https://www.theneuron.ai/feed",
+   "reason": "partial",
+   "detail": "feed 本身是好的（HTTP 200、Atom、10 条、8/10 条带 <summary>），但文章页与站点首页都是 Cloudflare 托管挑战（403、响应头 cf-mitigated: challenge）⇒「抓取原文全文」必然失败，点开只能退化成「仅摘要」，而最新那条连 summary 都没有、会是空正文。2026-10-09 用户看过这份实测结论后决定摘除；想恢复就把它整条挪回 items"
+  },
+  {
+   "name": "Superhuman AI",
+   "url": "https://www.superhuman.ai/feed",
+   "reason": "blocked",
+   "detail": "Cloudflare 托管挑战（响应头 cf-mitigated: challenge，正文是「Just a moment...」）。2026-10-09 复测：/feed、/rss、/feed.xml、superhuman.ai/feed 四条路径 + 浏览器 UA 全是 403；同域 DNS 可解析、443 可连，所以是应用层反爬而非被墙"
+  },
+  {
+   "name": "Futurepedia",
+   "url": "https://newsletter.futurepedia.io/",
+   "reason": "no-feed",
+   "detail": "平台是 beehiiv，但 feed 未开启（/feed、/rss 全 404）"
+  },
+  {
+   "name": "Every",
+   "url": "https://every.to/",
+   "reason": "no-feed",
+   "detail": "站点是 SPA，任何路径都返回网页，没有 RSS"
+  }
+ ],
+ "pruned": {
+  "at": "2026-10-09T03:29:27.775Z",
+  "from": 11,
+  "to": 9,
+  "rule": "≥ 365 天未更新"
+ }
+}

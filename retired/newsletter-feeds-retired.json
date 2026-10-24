@@ -1,0 +1,21 @@
+{
+ "note": "Newsletter 内置目录里被**裁剪**掉的条目归档在这里（`scripts/prune-catalog.mjs` 自动追加）。与 podcast-feeds.json 那种「整类撤掉」不同：这些是个别源停更太久被踢出目录。★ 它们和独立博客不一样 —— 独立博客有 upstream revision 可以重新同步，Newsletter 这十来条是逐条实测手写出来的，没有上游 ⇒ 删掉就是永久丢失，所以删之前必须落到这里。想恢复：把下面 items 里的条目抄回 src/data/newsletter-feeds.json 的 items 数组（顺手把 verifiedAt 改成当天）。",
+ "removed": [
+  {
+   "name": "AI Valley",
+   "url": "https://aivalley.ai/feed/",
+   "description": "AI 新闻摘要，关注前沿产品发布",
+   "frequency": "每日",
+   "removedAt": "2026-10-09T03:29:27.775Z",
+   "reason": "最新一篇在 670 天前，超过删除线 365 天"
+  },
+  {
+   "name": "Grace Leung",
+   "url": "https://www.graceleung.com/feed",
+   "description": "Claude 实用技巧 + 数字增长",
+   "frequency": "每周",
+   "removedAt": "2026-10-09T03:29:27.775Z",
+   "reason": "最新一篇在 727 天前，超过删除线 365 天"
+  }
+ ]
+}

@@ -1,0 +1,90 @@
+import { useMemo, useState } from 'react';
+import { Icon } from './icons.jsx';
+import { freshness } from './source-health.js';
+
+const SECTION_ORDER = ['聚合', '订阅分组', '我的订阅源'];
+
+/** Split host channels into the sections the picker shows. */
+export function groupChannels(channels) {
+  const sections = { 聚合: [], 订阅分组: [], 我的订阅源: [] };
+  const feedCount = channels.filter((item) => item.kind === 'feed').length;
+  for (const channel of channels) {
+    if (channel.key === 'all' || channel.key === 'feeds:all') {
+      const subtitle = channel.key === 'feeds:all'
+        ? `${feedCount} 个个人订阅源`
+        : `${channel.unread} 篇未读`;
+      sections.聚合.push({ ...channel, subtitle });
+    } else if (channel.key.startsWith('group:')) {
+      sections.订阅分组.push({ ...channel, subtitle: `${channels.filter((item) => item.group === channel.name).length} 个订阅源` });
+    } else {
+      // 每个源直接说「最新一篇多久以前 / 已 N 天未更新」。第三方代理会悄悄停更，
+      // 只列名字的话用户无法区分「源死了」和「插件没去抓」。
+      const state = freshness(channel);
+      sections.我的订阅源.push({
+        ...channel,
+        subtitle: state.label,
+        level: state.level,
+        stale: state.level === 'stale',
+        error: Boolean(channel.lastError),
+      });
+    }
+  }
+  return sections;
+}
+
+export function ChannelMark({ channel, size = 22 }) {
+  const key = channel.key ?? '';
+  const name = channel.kind === 'feed' ? 'rss'
+    : key === 'all' ? 'layers-3'
+      : key.startsWith('group:') ? 'folder'
+        : 'book-open';
+  const variant = key === 'all' ? ' all' : '';
+  return <span className={`npr-channel-mark${variant}`} style={{ width: size, height: size, flex: `0 0 ${size}px` }} aria-hidden="true">
+    <Icon name={name} size={Math.max(16, Math.round(size * 0.72))} strokeWidth={1.8} />
+  </span>;
+}
+
+export function ChannelPicker({ channels, current, anchor, onSelect, onManage, onClose }) {
+  const [query, setQuery] = useState('');
+  const sections = useMemo(() => groupChannels(channels), [channels]);
+  const searching = query.trim() !== '';
+  const flat = useMemo(() => SECTION_ORDER.flatMap((title) => sections[title]), [sections]);
+  const visible = searching
+    ? flat.filter((channel) => `${channel.name} ${channel.subtitle ?? ''}`.toLowerCase().includes(query.trim().toLowerCase()))
+    : [];
+  const row = (channel) => (
+    <div className={`npr-channel-option-wrap${channel.stale ? ' is-stale' : ''}`} key={channel.key}>
+      <button type="button" className="npr-channel-option" aria-current={channel.key === current} title={channel.url}
+        onClick={() => { onSelect(channel.key); onClose(); }}>
+        <ChannelMark channel={channel} size={26} />
+        <span className="npr-channel-copy">
+          <span className="npr-channel-name">{channel.name}</span>
+          {channel.subtitle && <span className="npr-channel-subtitle">{channel.subtitle}</span>}
+        </span>
+        {channel.key === current && <span className="npr-channel-check"><Icon name="circle-check" size={16} /></span>}
+      </button>
+    </div>
+  );
+  return (
+    <div className="npr-channel-backdrop" onClick={onClose}>
+      <div className="npr-channel-picker" style={anchor ? { left: anchor.left, top: anchor.top } : undefined} role="dialog" aria-label="选择频道" onClick={(event) => event.stopPropagation()}>
+        <div className="npr-channel-heading"><div><strong>切换频道</strong><small>选择想读的内容</small></div><button type="button" className="npr-icon" aria-label="关闭频道列表" onClick={onClose}><Icon name="x" /></button></div>
+        <div className="npr-channel-top"><Icon name="search" size={16} /><input type="search" aria-label="搜索频道" placeholder="搜索频道、分组或订阅源…" value={query}
+          onChange={(event) => setQuery(event.target.value)} autoFocus /></div>
+        <div className="npr-channel-options">
+          {searching
+            ? (visible.length ? visible.map(row) : <div className="npr-channel-empty">没有匹配的频道</div>)
+            : SECTION_ORDER.map((title) => sections[title].length === 0 ? null : (
+              <div key={title}>
+                <div className="npr-channel-section">{title}</div>
+                {sections[title].map((channel) => row(channel))}
+              </div>
+            ))}
+        </div>
+        <div className="npr-channel-footer"><button type="button" className="npr-channel-manage" onClick={onManage}>
+          <Icon name="settings" size={16} />管理订阅<Icon name="chevron-right" size={13} />
+        </button><button type="button" className="npr-channel-close" onClick={onClose}>完成</button></div>
+      </div>
+    </div>
+  );
+}

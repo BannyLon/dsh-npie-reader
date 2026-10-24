@@ -1,0 +1,70 @@
+{
+ "items": [
+  {
+   "name": "30 for 30 Podcasts",
+   "url": "https://feeds.megaphone.fm/ESP5765452710",
+   "description": "播客节目",
+   "language": "en"
+  },
+  {
+   "name": "Darknet Diaries",
+   "url": "https://feeds.megaphone.fm/darknetdiaries",
+   "description": "播客节目",
+   "language": "en"
+  },
+  {
+   "name": "Fragmented - AI Developer Podcast",
+   "url": "https://feeds.simplecast.com/LpAGSLnY",
+   "description": "播客节目",
+   "language": "en"
+  },
+  {
+   "name": "Gastropod",
+   "url": "https://www.omnycontent.com/d/playlist/aaea4e69-af51-495e-afc9-a9760146922b/2a195077-f014-41d2-8313-ab190186b4c2/277bcd5c-0a05-4c14-8ba6-ab190186b4d5/podcast.rss",
+   "description": "播客节目",
+   "language": "en"
+  },
+  {
+   "name": "Hacking Humans",
+   "url": "https://feeds.megaphone.fm/hacking-humans",
+   "description": "播客节目",
+   "language": "en"
+  },
+  {
+   "name": "Hanselminutes with Scott Hanselman",
+   "url": "https://feeds.simplecast.com/gvtxUiIf",
+   "description": "播客节目",
+   "language": "en"
+  },
+  {
+   "name": "Invisibilia",
+   "url": "https://feeds.npr.org/510307/podcast.xml",
+   "description": "播客节目",
+   "language": "en"
+  },
+  {
+   "name": "Planet Money",
+   "url": "https://feeds.npr.org/510289/podcast.xml",
+   "description": "播客节目",
+   "language": "en"
+  },
+  {
+   "name": "The Cynical Developer",
+   "url": "https://cynicaldeveloper.com/feed/podcast",
+   "description": "播客节目",
+   "language": "en"
+  },
+  {
+   "name": "The Startup Junkies Podcast",
+   "url": "https://startupjunkie.libsyn.com/rss",
+   "description": "播客节目",
+   "language": "en"
+  },
+  {
+   "name": "Throughline",
+   "url": "https://feeds.npr.org/510333/podcast.xml",
+   "description": "播客节目",
+   "language": "en"
+  }
+ ]
+}

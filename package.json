@@ -1,0 +1,87 @@
+{
+  "name": "dsh-npie-reader",
+  "version": "0.24.3",
+  "description": "DSH 桌面端阅读器：订阅 RSS/Atom 作者，读原文或中文版本，带着当前文章在 Harness 原生对话里追问；也能打开本地 / 网盘电子书（PDF / EPUB / DOCX），自动抽出整本正文并切成章节目录、逐章生成中文解读，再把整本书导出成可被 agent 按需加载的 skill 包。自带探索订阅目录（Newsletter / 独立博客）、OPML 导入导出、阅读外观设置，以及 14 个 agent 工具（含时间窗、全文检索、多源简报、跨章检索与技能包导出）。零第三方后端依赖。",
+  "type": "module",
+  "license": "GPL-3.0-only",
+  "keywords": [
+    "dsh-plugin",
+    "dsh-npie",
+    "rss",
+    "atom",
+    "reader",
+    "deepseek-harness"
+  ],
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.1.2-alpha.2 || >=0.1.5-rc.2 || >=0.1.7-alpha.2"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "meta": {
+      "title": "NPIE 阅读器",
+      "description": "订阅作者、读原文或中文版本、带着文章问 AI"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-api-gateway",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "files": [
+    "lib/**/*.js",
+    "src/data/*.json",
+    "vendor/**/*",
+    "cordis.patch.yml",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:fixes": "node --test test/store.test.mjs test/service.test.mjs test/tools.test.mjs test/page-progress.test.mjs test/library.test.mjs test/library-app.test.mjs test/library-bookrow-render.test.mjs test/ai-timeout.test.mjs test/theme-contrast.test.mjs",
+    "contract": "node scripts/check-host-contract.mjs --strict",
+    "contract:lenient": "node scripts/check-host-contract.mjs",
+    "check": "npm run build && npm test && npm run contract",
+    "verify": "npm run check && node scripts/check-theme-contrast.mjs && node scripts/check-menu-disabled.mjs",
+    "verify:layout": "node scripts/check-library-sidebar-layout.mjs",
+    "verify:menu": "node scripts/check-menu-disabled.mjs",
+    "prepack": "npm run build",
+    "verify:book-layout": "node scripts/check-book-panel-layout.mjs",
+    "verify:book-reading": "node scripts/check-book-reading-chrome.mjs",
+    "verify:book-skill-mutants": "node scripts/verify-book-skill-mutants.mjs",
+    "verify:build-guard": "node scripts/check-build-guard.mjs",
+    "verify:layout:all": "node scripts/check-library-sidebar-layout.mjs && node scripts/check-book-panel-layout.mjs"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
+  }
+}
