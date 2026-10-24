@@ -717,14 +717,42 @@ export function BookReader({
       setPaletteOpen(false);
       setFabOpen(false);
       /**
-       * ★ 0.24.2：这句提示补了「要全屏按 ⌃⌘F」。原因是**进沉浸之后那颗按钮就不见了**
-       *   （胶囊 `display: none`），它的 title 也就跟着没了 —— 用户如果正在想
-       *   「怎么没变全屏」，此刻唯一能回答他的就是这句 toast。
-       *   出口仍然写在同一句里（Esc），别让提示变成两个句子。
+       * ★ 0.24.6：这句提示改成「怎么把工具条找回来 + 全屏怎么按」。
+       *   0.24.2 那句是「只留书页，Esc 退出 · 要全屏按 ⌃⌘F」—— 但当时 ⌃⌘F
+       *   **根本没人处理**（`readerCommand` 遇到任何修饰键就返回 `NO_COMMAND`），
+       *   所以那句提示是在承诺一件做不到的事。现在两条都是真的：
+       *   · 工具条不再消失，鼠标移到顶部就滑出来（不用记 Esc）；
+       *   · ⌃⌘F / F11 由下面的键盘处理真的调 `requestFullscreen`。
        */
-      notify?.('已进入沉浸式阅读：只留书页，Esc 退出 · 要全屏按 ⌃⌘F');
+      notify?.('已进入沉浸式阅读：Esc 退出 · 顶部工具条鼠标移上去会出现 · ⌃⌘F 全屏');
     }
   }, [immersive, notify]);
+
+  /**
+   * 真正的全屏：⌃⌘F（macOS 的系统全屏键）与 F11。
+   *
+   * ★ 为什么必须由插件自己绑：`readerCommand` 的第一行是「任何修饰键 ⇒ `NO_COMMAND`」，
+   *   所以 ⌃⌘F 既没有人处理、也没有人 `preventDefault` —— 按下去**完全没反应**，
+   *   而 0.24.2 的提示语已经写着「要全屏按 ⌃⌘F」。用户报的就是这一条。
+   * ★ 与沉浸**解耦**：沉浸只改布局（用户 0.24.2 的原话「点沉浸时窗口大小不动」），
+   *   全屏是用户对窗口的主动决定。这里不碰 `immersive`，也不挂 `fullscreenchange`
+   *   去反向同步它 —— 那正是 0.22.0 那版把两个状态机缠在一起的地方。
+   * ★ 失败必须说出来：`requestFullscreen` 在没有用户手势、或被宿主策略拒绝时会返回
+   *   rejected Promise。静默 catch 掉就等于又造一次「按了没反应」。
+   */
+  const toggleFullscreen = useCallback(async () => {
+    const doc = globalThis.document;
+    if (typeof doc?.documentElement?.requestFullscreen !== 'function') {
+      notify?.('这个环境不支持全屏', true);
+      return;
+    }
+    try {
+      if (doc.fullscreenElement) await doc.exitFullscreen();
+      else await doc.documentElement.requestFullscreen();
+    } catch (error) {
+      notify?.(`全屏没成功：${error?.message ?? String(error)}`, true);
+    }
+  }, [notify]);
 
   /**
    * ★ 0.24.2：这里原来有一段「沉浸 ⇒ `requestFullscreen()`」，已删除。
@@ -772,6 +800,18 @@ export function BookReader({
     const onKeyDown = (event) => {
       if (event.defaultPrevented) return;
       /**
+       * ★ 全屏必须抢在 `readerCommand` **之前**：那个函数第一行是「任何修饰键 ⇒
+       *   `NO_COMMAND`」，⌃⌘F 会被它直接放过 —— 既没人处理，也没人 `preventDefault`，
+       *   于是「按了没反应」。这正是用户报的那条。
+       * ★ 只认精确组合（ctrl **且** meta **且** f）：单独的 ⌘F / ⌃F 在 macOS 上
+       *   各有别的含义（查找 / 光标前移），不能被这里吃掉。
+       */
+      if (event.key === 'F11' || (event.ctrlKey && event.metaKey && (event.key === 'f' || event.key === 'F'))) {
+        event.preventDefault();
+        void toggleFullscreen();
+        return;
+      }
+      /**
        * ★ Esc 不交给 `readerCommand`：那个函数的契约是「不认识的键就不吞」，
        *   而 Esc 只有在**已经处在沉浸态**时才属于本组件。反过来写成「Esc 一律退出沉浸」，
        *   会让读屏 / 输入法用 Esc 关自己的弹层时顺带把阅读器也切回来。
@@ -807,7 +847,7 @@ export function BookReader({
     };
     globalThis.addEventListener('keydown', onKeyDown);
     return () => globalThis.removeEventListener('keydown', onKeyDown);
-  }, [status, go, numPages, immersive, fabOpen, toggleImmersive, cycleTint]);
+  }, [status, go, numPages, immersive, fabOpen, toggleImmersive, cycleTint, toggleFullscreen]);
 
   // ---- 滚轮：翻页；Ctrl/⌘ + 滚轮：缩放 ------------------------------------
   /**
@@ -1518,7 +1558,7 @@ export function BookReader({
             )}
           </span>
           <button type="button" className={`npr-book-pill-item${immersive ? ' is-on' : ''}`}
-            title={immersive ? '退出沉浸式阅读（Esc）' : '沉浸式阅读（I）：只留书页，窗口大小不变（要全屏按 ⌃⌘F）'}
+            title={immersive ? '退出沉浸式阅读（Esc）' : '沉浸式阅读（I）：收掉工具栏与书架列，窗口大小不变；顶部工具条鼠标移上去会滑出，全屏按 ⌃⌘F'}
             aria-pressed={immersive} onClick={toggleImmersive}>
             <Icon name="maximize" size={14} />
             <span>沉浸</span>

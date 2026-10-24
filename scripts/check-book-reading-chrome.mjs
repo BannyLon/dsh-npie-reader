@@ -505,6 +505,12 @@ window.__probe = function (o) {
   if (o.breakSize) rules.push('.npr-book-fab-slot{--npr-fab-size:38px !important}');
   /* 把书架那一列的隐藏规则注掉：判据 ⑱「沉浸时书架不占位」必须红。 */
   if (o.keepShelf) rules.push('.npr-workarea.is-book-immersive .npr-sidebar{display:flex !important}');
+  /* ★ 0.24.6 判据 ⑰ 的反向对照：把「悬停滑出」改回「一直收起」——
+     沉浸态下把鼠标放到顶部也不出来 ⇒「工具条滑出来」必须红。 */
+  if (o.breakSlide) rules.push('.npr-book.is-immersive .npr-book-toolbar:hover ~ .npr-book-chrome{transform:translateY(-100%) !important;opacity:0 !important}');
+  /* ★ 0.24.6 判据 ⑰ 的反向对照：把 FAB 压回全透明（0.24.2 的旧行为）
+     ⇒「FAB 仍然可见」必须红。 */
+  if (o.breakFabVisible) rules.push('.npr-book.is-immersive .npr-book-fab{opacity:0 !important}');
   /* ★ 判据 ㉓ 的反向对照：让 .npr-book-view 退回 static ⇒ 浮动按钮的定位基准回到
      .npr-book-main（右缘 = 整个面板右缘）⇒ 开着伴读时它落到伴读的角上。
      这正是 0.23.0 及之前的形态，用一条 CSS 就能复现，不必另写一份坏 HTML。 */
@@ -556,6 +562,16 @@ window.__probe = function (o) {
     book: rectOf(book),
     tb: rectOf(tb), tbHeight: cssOf(tb).height, tbPosition: cssOf(tb).position, tbBg: cssOf(tb).backgroundColor,
     chrome: rectOf(chrome), chromeDisplay: cssOf(chrome).display,
+    /**
+     * ★ 0.24.6：沉浸态的胶囊不再是 display:none，改成「绝对定位 + 上移 + 透明」。
+     *   所以「不占位」要靠 position === 'absolute' 证明，「收起」要靠 opacity 证明 ——
+     *   只量 display 的话这两件事都看不出来。
+     * ★ 本段在 __probe 的模板串里：注释里**不许出现反引号**（会提前闭合模板串，
+     *   而报错是一句离得很远的 SyntaxError）。
+     */
+    chromePosition: cssOf(chrome).position,
+    chromeOpacity: Number(cssOf(chrome).opacity),
+    chromePe: cssOf(chrome).pointerEvents,
     pill: rectOf(pill), pillScrollWidth: pill.scrollWidth, pillClientWidth: pill.clientWidth,
     pillLuma: lumaOf(pill),
     meta: rectOf(meta), metaDisplay: cssOf(meta).display,
@@ -779,10 +795,37 @@ async function hoverFab(options = {}) {
   await settle();
   return probe({ ...options });
 }
-/** 把鼠标挪到左上角：取消 hover（量「移开之后」用）。 */
+/**
+ * 取消 hover：把鼠标挪到**左侧中部**。
+ *
+ * ★ 不能再挪左上角 (3,3)：`.npr-book > .npr-book-toolbar` 是**铺满宽度、10px 高**的
+ *   拖动条（0.22.0 从 44px 缩成 10px），y=3 正好落在里面 ⇒ 沉浸态会一直算「鼠标在
+ *   顶部」，工具条永远滑出，「收起」那两条判据就永远量到 opacity=1。
+ * ★ 也不能挪右下角：那是 FAB 的位置。左侧中部（x=3, y=200）在两种面板高度下
+ *   都落在书页区，不 hover 任何控件。
+ */
 async function unhover() {
-  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 3, y: 3 });
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 3, y: 200 });
   await settle();
+}
+
+/**
+ * 把鼠标移到顶部那条拖动条上 —— 沉浸态里它是「工具条滑出」的热区。
+ *
+ * ★ 用真指针事件，不能 `CSS.forcePseudoState`：滑出是靠 `.npr-book-toolbar:hover ~
+ *   .npr-book-chrome` 这条**兄弟选择器**生效的，强制伪类只能给某个元素加 `:hover`，
+ *   影响不到它的兄弟。
+ * ★ 必须带 `options`：`probe` 每次都重写 class / 尺寸，不带参数就等于顺手退出了沉浸态。
+ */
+async function hoverToolbar(options = {}) {
+  const box = await probe({ ...options });
+  await send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: Math.round((box.tb.l + box.tb.r) / 2),
+    y: Math.round((box.tb.t + box.tb.b) / 2),
+  });
+  await settle();
+  return probe({ ...options });
 }
 
 /**
@@ -1145,11 +1188,13 @@ try {
   const deepOpen = await hoverFab({ immersive: true, open: true });
   await unhover();
   const deep = await probe({ immersive: true });
-  check('⑰ 沉浸态：顶部胶囊不占位（display: none）',
-    deep.chromeDisplay === 'none', `display=${deep.chromeDisplay}`);
+  check('⑰ 沉浸态：顶部胶囊不占位（absolute，脱离文档流）',
+    deep.chromePosition === 'absolute', `position=${deep.chromePosition}`);
+  check('⑰ 沉浸态：胶囊收起（透明 + 上移，不是 display:none 那种「消失」）',
+    deep.chromeOpacity <= 0.02, `opacity=${deep.chromeOpacity}`);
   check('⑰ 沉浸态：元信息行不占位', deep.metaDisplay === 'none', `display=${deep.metaDisplay}`);
-  check('⑰ 沉浸态：FAB 隐到全透明（只留书页）',
-    deep.fabOpacity <= 0.02, `opacity=${deep.fabOpacity}`);
+  check('⑰ ★ 沉浸态：FAB 仍然可见（用户原话：「原来的浮动工具按钮为什么没有了，应该存在啊」）',
+    deep.fabOpacity >= 0.98, `opacity=${deep.fabOpacity}`);
   check('⑰ 沉浸态：书页可用高度变大（同样的面板里多出一截正文）',
     (deep.stage.h - deep.stagePadTop) > (wide.stage.h - wide.stagePadTop),
     `沉浸可用高=${fmt(deep.stage.h - deep.stagePadTop)} 常规=${fmt(wide.stage.h - wide.stagePadTop)}`);
@@ -1158,6 +1203,29 @@ try {
   check('⑰ 沉浸态里列仍能展开（不能因为「只留书页」把翻页也锁死）',
     deepOpen.slots.every((s) => s.opacity >= 0.98) && outsideBy(deepOpen) <= 0.5,
     `最小 opacity=${fmt(Math.min(...deepOpen.slots.map((s) => s.opacity)))}`);
+
+  console.log('\n—— 沉浸态 · 顶部工具条滑出（0.24.6）——');
+  const deepToolbar = await hoverToolbar({ immersive: true });
+  check('⑰ ★ 沉浸态：鼠标移到顶部拖动条，工具条滑出来',
+    deepToolbar.chromeOpacity >= 0.98, `opacity=${deepToolbar.chromeOpacity}`);
+  check('⑰ 工具条滑出**不把书页顶下去**（滑出是纯视觉，不改布局）',
+    Math.abs(deepToolbar.stage.t - deep.stage.t) <= 1,
+    `滑出后舞台顶=${fmt(deepToolbar.stage.t)} 收起时=${fmt(deep.stage.t)}`);
+  check('⑰ 工具条滑出后可以点（收起时是 pointer-events: none，滑出必须放开）',
+    deepToolbar.chromePe === 'auto', `pointer-events=${deepToolbar.chromePe}`);
+  await unhover();
+  const deepAway = await probe({ immersive: true });
+  check('⑰ 鼠标移开，工具条又收起来（不留在屏上挡字）',
+    deepAway.chromeOpacity <= 0.02, `opacity=${deepAway.chromeOpacity}`);
+
+  console.log('\n—— 反向对照（0.24.6 新增的两条判据必须有牙）——');
+  const brokenSlide = await hoverToolbar({ immersive: true, breakSlide: true });
+  check('★ ⑰ 把「悬停滑出」改回「一直收起」：判据「工具条滑出来」必须红',
+    brokenSlide.chromeOpacity <= 0.02, `opacity=${brokenSlide.chromeOpacity}`);
+  await unhover();
+  const brokenFabVisible = await probe({ immersive: true, breakFabVisible: true });
+  check('★ ⑰ 把 FAB 压回全透明（0.24.2 的旧行为）：判据「FAB 仍然可见」必须红',
+    brokenFabVisible.fabOpacity <= 0.02, `opacity=${brokenFabVisible.fabOpacity}`);
   check('⑱ ★ 沉浸态：**书架那一列**不占位（用户要「左边两列都不显示」）',
     deep.sidebarDisplay === 'none' && deep.sidebar.w === 0,
     `display=${deep.sidebarDisplay} 宽=${fmt(deep.sidebar.w)}`);
@@ -1424,8 +1492,11 @@ try {
       [{ tint: 'paper', palette: true }, '-palette'],
       [{ tint: 'paper', marks: true }, '-marks'],
       /* ★ 沉浸这张裁到**工作区**而不是书页：要一眼看出「书架那一列不见了」，
-         裁到 `.npr-book` 的话正好把它裁在外面，图上看不出任何变化。 */
-      [{ tint: 'paper', immersive: true }, '-immersive-workspace'],
+         裁到 `.npr-book` 的话正好把它裁在外面，图上看不出任何变化。
+         ★ 必须显式写 `open: false`：`__probe` 只在传了 true/false 时才改开合，
+         不传就**保持上一次的状态**（前面 `-companion` 是展开的）—— 那样这张图会
+         停在展开态，而沉浸态的真实默认是收起，交付图就骗人了。 */
+      [{ tint: 'paper', immersive: true, open: false }, '-immersive-workspace'],
       [{ tint: 'paper', open: true, width: 480, height: 640 }, '-narrow'],
     ];
     for (const [extra, suffix] of shots) {
@@ -1442,6 +1513,15 @@ try {
     await moveTo(hoverBox.fabBtnCenter.cx, hoverBox.fabBtnCenter.cy);
     await settle(560);
     await capture(hoverBox, '-fab-hover');
+    /* ★ 0.24.6 的证据图：沉浸态下把指针放到顶部那条拖动条上，工具条滑出来。
+       它和 `-immersive-workspace` 的区别**只有鼠标位置** —— 同一份代码、同一份布局，
+       一张是「收起」，一张是「滑出」。用户报的正是「点了沉浸之后工具条和浮动按钮
+       都不见了」，这两张图合起来就是答复。 */
+    await unhover();
+    const immersiveBox = await probe({ width: SHOT_WIDTH, tint: 'paper', immersive: true });
+    await moveTo((immersiveBox.tb.l + immersiveBox.tb.r) / 2, (immersiveBox.tb.t + immersiveBox.tb.b) / 2);
+    await settle(340);
+    await capture(immersiveBox, '-immersive-top-hover');
     await unhover();
   }
 } finally {

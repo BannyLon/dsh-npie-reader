@@ -950,14 +950,27 @@
      进入时**主动弹了提示**的：Esc / I 键、以及鼠标回到右下角（那颗按钮的位置没变，
      hover 就恢复）。
    ★ 舞台内边距同时收到最小：沉浸态的意义就是把这几十像素还给书页。 */
-.npr-book.is-immersive .npr-book-meta,
-.npr-book.is-immersive .npr-book-chrome { display: none; }
-.npr-book.is-immersive .npr-book-fab { opacity: 0; }
-/* 展开态也要能看见：点开之后鼠标可能离开那个角去看列表，`:hover` 一丢就整块消失 ——
-   那正好是「点不到」的另一个版本。`.is-open` 是持久态，不受鼠标位置影响。 */
-.npr-book.is-immersive .npr-book-fab:hover,
-.npr-book.is-immersive .npr-book-fab:focus-within,
-.npr-book.is-immersive .npr-book-fab.is-open { opacity: 1; }
+.npr-book.is-immersive .npr-book-meta { display: none; }
+
+/* ---- 沉浸态：顶部工具条**滑出**、浮动按钮**保留**（0.24.6）----
+   ★ 为什么改：0.24.2 那版是 `display: none` + `fab { opacity: 0 }`，于是用户点了沉浸
+     之后看到的是「工具条和浮动按钮都不见了」—— 原话「应该存在啊」。沉浸要收的是
+     **占位**与**干扰**，不是把这些控件从世界上删掉。
+   ★ 热区直接用 `.npr-book-toolbar`（44px，本来就是宿主的窗口拖动区），不新加一层
+     绝对定位的透明 div：新加的那层会盖住拖动区，窗口就拖不动了。
+   ★ 收起时必须 `pointer-events: none`，否则它会挡住下面书页顶部的划选。
+   ★ 位置仍然是「不占位」：`position: absolute` 让它脱离流，书页照样往上顶 ——
+     沉浸「把这几十像素还给书页」的意义没丢。 */
+.npr-book.is-immersive .npr-book-chrome {
+  position: absolute; top: 0; left: 0; right: 0;
+  transform: translateY(-100%); opacity: 0; pointer-events: none;
+  transition: transform .18s ease, opacity .18s ease;
+}
+.npr-book.is-immersive .npr-book-toolbar:hover ~ .npr-book-chrome,
+.npr-book.is-immersive .npr-book-chrome:hover,
+.npr-book.is-immersive .npr-book-chrome:focus-within {
+  transform: translateY(0); opacity: 1; pointer-events: auto;
+}
 .npr-book.is-immersive .npr-book-stage { padding: 8px 10px 12px; }
 
 /* ---- 沉浸时把**书架那一列**也收掉 ----

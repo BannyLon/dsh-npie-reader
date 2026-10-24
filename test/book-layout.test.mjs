@@ -266,38 +266,102 @@ describe('目录在左、伴读在右', () => {
 });
 
 /**
- * ★ 0.24.2：沉浸**只改布局，不改窗口大小**。
+ * 从**剥过注释**的源码里抠出一个 `const NAME = <expr>;` 的完整表达式。
  *
- * 用户原话：「点沉浸只是左边两列缩掉，只显示阅读的这一列，但是在点击沉浸的时候
- * 窗口大小不动，如果要全屏是用户自己选择点击。」
- * 0.22.0 起这里会 `requestFullscreen()` 把整本书顶成全屏 —— 那是另一件事：全屏是
- * 用户对**窗口**的决定（macOS 换 Space、有动画、退出还要再按一次），不该由
- * 「我想安静读一页」顺手替他做。
+ * ★ 不靠缩进、不靠「找到下一个空行」：`useCallback(() => {…}, [deps])` 里既有花括号
+ *   又有圆括号，任何按行截断的写法都会截在函数中间 —— 那样「函数体里有没有 X」这条
+ *   判据会因为**截断**而假绿（历史教训：截断式断言给死代码发过合格证）。
+ *   这里按括号配对走，`;` 只在配对深度归零时才算结束。
+ * ★ 前提：`source` 已经剥掉注释，且字符串里没有未配对的 `(`/`;`。本文件目前满足；
+ *   哪天某条字符串里出现裸括号，就得换成真正的解析器，别在这里打补丁。
+ */
+function extractBinding(source, name) {
+  const marker = `const ${name} = `;
+  const start = source.indexOf(marker);
+  assert.notEqual(start, -1, `源码里找不到 \`const ${name}\`，这条判据失去对象`);
+  const from = start + marker.length;
+  let depth = 0;
+  for (let i = from; i < source.length; i += 1) {
+    const ch = source[i];
+    if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+    else if (ch === ')' || ch === ']' || ch === '}') depth -= 1;
+    else if (ch === ';' && depth === 0) return source.slice(from, i);
+  }
+  assert.fail(`\`const ${name}\` 的表达式没找到结尾（括号不配对？）`);
+  return '';
+}
+
+/**
+ * 全屏的**入口唯一性 + 与沉浸解耦**（0.24.2 立的规矩，0.24.6 换了守法）。
  *
- * ★ 这条判据只能查「这段代码**不存在**」，源码断言在这里正好是对的工具：
- *   调一次全屏 API 的后果（窗口变形、Esc 被接管）在 node 里根本观察不到，
- *   而几何脚本跑的是静态夹具、不会点按钮。
- * ★ 先剥注释：注释里提到这几个名字（说明为什么不用）不算调用 —— 否则这条判据会
+ * 0.24.2 的规矩（用户原话）：「点沉浸只是左边两列缩掉，只显示阅读的这一列，但是在
+ * 点击沉浸的时候窗口大小不动，如果要全屏是用户自己选择点击。」
+ * 当时的写法是「阅读器里**一个全屏 API 都不许出现**」—— 简单、够用，因为那会儿
+ * 插件确实一次都不调全屏。
+ *
+ * ★ 0.24.6 用户报了「提示说按 ⌃⌘F 全屏，我试过了，没反应」，于是插件**必须**真的
+ *   绑这个键 ⇒ `requestFullscreen` 合法地回来了。原来那两条断言的前提变了，
+ *   但**它守的那件事没变**：全屏是用户对**窗口**的主动决定，不许被沉浸顺手驱动。
+ *   ⇒ 判据从「不许出现」收紧成「只许出现在 `toggleFullscreen` 里，且沉浸函数体
+ *   里一个全屏字样都没有」。删掉判据是错的，换成「哪里出现都行」更错。
+ *
+ * ★ 为什么这里只能用源码断言：调一次全屏 API 的后果（窗口变形、Esc 被接管）在
+ *   node 里根本观察不到，而几何脚本跑的是静态夹具、不会点按钮。
+ * ★ 先剥注释：注释里提到这几个名字（解释为什么不那么做）不算调用 —— 否则判据会
  *   因为「解释了自己为什么不这么做」而变红。
  */
-describe('0.24.2：沉浸不改窗口大小', () => {
+describe('0.24.6：全屏是独立入口，不由沉浸驱动', () => {
   const code = readerCode
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '');
 
-  it('★ 阅读器里没有任何全屏 API（沉浸只动布局）', () => {
-    for (const api of ['requestFullscreen', 'exitFullscreen', 'fullscreenElement', 'fullscreenchange']) {
-      assert.equal(code.includes(api), false, `沉浸又去改窗口大小了：${api}`);
+  const FULLSCREEN_APIS = ['requestFullscreen', 'exitFullscreen', 'fullscreenElement'];
+
+  it('★ 全屏 API 只出现在 toggleFullscreen 里（一个独立入口，别处不许有）', () => {
+    const entry = extractBinding(code, 'toggleFullscreen');
+    const elsewhere = code.replace(entry, '');
+    for (const api of FULLSCREEN_APIS) {
+      assert.equal(elsewhere.includes(api), false,
+        `全屏 API 跑到 toggleFullscreen 外面去了：${api}`);
+    }
+    // 「只在里面」这条可以靠「哪儿都没有」蒙过去 ⇒ 还要证明它自己真的调了
+    assert.ok(entry.includes('requestFullscreen') && entry.includes('exitFullscreen'),
+      'toggleFullscreen 里没有进出全屏的调用 —— 那它就是空壳，⌃⌘F 还是没反应');
+  });
+
+  it('★ 沉浸不驱动全屏：toggleImmersive 函数体里没有全屏字样，也不调 toggleFullscreen', () => {
+    const fn = extractBinding(code, 'toggleImmersive');
+    for (const name of [...FULLSCREEN_APIS, 'fullscreenchange', 'toggleFullscreen']) {
+      assert.equal(fn.includes(name), false,
+        `沉浸又去动窗口大小了：${name} 出现在 toggleImmersive 里`);
     }
   });
 
-  it('反向对照：原文里**有**这些词（注释里解释过），剥完才没有 —— 说明判据看得见它们', () => {
-    assert.ok(readerCode.includes('requestFullscreen'),
-      '注释里连提都没提？那上面那条判据没有对照价值（它可能只是名字压根不在文件里）');
-    assert.equal(code.includes('requestFullscreen'), false);
+  it('★ 没有 fullscreenchange 监听（它是把两个状态机缠在一起的东西）', () => {
+    assert.equal(code.includes('fullscreenchange'), false,
+      '挂了 fullscreenchange ⇒ 用户自己按 ⌃⌘F 进出全屏时会被顺手退出沉浸');
   });
 
-  it('只删了全屏，没删布局：插件自己的两列在沉浸态仍然收掉', () => {
+  it('反向对照：把 requestFullscreen 挪进 toggleImmersive，上面那条判据必须变红', () => {
+    const mutated = code.replace(
+      'const next = !immersive;',
+      'const next = !immersive; void globalThis.document.documentElement.requestFullscreen();',
+    );
+    assert.notEqual(mutated, code, '变异没打上：锚点 `const next = !immersive;` 没命中');
+    const fn = extractBinding(mutated, 'toggleImmersive');
+    assert.ok(fn.includes('requestFullscreen'),
+      '变异体里读不到 requestFullscreen —— 说明 extractBinding 抠错了范围，判据是瞎的');
+  });
+
+  it('反向对照：原文里**有**这些词（注释里解释过），剥完注释才落到函数里 —— 判据看得见它们', () => {
+    assert.ok(readerCode.includes('requestFullscreen'),
+      '注释里连提都没提？那上面几条判据没有对照价值（它可能只是名字压根不在文件里）');
+    assert.ok(readerCode.includes('fullscreenchange'),
+      '注释里没提 fullscreenchange ⇒ 「没有监听」那条可能只是名字不在文件里，不是真删了');
+    assert.equal(code.includes('fullscreenchange'), false);
+  });
+
+  it('只把全屏拿出来了，没动布局：插件自己的两列在沉浸态仍然收掉', () => {
     assert.ok(css.includes('.npr-workarea.is-book-immersive .npr-sidebar'), '书架列不收了');
     assert.ok(css.includes('.npr-workarea.is-book-immersive .npr-resize'), '分隔条不收了');
     assert.ok(css.includes('.npr-book.is-immersive .npr-book-meta'), '元信息行不收了');
