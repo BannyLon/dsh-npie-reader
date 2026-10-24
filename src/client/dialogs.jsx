@@ -3,7 +3,29 @@ import { Icon } from './icons.jsx';
 
 import { httpFeedUrls } from './feed-urls.js';
 
+/**
+ * 通用模态外壳。
+ *
+ * ★ Esc 关掉自己，用**原生 `document` 监听**，不用 React 的 `onKeyDown`：
+ *   React 的合成事件挂在根容器上，`stopPropagation` 只拦得住 React 树上的传播，
+ *   拦不住别处 `addEventListener` 的原生监听 —— 而设置页正是在 `window` 上挂了
+ *   「Esc = 关闭整页」。用合成事件的话，用户按 Esc 想关掉「添加订阅」，会连整个
+ *   设置页一起关掉（连同别的输入框里填了一半的内容）。
+ * ★ 挂 `document`（冒泡）而不是 `window`：document 比 window 先收到事件，
+ *   这一层先处理并 `stopPropagation`，设置页就收不到了。
+ * ★ 顺序上还有第三层：`GroupField` 的下拉菜单挂的是**捕获阶段**监听，捕获先于
+ *   冒泡 ⇒ 菜单展开时按 Esc 只关菜单，不会连对话框一起关掉。
+ */
 function Modal({ label, onClose, children, wide = false }) {
+  useEffect(() => {
+    const escape = (event) => {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      onClose();
+    };
+    document.addEventListener('keydown', escape);
+    return () => document.removeEventListener('keydown', escape);
+  }, [onClose]);
   return (
     <div className="npr-modal-backdrop" onClick={onClose}>
       <div className={`npr-modal${wide ? ' is-wide' : ''}`} role="dialog" aria-label={label} onClick={(event) => event.stopPropagation()}>
@@ -39,10 +61,24 @@ export function GroupField({ value, onChange, groups = [], menuId = 'npr-addfeed
   useEffect(() => {
     if (!open) return undefined;
     const away = (event) => { if (!box.current?.contains(event.target)) setOpen(false); };
-    const escape = (event) => { if (event.key === 'Escape') { event.stopPropagation(); setOpen(false); } };
+    /*
+     * ★ 这个 Esc 必须挂**捕获阶段**，因为它比外面两层都内层：
+     *   设置页在 `window` 上挂了「Esc = 关闭整页」，`Modal` 又在 `document` 冒泡上
+     *   挂了「Esc = 关闭对话框」。三层都挂冒泡的话，先注册的先跑 —— 菜单是展开时
+     *   才注册的，永远排在最后，于是按 Esc 会先把整个对话框关掉，用户想关的只是
+     *   这个下拉。捕获阶段先于冒泡，菜单才能抢在两层之前处理。
+     * ★ `preventDefault` 只是让「这个 Esc 已经被消费了」这件事对后面的监听可见；
+     *   真正挡住外层的是 `stopPropagation`。
+     */
+    const escape = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+    };
     document.addEventListener('mousedown', away);
-    document.addEventListener('keydown', escape);
-    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', escape); };
+    document.addEventListener('keydown', escape, true);
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', escape, true); };
   }, [open]);
   return <div className="npr-groupfield" ref={box}>
     <input

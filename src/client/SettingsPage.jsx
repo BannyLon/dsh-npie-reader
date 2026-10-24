@@ -341,7 +341,7 @@ export function SettingsPage({ api, onClose, notify, onSubscriptionsChanged, ini
               {/* 分组下拉的候选与下面「订阅分组」那张清单**必须同源**（`groupNamesOf`），
                   否则会出现「下拉里没有某个分组、分组管理里却有」这种没法解释的差异。 */}
               {showAdd && <AddFeedDialog api={api} groups={groupNamesOf(subscriptions)} onClose={() => setShowAdd(false)} onDone={afterSubscriptionsChanged} notify={(text, isError) => { setMessage(text); if (isError) notify(text, true); }} />}
-              {showImport && <div className="npr-settings-import"><OpmlImport api={api} onDone={async () => { await afterSubscriptionsChanged(); setShowImport(false); }} /></div>}
+              {showImport && <div className="npr-settings-import"><OpmlImport api={api} onCancel={() => setShowImport(false)} onDone={async () => { await afterSubscriptionsChanged(); setShowImport(false); }} /></div>}
               <SubscriptionManager api={api} subscriptions={subscriptions} onChange={setSubscriptions} notify={(text, isError) => { setMessage(text); if (isError) notify(text, true); }} />
             </div>
             <div className="npr-settings-card">

@@ -1,8 +1,11 @@
 {
   "name": "dsh-npie-reader",
-  "version": "0.24.4",
+  "version": "0.24.5",
   "description": "DSH 桌面端阅读器：订阅 RSS/Atom 作者，读原文或中文版本，带着当前文章在 Harness 原生对话里追问；也能打开本地 / 网盘电子书（PDF / EPUB / DOCX），自动抽出整本正文并切成章节目录、逐章生成中文解读，再把整本书导出成可被 agent 按需加载的 skill 包。自带探索订阅目录（Newsletter / 独立博客）、OPML 导入导出、阅读外观设置，以及 14 个 agent 工具（含时间窗、全文检索、多源简报、跨章检索与技能包导出）。零第三方后端依赖。",
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
   "license": "GPL-3.0-only",
   "keywords": [
     "dsh-plugin",
@@ -71,9 +74,11 @@
     "contract": "node scripts/check-host-contract.mjs --strict",
     "contract:lenient": "node scripts/check-host-contract.mjs",
     "check": "npm run build && npm test && npm run contract",
-    "verify": "npm run check && node scripts/check-theme-contrast.mjs && node scripts/check-menu-disabled.mjs",
+    "verify": "npm run check && node scripts/check-theme-contrast.mjs && node scripts/check-menu-disabled.mjs && npm run verify:escape && npm run verify:mark-delete",
     "verify:layout": "node scripts/check-library-sidebar-layout.mjs",
     "verify:menu": "node scripts/check-menu-disabled.mjs",
+    "verify:escape": "node scripts/check-escape-order.mjs",
+    "verify:mark-delete": "node scripts/check-mark-delete.mjs",
     "prepack": "npm run build",
     "verify:book-layout": "node scripts/check-book-panel-layout.mjs",
     "verify:book-reading": "node scripts/check-book-reading-chrome.mjs",

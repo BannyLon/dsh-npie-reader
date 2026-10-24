@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
-export function OpmlImport({ api, onDone }) {
+export function OpmlImport({ api, onDone, onCancel }) {
+  const box = useRef(null);
   const [xml, setXml] = useState('');
   const [url, setUrl] = useState('');
   const [preview, setPreview] = useState(null);
@@ -13,6 +14,25 @@ export function OpmlImport({ api, onDone }) {
     try { await fn(); } catch (error) { setMessage(error?.message ?? String(error)); }
     finally { setBusy(false); }
   };
+  /*
+   * ★ Esc 收起这块**内联**表单，关键是别让它冒泡到设置页：设置页在 `window` 上
+   *   挂了「Esc = 关闭整页」，而这里可能已经选好了一串待导入的源。不拦的话，用户
+   *   按 Esc 想退出导入，结果整个设置页关掉、已选的条目一起丢 —— 这是本轮要修的
+   *   那个 bug（它以前根本没有 Esc 处理，Esc 直接穿到 window）。
+   * ★ 只在焦点位于本表单内时响应（`box.contains`）：它不像模态那样独占交互，
+   *   用户在设置页别处按 Esc 时，这里不该把事件吃掉。
+   * ★ 导入进行中（`busy`）不响应：中途收起会让人以为没导进去。
+   */
+  useEffect(() => {
+    const escape = (event) => {
+      if (event.key !== 'Escape' || busy) return;
+      if (!box.current?.contains(event.target)) return;
+      event.stopPropagation();
+      onCancel?.();
+    };
+    document.addEventListener('keydown', escape);
+    return () => document.removeEventListener('keydown', escape);
+  }, [busy, onCancel]);
   const inspect = (params) => run(async () => {
     const result = await api.opmlPreview(params);
     setPreview(result);
@@ -20,7 +40,7 @@ export function OpmlImport({ api, onDone }) {
   });
   const reset = () => { setPreview(null); setSelected([]); };
   const visible = preview?.entries.filter((entry) => `${entry.name} ${entry.group ?? ''} ${entry.url}`.toLowerCase().includes(query.toLowerCase())) ?? [];
-  return <fieldset className="npr-opml-import" disabled={busy}>
+  return <fieldset className="npr-opml-import" disabled={busy} ref={box}>
     <legend>导入 OPML</legend>
     <input type="file" aria-label="选择 OPML 文件" accept=".opml,.xml,text/xml" onChange={(e) => {
       const file = e.target.files?.[0];

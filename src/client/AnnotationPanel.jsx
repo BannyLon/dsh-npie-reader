@@ -27,6 +27,17 @@ export function AnnotationPanel({ items, focusId = '', onJump, onUpdate, onRemov
   /** 正在编辑的那一条（`''` = 没在编辑）。 */
   const [editingId, setEditingId] = useState('');
   const [draft, setDraft] = useState('');
+  /**
+   * 正在等「再点一次」的那条划线（`''` = 没有）。
+   *
+   * ★ 删除是**不可逆**的：划线只存在本地 `data.json` 里，没有回收站、没有历史版本，
+   *   误触一次就真的没了。所以必须有第二次确认。
+   * ★ 为什么是「同一位置换成确认」而不是弹模态：删除是个高频小动作，弹窗要多一次
+   *   点击 + 一次视觉跳转；把图标原地换成「确认删除」就能拦住手滑，成本只有一次点击。
+   * ★ 为什么不用红色：本项目没有 danger 语义色变量，硬写色值会在六种纸色 ×
+   *   宿主明暗两态下踩对比度；这条判据要的是「两个动作」，颜色不是必需品。
+   */
+  const [confirmingId, setConfirmingId] = useState('');
   const inputRef = useRef(null);
 
   const stats = useMemo(() => summariseAnnotations(items), [items]);
@@ -39,6 +50,19 @@ export function AnnotationPanel({ items, focusId = '', onJump, onUpdate, onRemov
     if (editingId === '') return;
     inputRef.current?.focus();
   }, [editingId]);
+
+  /**
+   * 确认态会自己过期。
+   *
+   * ★ 不过期的话，用户点了一次垃圾桶又改主意，那一行就永远停在「确认删除」上 ——
+   *   下次回来看到的是一个不认识的按钮状态，比没有确认更让人困惑。
+   * ★ 4 秒：够看完那句话并决定，又不至于久到「以为它自己会一直等」。
+   */
+  useEffect(() => {
+    if (confirmingId === '') return undefined;
+    const timer = setTimeout(() => setConfirmingId(''), 4000);
+    return () => clearTimeout(timer);
+  }, [confirmingId]);
 
   /**
    * 外面指定「打开就编辑这一条」（划完线顺手写一句的那个入口）。
@@ -128,10 +152,18 @@ export function AnnotationPanel({ items, focusId = '', onJump, onUpdate, onRemov
                       出现 `''`（这里比较笔记是否为空），它按引号切分就会错位成 `? ` / `: `。 */}
                   {item.note.trim() === '' ? <Icon name="pencil" size={13} /> : <Icon name="file-text" size={13} />}
                 </button>
-                <button type="button" className="npr-mark-action" title="删除这条划线"
-                  onClick={() => onRemove(item.id)}>
-                  <Icon name="trash-2" size={13} />
-                </button>
+                {confirmingId === item.id ? (
+                  <button type="button" className="npr-mark-action is-confirming"
+                    title="再点一次就删掉（4 秒后自动取消）"
+                    onClick={() => { setConfirmingId(''); onRemove(item.id); }}>
+                    确认删除
+                  </button>
+                ) : (
+                  <button type="button" className="npr-mark-action" title="删除这条划线"
+                    onClick={() => setConfirmingId(item.id)}>
+                    <Icon name="trash-2" size={13} />
+                  </button>
+                )}
               </div>
               {!editing && item.note.trim() !== '' && (
                 <p className="npr-mark-note">{item.note}</p>

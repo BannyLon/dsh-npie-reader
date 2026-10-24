@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Icon } from './icons.jsx';
 import { freshness } from './source-health.js';
 
@@ -46,6 +46,21 @@ export function ChannelMark({ channel, size = 22 }) {
 
 export function ChannelPicker({ channels, current, anchor, onSelect, onManage, onClose }) {
   const [query, setQuery] = useState('');
+  /*
+   * ★ Esc 关掉这个浮层，用**原生 `document` 监听**而不是 React 的 `onKeyDown`。
+   *   阅读页在 `window` 上挂了 Esc（退出专注、清空搜索），合成事件拦不住原生监听；
+   *   不拦的话按 Esc 会变成「浮层还在、底下的搜索框被清空了」—— 用户会以为
+   *   生效的是另一个操作。挂 document（比 window 先跑）再 stopPropagation 才能截住。
+   */
+  useEffect(() => {
+    const escape = (event) => {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      onClose();
+    };
+    document.addEventListener('keydown', escape);
+    return () => document.removeEventListener('keydown', escape);
+  }, [onClose]);
   const sections = useMemo(() => groupChannels(channels), [channels]);
   const searching = query.trim() !== '';
   const flat = useMemo(() => SECTION_ORDER.flatMap((title) => sections[title]), [sections]);

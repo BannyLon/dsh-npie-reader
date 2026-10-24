@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.24.5 — 2026-10-24
+
+**主题：核查报告「应该做」里挑出的三条 —— 补 node 版本下限、把 Esc 的三层语义理顺、
+给删划线加二次确认。**
+
+> 来源同上（Zcode 的核查报告）。0.24.4 做完「必须做」三条之后，对报告剩下的条目逐条
+> 核对了一遍事实，只取**后果明确、不需要先量**的三条。虚拟列表、拆巨型组件、
+> `data.json` 拆文件、EPUB、书籍翻译等**仍不在本轮**（理由见下）。
+
+### 一、`package.json` 补 `engines.node`
+
+- 事实：`engines` 这个键**根本不存在**（只有 `dsh.engines.dsh`）—— 报告写的是
+  「engines 里是 `dsh.engines.dsh`，不是 node 引擎」，方向对，实际更彻底。
+- 下限不是拍的：项目真的用了 `AbortSignal.timeout`（**Node 17.3+**，9 个文件）与
+  `structuredClone`（17+）。取 LTS 边界写成 `">=18"`。
+- 为什么值得单独一条：没有这个字段时，旧 Node 上的症状是「**语法全过、API 不存在**」——
+  报错点离真实原因很远。`npm install --package-lock-only` 同步了 lock 里的 `packages[""].engines`。
+
+### 二、Esc 的三层语义（这是本轮唯一有真实用户可见后果的一条）
+
+报告把它归在 P3，实际比那严重。核实到两处**真缺**，外加一处我一开始判断错了：
+
+| 位置 | 之前 | 后果 |
+| --- | --- | --- |
+| `dialogs.jsx` 的 `Modal`（`AddFeedDialog` 用的） | 无 Esc | 按 Esc 穿到 `window`，**整个设置页关掉**，别处填了一半的内容一起丢 |
+| `ChannelPicker.jsx` | 无 Esc | 浮层关不掉，底下的搜索框却被清空 —— 生效的是另一个操作 |
+| `OpmlImport.jsx` | 无 Esc | 已勾选的一串待导入源随设置页一起丢 |
+| `dialogs.jsx` 的 `GroupField` | 冒泡 | 菜单展开时按 Esc 会先把整个对话框关掉 |
+
+- ★ **为什么用原生 `document` 监听而不是 React `onKeyDown`**：设置页在 `window` 上挂了
+  「Esc = 关闭整页」。React 合成事件挂在根容器上，它的 `stopPropagation` 只拦 React 树上的
+  传播 —— 而 `document` 比 `window` 先收到事件，挂 `document` 再 `stopPropagation` 才截得住。
+- ★ **为什么 `GroupField` 必须用捕获阶段**：三层都挂冒泡时「先注册的先跑」，而菜单是
+  **展开时才注册**的，永远排最后 ⇒ 关菜单必然连对话框一起关。捕获先于冒泡，菜单才抢得先。
+- ★ `OpmlImport` 是**内联表单**不是模态，所以只在焦点位于表单内时响应（`box.contains`）：
+  用户在设置页别处按 Esc 时不该被它吃掉。导入进行中（`busy`）也不响应。
+- 新增 `scripts/check-escape-order.mjs`：真 Chrome + 真 React 组件 + 真 `KeyboardEvent`，
+  5 个场景 + **2 条反向对照**（把 `document` 改成 `window`、把捕获改成冒泡，都必须变红）。
+
+### 三、删划线加二次确认
+
+- 之前 `onRemove(item.id)` 直接删。划线只存在本地 `data.json`，**没有回收站、没有历史版本**，
+  误触一次就真没了 —— 这类不可逆的破坏比任何卡顿都严重。
+- 做法是**原地换按钮**：第一次点把图标换成「确认删除」，再点一次才真删，4 秒自动复位。
+  没弹模态 —— 删除是高频小动作，弹窗要多一次点击和一次视觉跳转，拦住手滑不需要那么重。
+- ★ **不用红色**：本项目没有 danger 语义色变量，硬写色值会在六种纸色 × 宿主明暗两态下踩
+  对比度。这条判据要的是「两个动作」，颜色不是必需品；用 `--npr-fg` 保证任何主题都够。
+- ★ CSS 里 `.npr-mark-action` 把宽度定死 20px，确认态必须 `width: auto` ——
+  不放宽会把「确认删除」四个字裁掉，那比没有确认更糟（用户看不出自己点了什么）。
+- 新增 `scripts/check-mark-delete.mjs`：真 Chrome 点两次，验「第一次不许删」「只影响被点的
+  那一行」「4.5 秒后自己复位」，外加一条反向对照（改回直接删 ⇒ 必须变红）。
+
+### 四、对报告的两处更正（连同我自己的一个错判）
+
+- 报告说「`fulltext.js` 抓正文、`archive.js` 补全历史都对 feed 的 URL 直接 fetch」——
+  **不准确**：两个文件都是**纯解析模块，零网络代码**。真正发请求的只有 `service.js` 的
+  `hydrateBody`（已守卫）与 `fetchText`（抓 feed，刻意不设限）。`backfillEntry` 只构造条目
+  （`html: ''`、`bodyDropped: true`）不抓正文；`discoverArchive` 走 `acceptUrl` 强制同源。
+  ⇒ **SSRF 面是闭合的**，报告结论方向对、定位错。
+- 报告说「`AddFeedDialog` 没拦 Esc」—— **这条是对的，我一开始判它「过时」是错的**：
+  `dialogs.jsx` 里那段 `escape` + `stopPropagation` 属于 `GroupField`（下拉菜单），
+  `AddFeedDialog` 用的 `Modal` 确实没有。修 `Modal` 一处，所有对话框一起受益。
+- 报告说「1537 个测试用例」—— 实际 **1878**。它读的是 README 的旧数字，没实跑。
+  ⇒ 对这份报告的**成本判断**（比如「虚拟列表改动小」）要打折：它给结论时没有实测。
+- ★ 不同意报告的两条：**书架虚拟列表**（要处理滚动时勾选状态保持，且 `verify:book-layout`
+  那套真机几何断言会因「元素不在 DOM 里」大面积失效 —— 会把低风险优化变成测试体系重建）、
+  **README 砍到 300 行**（那里面是判据史，是这个项目最值钱的资产；该加导航，不是砍）。
+
+### 五、验证
+
+- 定向：`subscriptions-render` + `reader-body-render` + `client-runtime` + `build` = **48/48**。
+- 新增两条真 Chrome 守卫全绿：`check-escape-order`（5 场景 + 2 反向对照）、
+  `check-mark-delete`（4 组断言 + 1 反向对照）。
+- `check-classes`：393 定义 / 417 使用（新类名 `is-confirming` 被正确识别，计数未变；
+  未定义仍只有那个**刻意保留**的 `npr-skill-head`）。`build` 通过（client 912.8 → 915.9 KB）。
+- ★ 写 `check-escape-order.mjs` 时自己踩了 0.6.0 那个坑：探针模板串的注释里写了反引号，
+  模板串提前闭合 —— 而**产物仍然语法合法**，报错是 `SyntaxError: Unexpected identifier`。
+  这正好印证了那句「构建能过 ≠ 代码能跑」，也是本项目坚持「真跑产物」的理由。
+
 ## 0.24.4 — 2026-10-24
 
 **主题：第三方核查报告里「必须做（保命）」的三条 —— 把仓库放进版本控制、给外抓加私网守卫、

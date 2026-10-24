@@ -1637,6 +1637,17 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 }
 .npr-mark-action + .npr-mark-action { margin-left: 0; }
 .npr-mark-action:hover { background: color-mix(in srgb, var(--npr-fg) 8%, transparent); color: var(--npr-fg); }
+/* 删除的二次确认：第一次点击只把图标换成「确认删除」，再点一次才真删。
+   ★ 宽度必须跟着变：上面那条把宽度定死在 20px，不放宽会把文字裁掉 ——
+     那比没有确认更糟（用户看不出自己点了什么）。
+   ★ 不用红色：本项目没有 danger 语义色变量，硬写色值会在六种纸色 × 宿主明暗两态下
+     踩对比度；用 --npr-fg 保证任何主题下都够对比度。 */
+.npr-mark-action.is-confirming {
+  width: auto; padding: 0 6px; white-space: nowrap;
+  background: color-mix(in srgb, var(--npr-fg) 10%, transparent);
+  color: var(--npr-fg); font-size: 10.5px; line-height: 1;
+}
+.npr-mark-action.is-confirming:hover { background: color-mix(in srgb, var(--npr-fg) 16%, transparent); }
 .npr-mark-note { margin: 0; padding: 5px 7px; border-radius: 6px; background: color-mix(in srgb, var(--npr-fg) 4%, transparent); color: var(--npr-muted); font-size: 10.5px; line-height: 1.6; white-space: pre-wrap; }
 .npr-mark-editor { display: grid; gap: 5px; }
 .npr-mark-editor textarea {

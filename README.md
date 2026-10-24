@@ -539,7 +539,7 @@ npm run build      # 产出 lib/index.js（host 半区）+ lib/client.js（clien
 npm test           # 1878 个用例，node --test（含一次真构建 + 一次真执行客户端产物 + 一次真渲染组件）
 npm run contract   # 与 DSH 宿主的契约守卫，0 ERROR 才算过
 npm run check      # build + test + contract
-npm run verify     # check + 六套主题 × 全部 --npr-* 令牌的对比度核对
+npm run verify     # check + 对比度核对 + 菜单禁用态 + Esc 三层顺序 + 删划线二次确认
 
 npm run verify:layout   # 侧栏的真几何：真 Chrome 量像素（没装 Chrome 时以 2 退出，不静默跳过）
 npm run verify:book-layout  # 书页区的真几何：目录在左 / 伴读在右 / 浮层不压工具栏 / 导出块不挤列表（同样需要 Chrome）
@@ -553,6 +553,13 @@ npm run verify:book-skill-mutants  # 15 个变异体：把「导出 skill 包」
 
 npm run verify:build-guard        # 反向对照：把 writeSkill 那行真删换成 `void dir;`，构建**必须**被拒绝
                                    # 退出码：0 = 闸门有牙 · 1 = 闸门失效（构建照常通过）· 2 = 锚点没了
+
+npm run verify:escape             # Esc 的三层顺序：真 Chrome + 真 React 组件 + 真 KeyboardEvent。
+                                   # 验「关下拉菜单不连坐对话框」「Esc 不穿到 window 把设置页一起关掉」
+                                   # 「焦点在表单外时不抢 Esc」。含 2 条反向对照（把 document 改成 window、
+                                   # 把捕获改成冒泡，都必须变红）。
+npm run verify:mark-delete        # 删划线的二次确认：真 Chrome 点两次，验「第一次点击不许删」
+                                   # 「确认态只属于被点的那一行」「4 秒后自己复位」。含 1 条反向对照。
 
 node scripts/catalog-health.mjs --limit 40       # 目录体检（小样本先验）
 node scripts/catalog-health.mjs                  # 全量抓一遍（两类目录），写 src/data/catalog-health.json
@@ -587,6 +594,8 @@ node scripts/prune-catalog.mjs --apply       # 按计划裁剪内置目录（先
 2. **宿主 DOM 锚点 / CSS Module 类名片段** —— 选择器写错一个字，规则静默不生效。
 3. **`dsh.client.inject` 预加载清单** —— 包名拼错 ⇒ 某个能力时有时无。
 4. **版本声明纪律** —— `peerDependencies` 不得含 `@deepseek-ai/dsh-*`；`dsh.engines.dsh` 必须是宽松范围。
+   `engines.node` 声明**运行时**下限：`>=18`（来自 `AbortSignal.timeout` 的 17.3 与 `structuredClone` 的 17，
+   取 LTS 边界）。没有这个字段时，旧 Node 上的症状是「语法全过、API 不存在」，报错点离原因很远。
 5. **挂载行契约** —— `cordis.patch.yml` 的行 `name` 必须等于包名。
 6. **构建产物** —— 宿主产物会被**真的 `import()`**，并要求导出 `apply`（或 default）与 `inject`；
    ModuleLoader id 与包名一致；react 保持外置（否则会出现两份 react）。
