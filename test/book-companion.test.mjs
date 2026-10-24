@@ -20,6 +20,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { test, describe } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { OCR_TIMEOUT_MS } from '../src/host/ocr.js';
 
 const clientDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'client');
 const hostDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'host');
@@ -250,5 +251,167 @@ describe('伴读样式与文章伴读同款（2026-10-09 用户要求）', () =>
     // PromptManager 真的消费 scope（写死作用域的话这两个 prop 就是摆设）。
     assert.match(promptManager, /readQuickPrompts\(scope\)/);
     assert.match(promptManager, /saveQuickPrompts\([^)]*scope\)/);
+  });
+});
+
+/**
+ * 扫描页的本地 OCR：接线与「谁优先」。
+ *
+ * ★ 这一组仍然是**源码文本**断言，所以它证明不了「点一下真的能认出字」。
+ *   它能证明的是两类**只在真机上才暴露**的错：
+ *     1. 传了 `onOcr` 却没传 `ocrNeeded` ⇒ 按钮永远不出现，功能等于没做，
+ *        而源码里每一行看着都对；
+ *     2. 把「文字层优先」写反 ⇒ 扫描页正常，但**有文字层的页面**会被一张
+ *        更差的 OCR 结果顶掉（用户只会觉得「AI 引用的原文总是错几个字」）。
+ *   第 2 类下面有一条**反向对照**：把优先级对调之后，同一条判据必须不成立。
+ */
+describe('扫描页 OCR：接线与优先级', () => {
+  const libraryApi = readFileSync(join(clientDir, 'library-api.js'), 'utf8');
+
+  test('BookReader → BookCompanion 的 5 个 OCR props 都显式传了', () => {
+    const props = propsOf(openTagOf(bookReader, 'BookCompanion'));
+    for (const name of ['onOcr', 'ocrNeeded', 'ocrUsed', 'ocrBusy', 'ocrError']) {
+      assert.ok(props.has(name), `漏了 ${name} —— 面板里那一块会静默不工作`);
+    }
+    // 面板这一侧必须真的声明了它们（只传不接 = 白传）。
+    assert.match(bookCompanion, /onOcr,\s*ocrNeeded = false,\s*ocrUsed = false,\s*ocrBusy = false,\s*ocrError = ''/);
+  });
+
+  test('★ 文字层优先：有文字层时绝不用 OCR 顶掉它', () => {
+    const line = bookReader.match(/const contextText = ([^;]+);/);
+    assert.notEqual(line, null, '找不到 contextText 的赋值 —— 断言失去对象');
+    assert.match(line[1], /pageText\.trim\(\) !== ''\s*\?\s*pageText\s*:\s*ocrText/);
+
+    // ★ 反向对照必须落在**真源码**上：把那一行换成对调版，同一条判据必须不成立。
+    //   （早先这里写成对一个手写字面量 `swapped` 做 doesNotMatch —— 那是在断言
+    //    我自己刚写的那一行，与源码无关，永远是绿的。）
+    const mutated = bookReader.replace(
+      /const contextText = [^;]+;/,
+      "const contextText = ocrText.trim() !== '' ? ocrText : pageText;",
+    );
+    assert.notEqual(mutated, bookReader, '变异没生效 —— 正则没命中，这条对照是空转');
+    const mutatedLine = mutated.match(/const contextText = ([^;]+);/)[1];
+    assert.doesNotMatch(mutatedLine, /pageText\.trim\(\) !== ''\s*\?\s*pageText\s*:\s*ocrText/);
+  });
+
+  test('★ ocrNeeded 必须同时要求「文字层为空」与「还没识别过」', () => {
+    const line = bookReader.match(/const ocrNeeded = ([^;]+);/);
+    assert.notEqual(line, null, '找不到 ocrNeeded 的赋值');
+    assert.match(line[1], /textLoaded/);
+    assert.match(line[1], /pageText\.trim\(\) === ''/);
+    assert.match(line[1], /ocrText\.trim\(\) === ''/);
+    // 少了 `ocrText` 那一半：识别成功之后按钮还挂着，用户会以为没生效，反复点。
+    assert.doesNotMatch(line[1].replace(/ocrText\.trim\(\) === ''/, ''), /ocrText/);
+  });
+
+  test('按钮只在 ocrNeeded 时渲染，且忙碌态同时给出 disabled 与「正在…」文案', () => {
+    assert.match(bookCompanion, /\{ocrNeeded && typeof onOcr === 'function' && \(/);
+    assert.match(bookCompanion, /disabled=\{ocrBusy\}/);
+    // 「置灰必须配文案」：只有 disabled 没有「正在识别」，用户会以为按钮坏了。
+    assert.match(bookCompanion, /ocrBusy \? '正在识别这一页…'/);
+    // 失败要落在面板里（`role="alert"`），不能只弹一个会消失的提示。
+    assert.match(bookCompanion, /className="npr-companion-ocr-error" role="alert"/);
+  });
+
+  test('runOcr 真的按 200 DPI 重渲染，并把 data URL 交给 ocrBookPage', () => {
+    const at = bookReader.indexOf('const runOcr = useCallback(');
+    assert.notEqual(at, -1, '找不到 runOcr');
+    const body = callBody(bookReader, at);
+
+    // DPI：必须走常量，而且常量不是 72（= 1:1，屏幕上那张画布只有 ~110 DPI）。
+    assert.match(bookReader, /const OCR_RENDER_DPI = (\d+);/);
+    const dpi = Number(bookReader.match(/const OCR_RENDER_DPI = (\d+);/)[1]);
+    assert.ok(dpi >= 150, `OCR 渲染 DPI 只有 ${dpi}，正文会掉字（实测 200 是平衡点）`);
+    assert.match(body, /scale: OCR_RENDER_DPI \/ 72/);
+
+    // 必须自己填白底再渲染：透明通道叠到黑底上会一个字都认不出来。
+    assert.match(body, /fillStyle = '#ffffff'/);
+    assert.match(body, /fillRect\(0, 0, canvas\.width, canvas\.height\)/);
+    // 送出去的必须是 data URL（宿主只认这个，见 decodeImagePayload）。
+    assert.match(body, /toDataURL\('image\/jpeg'/);
+    assert.match(body, /await ocrBookPage\(book\.id, page, image\)/);
+  });
+
+  test('OCR 结果只在**同一页**时才算数（翻页后立刻失效）', () => {
+    assert.match(bookReader, /const ocrText = ocrState\.page === page \? ocrState\.text : '';/);
+    // 反向对照：如果哪天写成「不看 page」，这条就不成立 —— 那个 bug 会让伴读
+    // 拿第 60 页的识别结果回答第 61 页，而且看起来完全正常。
+    assert.doesNotMatch(bookReader, /const ocrText = ocrState\.text;/);
+  });
+
+  test('客户端两个 API 都指向 /ocr，且 POST 的超时比宿主长', () => {
+    assert.match(libraryApi, /fetchOcrPage[\s\S]*?`\/ocr\?bookId=\$\{encodeURIComponent\(bookId\)\}&page=\$\{Number\(page\)\}`/);
+    assert.match(libraryApi, /ocrBookPage[\s\S]*?jsonRequest\('\/ocr',[\s\S]*?timeoutMs: 120_000/);
+
+    // ★ 这条必须是**跨半区**比对（从客户端源码里把数字抠出来，与宿主常量比），
+    //   写成 `assert.ok(120_000 > 60_000)` 等于在断言两个我自己刚打的字面量。
+    const clientTimeout = Number(libraryApi.match(/ocrBookPage[\s\S]*?timeoutMs: ([\d_]+)/)[1].replace(/_/g, ''));
+    assert.ok(
+      clientTimeout > OCR_TIMEOUT_MS,
+      `客户端 ${clientTimeout} ms 不比宿主 ${OCR_TIMEOUT_MS} ms 长 —— 冷启动（约 30 秒）时客户端会先断开，`
+      + '表现是「第一次点识别永远失败、第二次却好了」',
+    );
+  });
+});
+
+/**
+ * 扫描页**自动**识别（0.24.8）。
+ *
+ * ★ 为什么改自动：用户原话「这太麻烦了吧」——一本 387 页的扫描书让用户
+ *   「翻一页点一次」是不现实的。识别是本机、免费、0.5–0.8 秒的，既然不要钱，
+ *   就不该要一次点击。
+ * ★ 这一组最想守住的是**hook 顺序**：`ocrNeeded` 必须声明在自动识别那个
+ *   `useEffect` **之前**。依赖数组是渲染期求值的普通表达式，声明在后面就是
+ *   `Cannot access 'ocrNeeded' before initialization` ⇒ 整个阅读页白屏。
+ *   0.20.6 已经因为同一类问题出过一次事故（`toggleImmersive`）。
+ *   `test/book-hooks-render.test.mjs` 会真渲染一次来兜住它，这里再加一条**源码顺序**
+ *   断言 —— 真渲染报错时只有一句「加载失败」，看不出是哪一行。
+ */
+describe('扫描页 OCR：自动识别', () => {
+  const autoEffectAt = bookReader.indexOf('void runOcr({ quiet: true })');
+
+  test('★ hook 顺序：`ocrNeeded` 必须声明在自动识别的 effect 之前（否则白屏）', () => {
+    assert.notEqual(autoEffectAt, -1, '找不到自动识别的 effect —— 断言失去对象');
+    const neededAt = bookReader.indexOf('const ocrNeeded =');
+    assert.notEqual(neededAt, -1, '找不到 ocrNeeded 的声明');
+    assert.ok(
+      neededAt < autoEffectAt,
+      '`const ocrNeeded` 声明在 effect 之后 —— 依赖数组会在渲染期读到 TDZ，整个阅读页会白屏',
+    );
+  });
+
+  test('自动识别有三道闸：伴读开着、有页要认、每页只试一次', () => {
+    const at = bookReader.lastIndexOf('useEffect(', autoEffectAt);
+    assert.notEqual(at, -1, '找不到自动识别的 useEffect');
+    const body = callBody(bookReader, at);
+    assert.match(body, /if \(!companion \|\| !ocrNeeded \|\| doc === null\) return undefined;/);
+    assert.match(body, /ocrAutoTriedRef\.current\.has\(page\)/);
+    assert.match(body, /ocrAutoTriedRef\.current\.add\(page\)/);
+    // 延迟必须走常量，且不能是 0（翻页键按住不放会连翻十几页，每页都起子进程）。
+    const delay = bookReader.match(/const OCR_AUTO_DELAY_MS = (\d+);/);
+    assert.notEqual(delay, null, '找不到 OCR_AUTO_DELAY_MS');
+    assert.ok(Number(delay[1]) >= 300, `延迟只有 ${delay[1]} ms，翻页途中会一路跑 OCR`);
+    assert.match(body, /setTimeout\([\s\S]*OCR_AUTO_DELAY_MS\)/);
+    // 清理定时器：翻到下一页时，上一页那个还没触发的必须被取消。
+    assert.match(body, /clearTimeout\(timer\)/);
+  });
+
+  test('★ 自动跑的时候不许弹 toast、不许留红色错误（用户根本没点过）', () => {
+    const at = bookReader.indexOf('const runOcr = useCallback(');
+    const body = callBody(bookReader, at);
+    // 「集合基数 + 集合内性质」写进同一条：每出现一次 setOcrError，就必须是 quiet 守卫过的。
+    const all = [...body.matchAll(/setOcrError\(/g)].length;
+    const guarded = [...body.matchAll(/if \(!quiet\) setOcrError\(/g)].length;
+    assert.ok(all >= 3, `只找到 ${all} 处 setOcrError，runOcr 的结构可能已经变了`);
+    assert.equal(guarded, all, `${all} 处 setOcrError 里只有 ${guarded} 处被 !quiet 守卫 —— 自动识别会糊用户一脸错误`);
+    // notify 同理（成功时那条 toast 在自动路径上也不该出现）。
+    assert.match(body, /if \(!quiet\) notify\?\./);
+    assert.doesNotMatch(body, /^\s*notify\?\./m);
+  });
+
+  test('面板上的按钮走的是**手动**版（不带 quiet），失败时仍然如实报错', () => {
+    const tag = openTagOf(bookReader, 'BookCompanion');
+    assert.match(tag, /onOcr=\{runOcr\}/);
+    assert.doesNotMatch(tag, /onOcr=\{\(\) => runOcr\(\{ quiet: true \}\)\}/);
   });
 });

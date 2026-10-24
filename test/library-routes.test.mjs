@@ -1430,3 +1430,189 @@ describe('划线 / 笔记', () => {
     assert.notEqual(res.body.length, 0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 本地 OCR（`GET/POST /ocr`）
+// ---------------------------------------------------------------------------
+
+/**
+ * 扫描页的 OCR 出口。
+ *
+ * ★ 这里全部用假依赖，**不起 `osascript`**：真机那条由 `test/ocr.test.mjs` 的
+ *   「调用形状」用例钉住（参数顺序、超时、临时文件扩展名），两边不重复。
+ * ★ 本组最想守住的一条是「**图片不合规时绝不能真的去识别**」：一次识别要 0.6–0.8 秒
+ *   并且要起一个子进程，如果校验放在识别之后，一个写错请求体的客户端会把宿主的
+ *   子进程队列塞满 —— 而界面上只会看到「一直在转」。
+ */
+describe('本地 OCR 路由', () => {
+  const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]);
+  const PNG_B64 = PNG_BYTES.toString('base64');
+  const GIF_B64 = Buffer.from('GIF89a..................').toString('base64');
+
+  function ocrHarness({ supported = true, recognize, cached = {} } = {}) {
+    const ocrCalls = { read: [], put: [], recognize: [] };
+    const digestStore = {
+      readOcrPage: async (bookId, page) => {
+        ocrCalls.read.push({ bookId, page });
+        return cached[`${bookId}:${page}`] ?? '';
+      },
+      putOcrPage: async (bookId, page, payload) => {
+        ocrCalls.put.push({ bookId, page, payload });
+        return { written: payload.text.trim() !== '', pages: 1 };
+      },
+    };
+    const ocrRunner = {
+      supported,
+      unavailableReason: supported ? '' : '这台机器不是 macOS，本地 OCR 用不了',
+      recognize: async (buffer) => {
+        ocrCalls.recognize.push(buffer);
+        return recognize ? recognize(buffer) : { text: '识别出来的正文', lines: 2, ms: 640 };
+      },
+    };
+    return { ...harness({ digestStore, ocrRunner }), ocrCalls };
+  }
+
+  const POST = (body, { type = 'application/json' } = {}) => fakeReq({
+    url: `${API}/ocr`,
+    method: 'POST',
+    headers: { 'content-type': type },
+    body: JSON.stringify(body),
+  });
+
+  it('夹具里没有 ocrRunner ⇒ GET 与 POST 都回 501（不是 200 然后什么也没发生）', async () => {
+    const { api } = harness();
+    for (const req of [fakeReq({ url: `${API}/ocr?bookId=b1&page=60` }), POST({ bookId: 'b1', page: 60, image: PNG_B64 })]) {
+      const res = fakeRes();
+      await api.handler(req, res);
+      assert.equal(res.status, 501);
+      assert.match(res.json.error, /没有接上/);
+    }
+  });
+
+  it('GET 读缓存：命中就返回文本，未命中返回空串 + cached:false', async () => {
+    const { api, ocrCalls } = ocrHarness({ cached: { 'b1:60': '第六十页的正文' } });
+
+    const hit = fakeRes();
+    await api.handler(fakeReq({ url: `${API}/ocr?bookId=b1&page=60` }), hit);
+    assert.equal(hit.status, 200);
+    assert.deepEqual(hit.json, { ok: true, page: 60, text: '第六十页的正文', cached: true });
+
+    const miss = fakeRes();
+    await api.handler(fakeReq({ url: `${API}/ocr?bookId=b1&page=61` }), miss);
+    assert.deepEqual(miss.json, { ok: true, page: 61, text: '', cached: false });
+
+    // ★ page 必须真的变成 number：客户端拼的是字符串，`"60"` 传到 store 会查不到。
+    assert.deepEqual(ocrCalls.read, [{ bookId: 'b1', page: 60 }, { bookId: 'b1', page: 61 }]);
+    assert.equal(ocrCalls.recognize.length, 0, 'GET 绝不能触发识别');
+  });
+
+  it('GET 参数非法 ⇒ 400（书 id 与页码分开报）', async () => {
+    const { api, ocrCalls } = ocrHarness();
+    const cases = [
+      [`${API}/ocr?bookId=..%2Fetc&page=1`, /无效的书 id/],
+      [`${API}/ocr?bookId=b1&page=0`, /正整数/],
+      [`${API}/ocr?bookId=b1&page=-3`, /正整数/],
+      [`${API}/ocr?bookId=b1&page=1.5`, /正整数/],
+      [`${API}/ocr?bookId=b1&page=abc`, /正整数/],
+      [`${API}/ocr?bookId=b1`, /正整数/],
+    ];
+    for (const [url, pattern] of cases) {
+      const res = fakeRes();
+      await api.handler(fakeReq({ url }), res);
+      assert.equal(res.status, 400, `${url} 应该是 400，实际 ${res.status}`);
+      assert.match(res.json.error, pattern);
+    }
+    assert.equal(ocrCalls.read.length, 0, '参数非法时不该去读盘');
+  });
+
+  it('POST 非 JSON body ⇒ 415；方法不对 ⇒ 405', async () => {
+    const { api, ocrCalls } = ocrHarness();
+    const noType = fakeRes();
+    await api.handler(POST({ bookId: 'b1', page: 1, image: PNG_B64 }, { type: 'text/plain' }), noType);
+    assert.equal(noType.status, 415);
+
+    const wrongMethod = fakeRes();
+    await api.handler(fakeReq({ url: `${API}/ocr`, method: 'PUT' }), wrongMethod);
+    assert.equal(wrongMethod.status, 405);
+    assert.equal(ocrCalls.recognize.length, 0);
+  });
+
+  it('★ 平台不支持 ⇒ 501 且把原因说出来（不藏成「未知错误」）', async () => {
+    const { api, ocrCalls } = ocrHarness({ supported: false });
+    const res = fakeRes();
+    await api.handler(POST({ bookId: 'b1', page: 1, image: PNG_B64 }), res);
+    assert.equal(res.status, 501);
+    assert.match(res.json.error, /不是 macOS/);
+    assert.equal(ocrCalls.recognize.length, 0);
+  });
+
+  it('★ 图片不合规（坏 base64 / 非位图）⇒ 400 或 415，且**一次识别都不许跑**', async () => {
+    const { api, ocrCalls } = ocrHarness();
+
+    const badBase64 = fakeRes();
+    await api.handler(POST({ bookId: 'b1', page: 1, image: '@@@@' }), badBase64);
+    assert.equal(badBase64.status, 400);
+    assert.match(badBase64.json.error, /不是合法的 base64/);
+
+    const missing = fakeRes();
+    await api.handler(POST({ bookId: 'b1', page: 1 }), missing);
+    assert.equal(missing.status, 400);
+    assert.match(missing.json.error, /缺少图片数据/);
+
+    // 合法 base64，但不是 PNG / JPEG —— 必须在**解码之后、识别之前**挡住。
+    const notImage = fakeRes();
+    await api.handler(POST({ bookId: 'b1', page: 1, image: GIF_B64 }), notImage);
+    assert.equal(notImage.status, 415);
+    assert.match(notImage.json.error, /PNG \/ JPEG/);
+
+    assert.equal(ocrCalls.recognize.length, 0, '不合规的图被送去识别了 —— 校验顺序错了');
+    assert.equal(ocrCalls.put.length, 0);
+  });
+
+  it('POST 正常路径：识别 → 落盘 → 回报字数与耗时', async () => {
+    const { api, ocrCalls } = ocrHarness();
+    const res = fakeRes();
+    await api.handler(POST({ bookId: 'b1', page: 60, image: `data:image/png;base64,${PNG_B64}` }), res);
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, {
+      ok: true, page: 60, text: '识别出来的正文', lines: 2, ms: 640, chars: 7, saved: true,
+    });
+    // data URL 前缀必须被剥掉，送去识别的字节要与原图一致。
+    assert.equal(ocrCalls.recognize.length, 1);
+    assert.deepEqual(ocrCalls.recognize[0], PNG_BYTES);
+    // 落盘拿到的是文本与耗时，不是整张图（`ocr.json` 里不该出现几百 KB 的 base64）。
+    assert.deepEqual(ocrCalls.put, [{ bookId: 'b1', page: 60, payload: { text: '识别出来的正文', ms: 640 } }]);
+  });
+
+  it('识别结果为空 ⇒ saved:false（空文本不落盘，下次点还能重试）', async () => {
+    const { api } = ocrHarness({ recognize: async () => ({ text: '   ', lines: 0, ms: 300 }) });
+    const res = fakeRes();
+    await api.handler(POST({ bookId: 'b1', page: 60, image: PNG_B64 }), res);
+    assert.equal(res.status, 200);
+    assert.equal(res.json.saved, false);
+    assert.equal(res.json.chars, 0);
+  });
+
+  it('识别抛错 ⇒ 500，并把原因带出来（超时 / 没跑起来是两句不同的话）', async () => {
+    const { api } = ocrHarness({
+      recognize: async () => { throw new Error('本地 OCR 超时（60 秒）'); },
+    });
+    const res = fakeRes();
+    await api.handler(POST({ bookId: 'b1', page: 60, image: PNG_B64 }), res);
+    assert.equal(res.status, 500);
+    assert.match(res.json.error, /超时/);
+  });
+
+  it('POST 的 bookId / page 也要校验（body 来的，一样不能信）', async () => {
+    const { api, ocrCalls } = ocrHarness();
+    const badId = fakeRes();
+    await api.handler(POST({ bookId: 'a/b', page: 1, image: PNG_B64 }), badId);
+    assert.equal(badId.status, 400);
+
+    const badPage = fakeRes();
+    await api.handler(POST({ bookId: 'b1', page: 0, image: PNG_B64 }), badPage);
+    assert.equal(badPage.status, 400);
+
+    assert.equal(ocrCalls.recognize.length, 0);
+  });
+});

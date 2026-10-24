@@ -235,7 +235,7 @@ export function createDigestStore({ rootDir, log = () => {} } = {}) {
   async function sizeOf(bookId) {
     let total = 0;
     const dir = dirOf(bookId);
-    for (const name of ['meta.json', 'outline.json', 'pages.jsonl']) {
+    for (const name of ['meta.json', 'outline.json', 'pages.jsonl', 'ocr.json']) {
       const info = await stat(join(dir, name)).catch(() => null);
       if (info?.isFile()) total += info.size;
     }
@@ -388,6 +388,86 @@ export function createDigestStore({ rootDir, log = () => {} } = {}) {
     return out;
   }
 
+  /**
+   * 扫描页的 OCR 文本（`ocr.json`，一页一条）。
+   *
+   * ★ 为什么单独一个文件、**不往 `pages.jsonl` 里追加**：那个文件是**抽取任务的
+   *   断点续跑凭据**（`meta.task.cursor` 按它前进），而 OCR 是一页一页随手发生的。
+   *   往里插一条会让「已抽多少页」与「cursor 走到哪」对不上；而重写整个文件又要与
+   *   正在跑的抽取抢同一个文件。两件事的写入者不同、生命周期不同，就放两个文件。
+   * ★ 上限 3000 页：一页中文正文约 1–2 KB，3000 页约 3–6 MB，比 `data.json` 小一个
+   *   量级；超出时按 `at` 淘汰最旧的 —— 不设上限的话，长年累月会变成第二个
+   *   「8 MB 的单文件」。
+   */
+  const OCR_PAGE_LIMIT = 3000;
+
+  function ocrFileOf(bookId) {
+    return join(dirOf(bookId), 'ocr.json');
+  }
+
+  async function readOcr(bookId) {
+    /**
+     * ★ 这里**故意**与 `readMeta` / `readOutline` 不同：那两个是「事实」，坏了必须
+     *   抛出去让人知道；而 `ocr.json` 是**缓存** —— 它的内容随时可以从书上重算。
+     *   如果这里跟着抛，一次半截写入（进程被杀、磁盘满）就会让这一页**永远**识别
+     *   不了：读要抛（界面当没识别过）、写也要抛（因为 `putOcrPage` 先读后写）
+     *   ⇒ 用户点多少次「识别这一页」都只会得到同一个 500，只能自己去删文件。
+     *   所以坏文件当空、记一条日志，下一次写入自然把它覆盖成好的。
+     */
+    let value;
+    try {
+      value = await readJson(ocrFileOf(bookId));
+    } catch (error) {
+      log(`digest-store: ocr.json 解析失败，当作空缓存（下次写入会覆盖）：${error.message}`);
+      return {};
+    }
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return {};
+    const out = {};
+    for (const [key, entry] of Object.entries(value)) {
+      const page = Number(key);
+      if (!Number.isInteger(page) || page < 1) continue;
+      if (entry === null || typeof entry !== 'object') continue;
+      if (typeof entry.text !== 'string') continue;
+      out[page] = { text: entry.text, at: Number(entry.at) || 0, ms: Number(entry.ms) || 0 };
+    }
+    return out;
+  }
+
+  /** 读某一页的 OCR 文本；没有就是 `''`（不是 `undefined` —— 调用方只需要「有没有字」）。 */
+  async function readOcrPage(bookId, page) {
+    const all = await readOcr(bookId);
+    return all[page]?.text ?? '';
+  }
+
+  /**
+   * 写入一页的 OCR 文本。
+   *
+   * ★ 空文本**不写**：OCR 一个字都没认出来时，写进去等于把「这一页没有文字」
+   *   永久钉死 —— 而它可能只是这一版模型没认出来，换个 DPI 重试就好了。
+   *   不写的话，下次点「识别这一页」会真的重试。
+   */
+  async function putOcrPage(bookId, page, { text, ms = 0, at = Date.now() }) {
+    if (!Number.isInteger(page) || page < 1) throw new TypeError('digest-store: page 必须是正整数');
+    if (typeof text !== 'string') throw new TypeError('digest-store: OCR 文本必须是字符串');
+    if (text.trim() === '') return { written: false, pages: 0 };
+    await ensureDir(bookId);
+    const all = await readOcr(bookId);
+    all[page] = { text, at, ms };
+    const pages = Object.keys(all).map(Number);
+    if (pages.length > OCR_PAGE_LIMIT) {
+      const keep = pages
+        .map((n) => ({ n, at: all[n].at }))
+        .sort((a, b) => b.at - a.at)
+        .slice(0, OCR_PAGE_LIMIT);
+      const next = {};
+      for (const { n } of keep) next[n] = all[n];
+      await writeJsonAtomic(ocrFileOf(bookId), next);
+      return { written: true, pages: OCR_PAGE_LIMIT };
+    }
+    await writeJsonAtomic(ocrFileOf(bookId), all);
+    return { written: true, pages: pages.length };
+  }
+
   return {
     digestsDir,
     skillsDir,
@@ -399,6 +479,10 @@ export function createDigestStore({ rootDir, log = () => {} } = {}) {
     writeOutline,
     appendPages,
     readPages,
+    ocrFileOf,
+    readOcr,
+    readOcrPage,
+    putOcrPage,
     writeChapterTexts,
     readChapterText,
     digestFileOf,

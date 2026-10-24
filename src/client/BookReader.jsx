@@ -37,7 +37,8 @@ import { DigestCard } from './DigestCard.jsx';
 import { Icon } from './icons.jsx';
 import { forgetBook, loadPdfjs, openCachedBook } from './pdfjs.js';
 import {
-  fetchAnnotations, fetchChapterDigest, fetchDigestStatus, postAnnotation, postDigestGenerate,
+  fetchAnnotations, fetchChapterDigest, fetchDigestStatus, fetchOcrPage, ocrBookPage,
+  postAnnotation, postDigestGenerate,
   postDigestPages, postDigestSegment, postDigestStop, resetDigest, saveBookState,
 } from './library-api.js';
 import {
@@ -62,6 +63,24 @@ import {
  * 160ms 在真机上刚好落在「拖动结束到视觉注意到糊」之间。
  */
 const REDRAW_DEBOUNCE_MS = 160;
+
+/**
+ * 送去 OCR 的那张位图按多少 DPI 渲染。
+ *
+ * ★ 不能用屏幕上那张画布：它是「适应宽度」画出来的，900px 宽的面板里只有 ~110 DPI，
+ *   实测这个分辨率下笔画密的字会掉（「繁」「藏」这类）。200 DPI 是实测的平衡点：
+ *   1653×2339 的一页 JPEG 约 300–900 KB，Vision 0.6–0.8 秒认完，中文几乎无误。
+ */
+const OCR_RENDER_DPI = 200;
+
+/**
+ * 自动识别前等多久（毫秒）。
+ *
+ * ★ 700 ms 是「翻页停下来了」与「不用等太久」的折中。按住翻页键会连翻十几页，
+ *   不延迟的话每一页都要渲染一张 200 DPI 位图、起一个 `osascript` 子进程 ——
+ *   而用户其实只想看最后一页。
+ */
+const OCR_AUTO_DELAY_MS = 700;
 
 
 /** 页码输入的合法范围与它对应的提示。 */
@@ -213,6 +232,65 @@ export function BookReader({
   const [modelCatalog, setModelCatalog] = useState(null);
   /** 当前页抽出来的文字（给伴读当上下文）；`page` 是它属于哪一页，防止跨页错配。 */
   const [pageTextState, setPageTextState] = useState(null);
+  /**
+   * 本地 OCR 认出来的那一页文字（扫描版专用）。
+   *
+   * ★ 与 `pageTextState` **分开存**：那一份是「PDF 自己的文字层」，这一份是「我们
+   *   自己认出来的」，两者的可信度不同（前者逐字精确、后者可能有个别错字）。
+   *   合成一个状态的话，「这一页到底有没有文字层」就再也答不出来了 ——
+   *   而那正是「要不要显示『识别这一页』」的判据。
+   * ★ 带 `page`：翻页时旧结果必须立刻失效，否则伴读会拿上一页的识别结果回答这一页。
+   */
+  const [ocrState, setOcrState] = useState({ page: 0, text: '' });
+  const [ocrBusy, setOcrBusy] = useState(false);
+  const [ocrError, setOcrError] = useState('');
+  /**
+   * ★ 光有 `ocrBusy` 挡不住**同一帧内的第二次点击**：React 的 `setState` 要到下一帧
+   *   才刷新闭包里的 `ocrBusy`，两次点击在同一帧里都能读到 `false` ⇒ 会并行起两个
+   *   200 DPI 渲染 + 两次 osascript（每个都要 0.7 秒、几百 KB 的 payload）。
+   *   必须再加一个 ref 做同步闸门。
+   */
+  const ocrBusyRef = useRef(false);
+  /**
+   * 已经**自动**试过的页（`Set<number>`）。
+   *
+   * ★ 为什么需要它：自动识别失败后（纯图片页、组件缺失），`ocrNeeded` 仍然是 true，
+   *   于是那个 effect 会一直重跑 —— 每翻回来一次就再起一个子进程、再糊一次错误。
+   *   记一笔之后，同一页只自动试一次；想再试由用户点按钮（那一次会显示错误）。
+   */
+  const ocrAutoTriedRef = useRef(new Set());
+  /**
+   * 「这一页有没有文字、要不要识别」这一组派生量。
+   *
+   * ★ 它们**必须定义在这里**（OCR 状态的旁边），不能留在组件末尾：自动识别那个
+   *   `useEffect` 要把 `ocrNeeded` 放进依赖数组，而依赖数组是在**渲染到那一行时**
+   *   求值的。留在下面的话，`useEffect(...)` 先执行、`const ocrNeeded` 还没初始化
+   *   ⇒ `Cannot access 'ocrNeeded' before initialization`，整个阅读页白屏。
+   *   （而且下面还有一个 `status === 'unsupported'` 的提前 return，hook 不能放到它后面。）
+   */
+  const textLoaded = pageTextState !== null && pageTextState.page === page;
+  /**
+   * 伴读该看到的那一页文字：**优先用 PDF 自己的文字层**，没有才用 OCR 认出来的。
+   *
+   * ★ 顺序不能反。文字层是逐字精确的（连标点、脚注编号都对），OCR 一定有个别错字；
+   *   只有在文字层为空（扫描版）时 OCR 才是唯一来源。
+   * ★ OCR 结果必须**同一页**才算（`ocrState.page === page`）：翻页后旧结果立刻失效，
+   *   否则伴读会拿第 60 页的识别结果去回答第 61 页 —— 那是最难被发现的一类错。
+   */
+  const pageText = textLoaded ? pageTextState.text : '';
+  const ocrText = ocrState.page === page ? ocrState.text : '';
+  const contextText = pageText.trim() !== '' ? pageText : ocrText;
+  /** 扫描页且还没识别：这才是「该给用户一个『识别这一页』按钮」的时刻。 */
+  const ocrNeeded = textLoaded && pageText.trim() === '' && ocrText.trim() === '';
+  /**
+   * 这一页的文字是**本机识别**出来的（不是 PDF 自带的文字层）。
+   *
+   * ★ 单独一路传给伴读面板，只为了让它把那句话说准。不区分的话，识别成功之后
+   *   面板显示的是「已带上这一页的文字」—— 与文字层的情况**一字不差**，而这两件事
+   *   的可靠性差一个量级（OCR 一定有错字，而错字恰恰是「AI 引用了错原文」的源头）。
+   *   用户需要知道自己在看哪一种。
+   */
+  const ocrUsed = pageText.trim() === '' && ocrText.trim() !== '';
   const canvasRef = useRef(null);
   const stageRef = useRef(null);
   /** 面板根节点：只用来量 `frame`（浮动按钮的定位基准，见上面 `frame` 的注释）。 */
@@ -916,6 +994,117 @@ export function BookReader({
     return () => { cancelled = true; };
   }, [companion, doc, page, status]);
 
+  // ---- 扫描页的本地 OCR ---------------------------------------------------
+  /**
+   * 这一页没有文字层时，先问宿主「以前识别过吗」。
+   *
+   * ★ 只在 `pageTextState` 已经就位、且**确实为空**时才问：文字层有字时问它是
+   *   白跑一趟（一次本机 HTTP + 一次 JSON 读盘），而每翻一页都要跑一次。
+   * ★ 失败一律当「没有」：路由没接上（501）、这本书从没识别过（空串）都走这里。
+   *   把错误弹给用户没有意义 —— 他还没做任何操作。
+   */
+  useEffect(() => {
+    if (pageTextState === null || pageTextState.page !== page) return undefined;
+    if (pageTextState.text.trim() !== '') return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const text = await fetchOcrPage(book.id, page);
+        if (!cancelled && text.trim() !== '') setOcrState({ page, text });
+      } catch {
+        // 见上：当「没识别过」。
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [book.id, page, pageTextState]);
+
+  /**
+   * 对**当前这一页**做本地 OCR。
+   *
+   * ★ 为什么要自己渲染一张 200 DPI 的位图，而不是拿屏幕上那张画布：屏幕上那张是
+   *   「适应宽度」画出来的，在 900px 宽的面板里只有 ~110 DPI —— 实测这个分辨率下
+   *   正文会掉字（尤其是笔画密的字）。200 DPI 是实测质量与体积的平衡点：
+   *   1653×2339 的一页 JPEG 约 300–900 KB，Vision 0.6–0.8 秒认完。
+   * ★ 为什么要 `fillRect` 一层白底：扫描页的 JPEG 解码后可能带透明通道（罕见），
+   *   叠到黑底上再 OCR 会一个字都认不出来，而界面上看起来完全正常。
+   * ★ 失败必须说出来（`ocrError`）：静默失败的话，用户点完按钮什么都没变，
+   *   会以为这个功能是假的 —— 而那正是 0.24.6 刚修完的那类毛病。
+   *
+   * ★ `quiet` 是给**自动识别**用的（见下面那个 effect）：自动跑的时候既不弹 toast、
+   *   也不在面板里留红色错误 —— 用户根本没点过任何东西，突然出现一段报错只会像
+   *   「这个插件坏了」。手动点的那一次仍然如实报错，因为那时是用户主动要一个结果。
+   */
+  const runOcr = useCallback(async (options) => {
+    const quiet = options?.quiet === true;
+    if (ocrBusyRef.current || doc === null) return;
+    ocrBusyRef.current = true;
+    setOcrBusy(true);
+    if (!quiet) setOcrError('');
+    try {
+      const pdfPage = await doc.getPage(page);
+      const viewport = pdfPage.getViewport({ scale: OCR_RENDER_DPI / 72 });
+      const canvas = globalThis.document?.createElement?.('canvas');
+      if (canvas === null || canvas === undefined) throw new Error('这个环境拿不到画布，识别不了');
+      canvas.width = Math.max(1, Math.round(viewport.width));
+      canvas.height = Math.max(1, Math.round(viewport.height));
+      const context = canvas.getContext('2d');
+      if (context === null) throw new Error('这个环境拿不到 2D 画布，识别不了');
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      await pdfPage.render({ canvasContext: context, viewport }).promise;
+      const image = canvas.toDataURL('image/jpeg', 0.85);
+      const result = await ocrBookPage(book.id, page, image);
+      const text = typeof result.text === 'string' ? result.text : '';
+      if (text.trim() === '') {
+        if (!quiet) setOcrError('这一页没认出字（可能是纯图片页，或者分辨率太低）');
+        return;
+      }
+      setOcrState({ page, text });
+      if (!quiet) notify?.(`第 ${page} 页认出 ${result.chars ?? 0} 个字（${result.ms ?? 0} ms，本地识别）`);
+    } catch (error) {
+      if (!quiet) setOcrError(error?.message ?? String(error));
+    } finally {
+      ocrBusyRef.current = false;
+      setOcrBusy(false);
+    }
+  }, [book.id, doc, notify, page]);
+
+  /**
+   * 扫描页**自动**识别：打开伴读、停在这一页一会儿，文字就自己补上了。
+   *
+   * ★ 为什么要自动：一本 387 页的扫描书，让用户「翻一页点一次」是不现实的 ——
+   *   那正是「按需」被读成「麻烦」的原因。识别是**本机、免费、0.5–0.8 秒**的，
+   *   既然不要钱，就不该要一次点击。
+   * ★ 为什么要延迟 700 ms：翻页键按住不放会连翻十几页。不延迟的话每一页都会起一个
+   *   `osascript` 子进程、渲染一张 200 DPI 的位图 —— 用户只会在最后一页停下来。
+   *   延迟之后，中途经过的页一个都不会真的跑。
+   * ★ 为什么只在**伴读面板打开**时跑：OCR 的唯一用途是把这一页喂给伴读。面板没开时
+   *   跑等于白花电，而用户翻书时最不缺的就是「后台在干活」。
+   * ★ 为什么每页只自动试一次（`ocrAutoTriedRef`）：失败之后 `ocrNeeded` 仍然是 true，
+   *   不记一笔的话这个 effect 会反复重试 —— 每翻回来一次就再糊一次错误。
+   *   想再试就点按钮，那一次会如实报错。
+   */
+  /**
+   * 换书时清掉「已自动试过」的记录。
+   *
+   * ★ 页号是**按书**的：第 60 页在 A 书里试过、失败，不该让 B 书的第 60 页也跟着
+   *   被跳过。不清的话，症状是「换一本扫描书之后，某些页永远不自动识别」——
+   *   而用户完全看不出规律。
+   */
+  useEffect(() => {
+    ocrAutoTriedRef.current.clear();
+  }, [book.id]);
+
+  useEffect(() => {
+    if (!companion || !ocrNeeded || doc === null) return undefined;
+    if (ocrAutoTriedRef.current.has(page)) return undefined;
+    const timer = setTimeout(() => {
+      ocrAutoTriedRef.current.add(page);
+      void runOcr({ quiet: true });
+    }, OCR_AUTO_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [companion, doc, ocrNeeded, page, runOcr]);
+
   // ---- 本书目录（抽取 → 分段）---------------------------------------------
   /**
    * 换书时重读这本书的目录状态。
@@ -1429,7 +1618,6 @@ export function BookReader({
     );
   }
 
-  const textLoaded = pageTextState !== null && pageTextState.page === page;
   /**
    * 正在看要点的那一章（`null` = 没展开）。
    *
@@ -1800,10 +1988,15 @@ export function BookReader({
               page,
               pages: numPages,
               loaded: textLoaded,
-              text: textLoaded ? pageTextState.text : '',
+              text: contextText,
               // 用户刚划的那一句（空串 = 没划）。进上下文键，所以划一次只重绑一次。
               quote: companionQuote,
             }}
+            onOcr={runOcr}
+            ocrNeeded={ocrNeeded}
+            ocrUsed={ocrUsed}
+            ocrBusy={ocrBusy}
+            ocrError={ocrError}
             onClose={() => setCompanion(false)}
             onManagePrompts={onManagePrompts}
             SessionProvider={SessionProvider}

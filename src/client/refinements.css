@@ -187,6 +187,14 @@
 .npr-companion-header strong { color: var(--npr-fg); font-size: 14px; }
 .npr-companion-context { padding: 11px 16px; border-bottom-color: color-mix(in srgb, var(--npr-fg) 9%, var(--npr-bg)); color: var(--npr-muted); }
 .npr-companion-context strong { color: var(--npr-fg); font-size: 12px; }
+/* 扫描页的本地 OCR 出口。虚线框 = 「这是一个可选动作」，不是错误提示。 */
+.npr-companion-ocr { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin: 10px 16px 0; padding: 9px 11px; border: 1px dashed color-mix(in srgb, var(--npr-accent-strong) 38%, var(--npr-border)); border-radius: 8px; background: color-mix(in srgb, var(--npr-accent) 6%, var(--npr-bg)); }
+.npr-companion-ocr small { color: var(--npr-muted); font-size: 10.5px; line-height: 1.4; }
+.npr-companion-ocr-btn { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 28px; padding: 0 11px; border: 1px solid transparent; border-radius: 999px; background: var(--npr-accent-strong); color: #fff; font: inherit; font-size: 11.5px; font-weight: 600; white-space: nowrap; cursor: pointer; transition: filter .14s ease; }
+.npr-companion-ocr-btn:hover:not(:disabled) { filter: brightness(1.08); }
+.npr-companion-ocr-btn:focus-visible { outline: 2px solid var(--npr-accent-strong); outline-offset: 2px; }
+.npr-companion-ocr-btn:disabled { opacity: .6; cursor: progress; }
+.npr-companion-ocr-error { flex: 1 0 100%; margin: 0; color: var(--npr-fg); font-size: 11px; line-height: 1.5; }
 .npr-companion-prompt-anchor { min-width: 0; width: 100%; flex: none; }
 .npr-companion-prompt-strip { display: flex; align-items: center; gap: 5px; min-width: 0; width: 100%; padding: 7px 14px 8px; white-space: nowrap; color: var(--npr-fg); }
 .npr-companion-prompt-scroll { display: flex; align-items: center; gap: 5px; min-width: 0; flex: 1; overflow-x: auto; overflow-y: hidden; overscroll-behavior-inline: contain; scrollbar-width: none; }
@@ -938,31 +946,33 @@
 .npr-book[data-tint="night"] .npr-book-meta { color: #8d949c; }
 .npr-book[data-tint="night"] .npr-book-swatch[aria-checked="true"] { box-shadow: 0 0 0 2px #0e1013, 0 0 0 4px var(--npr-accent-strong); }
 
-/* ---- 沉浸式阅读：**只留书页**（0.22.0 起；0.24.2 起**不再自动全屏**）----
+/* ---- 沉浸式阅读：**只收占位与干扰，不收控件**（0.22.0 起；0.24.2 不再自动全屏；
+        0.24.6 把「藏光」改回来）----
    ★ 用户对这一档的定义：「左边两列缩掉，只显示阅读的这一列，**但是点沉浸的时候
      窗口大小不动**，要全屏由用户自己点」。
    ★ 0.22.0 那版进沉浸会 `requestFullscreen()` —— 那是**另一件事**（全屏是用户对
      窗口的决定，macOS 还换 Space、有动画），0.24.2 删掉了。代价：宿主自己那一列
      在插件的挂载点之外，**插件改不到它的 CSS** ⇒ 不进全屏就收不掉它。要连它一起
-     收掉，用户自己按绿灯 / ⌃⌘F（写进了胶囊那颗的 title）。
-   ★ 所以这里藏掉胶囊那一行与元信息行、右下角按钮压到 `opacity: 0`。
-   ★ 为什么敢压到 0：退出入口不再是「那颗要看得见的按钮」。出口有三条，且第一条是
-     进入时**主动弹了提示**的：Esc / I 键、以及鼠标回到右下角（那颗按钮的位置没变，
-     hover 就恢复）。
-   ★ 舞台内边距同时收到最小：沉浸态的意义就是把这几十像素还给书页。 */
+     收掉，用户自己按绿灯 / ⌃⌘F（写进了胶囊那颗的 title，0.24.6 起这个键真的能用）。
+   ★ 0.24.2~0.24.5 那版把胶囊 `display: none`、把右下角按钮压到 `opacity: 0` ——
+     用户原话「原来的浮动工具按钮为什么没有了，应该存在啊」「顶上的工具条应该也在」。
+     沉浸要收的是**占位**与**干扰**，不是把这些控件从世界上删掉。 */
 .npr-book.is-immersive .npr-book-meta { display: none; }
 
 /* ---- 沉浸态：顶部工具条**滑出**、浮动按钮**保留**（0.24.6）----
-   ★ 为什么改：0.24.2 那版是 `display: none` + `fab { opacity: 0 }`，于是用户点了沉浸
-     之后看到的是「工具条和浮动按钮都不见了」—— 原话「应该存在啊」。沉浸要收的是
-     **占位**与**干扰**，不是把这些控件从世界上删掉。
-   ★ 热区直接用 `.npr-book-toolbar`（44px，本来就是宿主的窗口拖动区），不新加一层
-     绝对定位的透明 div：新加的那层会盖住拖动区，窗口就拖不动了。
+   ★ 热区直接用 `.npr-book-toolbar`（`.npr-book >` 那条把它压成 **10px** 高、铺满宽度，
+     本来就是宿主的窗口拖动区），不新加一层绝对定位的透明 div：新加的那层会盖住
+     拖动区，窗口就拖不动了。
+   ★ `padding-top: 10px` **不是**为了好看：拖动条只有 10px 高，而胶囊里的每一颗
+     `<button>` 都是宿主的 no-drag 洞（Chromium 按「并集 − 显式 no-drag」算拖动区，
+     且**不按 overflow 裁剪**）。胶囊若贴在 y=0，滑出时它的按钮正好落在拖动条里 ⇒
+     那一段拖动条被挖空、按下去拖不动窗口。留出这 10px 让胶囊整体落到拖动条下面。
    ★ 收起时必须 `pointer-events: none`，否则它会挡住下面书页顶部的划选。
    ★ 位置仍然是「不占位」：`position: absolute` 让它脱离流，书页照样往上顶 ——
      沉浸「把这几十像素还给书页」的意义没丢。 */
 .npr-book.is-immersive .npr-book-chrome {
   position: absolute; top: 0; left: 0; right: 0;
+  padding-top: 10px;
   transform: translateY(-100%); opacity: 0; pointer-events: none;
   transition: transform .18s ease, opacity .18s ease;
 }

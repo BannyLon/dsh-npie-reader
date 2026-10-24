@@ -30,6 +30,7 @@ import { SEARCH_LIMITS, matchEntry, normalizeNeedle } from './search.js';
 import { articleLanguage } from '../language.js';
 import { createPanReader } from './pan.js';
 import { createDigestStore } from './digest-store.js';
+import { createOcrRunner } from './ocr.js';
 import { createAnnotationStore } from './annotation-store.js';
 import { createPanAuth } from './pan-auth.js';
 import { createLocalReader } from './local-books.js';
@@ -123,6 +124,39 @@ export function resolvePdfjsRoot() {
     if (existsSync(joinPath(candidate, 'pdf.mjs'))) return resolvePath(candidate);
   }
   return resolvePath(candidates[0]);
+}
+
+/**
+ * 找本地 OCR 那个 JXA 脚本的绝对路径。
+ *
+ * ★ 与 `resolvePdfjsRoot` 同一条纪律：**按标记文件探测，不猜层级**。
+ *   - 未打包（测试直接 import 源码）：`here` 就是 `<plugin>/src/host` ⇒ 同目录
+ *   - 打包后：`here` 是 `<plugin>/lib` ⇒ **往上一级**才是插件根
+ * ★★ **这里曾经照抄了 `resolvePdfjsRoot` 的 `'..','..'`，直接炸了**：那个函数从
+ *   `src/host/` 出发要退**两级**才到插件根，而 `lib/` 只隔**一级** —— 于是候选路径
+ *   落到了 `<plugin>/../src/host/…`（不存在），兜底又返回了 `<plugin>/lib/ocr-vision.js`，
+ *   用户在界面上看到的是 `osascript: …/lib/ocr-vision.js: No such file or directory`。
+ *   ⇒ **"照抄一个能跑的探测函数"是最容易错的一步**：层级数取决于调用方在哪个目录，
+ *     不取决于那个函数本身。所以候选表按「两种运行形态」各写一条，并各有一个用例。
+ * ★ 为什么这个脚本必须留在 `src/` 而不是 `lib/`：它不参与打包（`osascript` 直接读它），
+ *   而 `lib/` 是构建产物、会被清空重建 —— 放进去等于每次构建都要重新生成一份。
+ * ★ 探测不到返回**空串**（不是「最像的那个」）：返回一个错路径会让上层报
+ *   「osascript: … No such file or directory」—— 用户看不懂，也照不了做。
+ *   空串会让 runner 直接标成「组件缺失」，界面上一句人话就说清了。
+ */
+export function ocrScriptCandidates(here) {
+  return [
+    joinPath(here, 'ocr-vision.js'),                      // 未打包：src/host/
+    joinPath(here, '..', 'src', 'host', 'ocr-vision.js'), // 打包后：lib/ → 插件根
+  ];
+}
+
+export function resolveOcrScript() {
+  const here = dirName(fileURLToPath(import.meta.url));
+  for (const candidate of ocrScriptCandidates(here)) {
+    if (existsSync(candidate)) return resolvePath(candidate);
+  }
+  return '';
 }
 
 export class RssService {
@@ -261,6 +295,19 @@ export class RssService {
      */
     this.digestRuns = new Map();
     this.pdfjsRoot = resolvePdfjsRoot();
+    /**
+     * 本地 OCR（扫描页 → 文字）。
+     *
+     * ★ 在这里造一次、路由里复用：`osascript` 是**一次性子进程**，runner 本身无状态，
+     *   所以不需要按请求造 —— 但也不要每次请求都去 stat 一遍脚本路径。
+     * ★ 不探测到脚本时 `supported` 仍然是 `true`（它是按平台判的），真正跑起来会报
+     *   「没跑起来」。这是刻意的：一个缺文件的安装**应该**报错，而不是静悄悄地
+     *   在界面上把「识别这一页」藏掉 —— 藏掉的话，用户永远不知道为什么没有这个功能。
+     */
+    this.ocrRunner = createOcrRunner({
+      scriptPath: resolveOcrScript(),
+      log: message => ctx.logger.info(message),
+    });
     /** 书单索引的 id → book 映射；索引重载时才重建。 */
     this.bookMap = undefined;
     /** 上一次扫描的元信息（界面上「上次扫描」那一行）。只在本次进程内有效。 */
@@ -289,6 +336,7 @@ export class RssService {
         listPanDirs: path => this.pan.listDir(path),
         digestStore: this.digestStore,
         annotationStore: this.annotationStore,
+        ocrRunner: this.ocrRunner,
         // 逐章解读的三个入口。★ 传函数而不是传 `this`：路由层拿不到整个 service，
         //   也就没有办法绕过「单飞 / 取消」这两道闸去直接跑生成。
         startDigests: request => this.startBookDigests(request),

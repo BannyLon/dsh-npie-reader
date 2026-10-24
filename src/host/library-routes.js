@@ -45,6 +45,7 @@ import { extname, join, normalize, sep } from 'node:path';
 import { BOOKS_PAGE_LIMIT, LIBRARY_API_PREFIX, PDFJS_VENDOR_PREFIX, isBookId, isReadable } from '../library.js';
 import { contentRange, formatRange, mimeForExtension, parseRange, unsatisfiedContentRange } from '../range.js';
 import { segmentBook } from './segment.js';
+import { OCR_MAX_IMAGE_BYTES, decodeImagePayload, sniffImageExt } from './ocr.js';
 import { isTrustedLocalRequest } from './trust.js';
 
 // 前缀的真值在共用模块里（浏览器半区也要用）。这里转出去，方便调用点就近 import。
@@ -194,6 +195,7 @@ export function makeLibraryRoutes(handlers) {
     startDigests, stopDigests, isGenerating,
     exportSkill, skillStatus,
     annotationStore,
+    ocrRunner,
   } = handlers;
 
   /**
@@ -236,6 +238,22 @@ export function makeLibraryRoutes(handlers) {
    */
   const annotationsReady = annotationStore !== undefined && annotationStore !== null
     && typeof annotationStore.list === 'function';
+
+  /**
+   * 本地 OCR 的依赖。
+   *
+   * ★ 两条都齐了才算接上：执行器（能不能跑）**和** `digestStore` 的 OCR 落盘
+   *   （结果能不能留住）。只挂执行器的话，识别成功却存不下来 —— 用户每翻回来一次
+   *   就要重识别一次，而他并不知道。
+   * ★ 缺了就 501，理由同上面几道闸：不能让整个 handler 挂掉。
+   */
+  const ocrReady = digestStore !== undefined && digestStore !== null
+    && typeof digestStore.putOcrPage === 'function'
+    && ocrRunner !== undefined && ocrRunner !== null
+    && typeof ocrRunner.recognize === 'function';
+
+  /** OCR 请求体上限：base64 会把体积撑大约 1/3，再留一点 JSON 包装的余量。 */
+  const OCR_BODY_LIMIT = Math.ceil(OCR_MAX_IMAGE_BYTES * 1.4) + 64 * 1024;
 
   const queryOf = (req) => new URL(req.url ?? '/', 'http://127.0.0.1').searchParams;
 
@@ -455,6 +473,71 @@ export function makeLibraryRoutes(handlers) {
           return sendJson(res, 200, { ok: true, id, state });
         } catch (error) {
           return sendJson(res, 400, { ok: false, error: error.message });
+        }
+      }
+
+      // ---- 本地 OCR：把扫描页变成可读的文字 ---------------------------------
+      //
+      // ★ 只有一个入口，而且**不收路径**：路由只接受「调用方自己编码进来的位图」，
+      //   所以这里既没有路径参数、也没有目录白名单 —— 穿越面为零（见 `ocr.js` 文件头）。
+      // ★ GET 用来读**已经识别过**的页：翻回上一页不该再 OCR 一遍（0.5–1 秒 / 次）。
+      if (rest === '/ocr') {
+        if (!ocrReady) {
+          return sendJson(res, 501, { ok: false, error: '本地 OCR 没有接上（缺少 ocrRunner 或 digestStore）' });
+        }
+        if (method === 'GET') {
+          const query = queryOf(req);
+          const bookId = String(query.get('bookId') ?? '');
+          const page = Number(query.get('page'));
+          if (!isBookId(bookId)) return sendJson(res, 400, { ok: false, error: '无效的书 id' });
+          if (!Number.isInteger(page) || page < 1) {
+            return sendJson(res, 400, { ok: false, error: 'page 必须是正整数' });
+          }
+          const text = await digestStore.readOcrPage(bookId, page);
+          return sendJson(res, 200, { ok: true, page, text, cached: text !== '' });
+        }
+        if (method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+        if (!(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
+          return sendJson(res, 415, { ok: false, error: '需要 JSON body' });
+        }
+        if (ocrRunner.supported !== true) {
+          return sendJson(res, 501, { ok: false, error: ocrRunner.unavailableReason || '这台机器不支持本地 OCR' });
+        }
+        let body;
+        try {
+          body = await readBody(req, OCR_BODY_LIMIT);
+        } catch (error) {
+          return sendJson(res, 400, { ok: false, error: error.message });
+        }
+        const bookId = String(body.bookId ?? '');
+        const page = Number(body.page);
+        if (!isBookId(bookId)) return sendJson(res, 400, { ok: false, error: '无效的书 id' });
+        if (!Number.isInteger(page) || page < 1) {
+          return sendJson(res, 400, { ok: false, error: 'page 必须是正整数' });
+        }
+        let buffer;
+        try {
+          buffer = decodeImagePayload(body.image);
+        } catch (error) {
+          return sendJson(res, 400, { ok: false, error: error.message });
+        }
+        if (sniffImageExt(buffer) === undefined) {
+          return sendJson(res, 415, { ok: false, error: '只接受 PNG / JPEG 图片' });
+        }
+        try {
+          const result = await ocrRunner.recognize(buffer);
+          const saved = await digestStore.putOcrPage(bookId, page, { text: result.text, ms: result.ms });
+          return sendJson(res, 200, {
+            ok: true,
+            page,
+            text: result.text,
+            lines: result.lines,
+            ms: result.ms,
+            chars: result.text.replace(/\s+/g, '').length,
+            saved: saved.written === true,
+          });
+        } catch (error) {
+          return sendJson(res, 500, { ok: false, error: error.message });
         }
       }
 

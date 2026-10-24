@@ -335,3 +335,35 @@ export async function postExportSkill(bookId, { profile = 'auto', synthesize = f
     body: JSON.stringify(payload),
   }, { timeoutMs: 180_000 });
 }
+
+/**
+ * 读**已经识别过**的某一页（没有就返回空串）。
+ *
+ * ★ 单独一条 GET 而不是「OCR 时顺带返回」：翻回上一页时不该再 OCR 一遍
+ *   （0.5–1 秒 / 次，冷启动更久）。
+ */
+export async function fetchOcrPage(bookId, page) {
+  const body = await jsonRequest(`/ocr?bookId=${encodeURIComponent(bookId)}&page=${Number(page)}`);
+  return typeof body.text === 'string' ? body.text : '';
+}
+
+/**
+ * 让宿主对**这一页的位图**做本地 OCR。
+ *
+ * @param {string} bookId
+ * @param {number} page - 1 起。
+ * @param {string} image - `data:image/jpeg;base64,…`（客户端自己渲染出来的那一页）。
+ *
+ * ★ 超时给 120 秒：宿主侧 `osascript` 的**第一次**调用要加载 Vision 模型，
+ *   实测冷启动 26–29 秒；宿主自己的超时是 60 秒。这里必须比它更长，否则
+ *   用户看到的是「请求超时」，而宿主那边其实已经识别完并写盘了。
+ * ★ 发 JPEG 不发 PNG：一页 200 DPI 的扫描页 PNG 常到 3–5 MB，JPEG(q=0.85)
+ *   只要 300–900 KB，而 Vision 对两者的识别结果实测一致。
+ */
+export async function ocrBookPage(bookId, page, image) {
+  return await jsonRequest('/ocr', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bookId, page, image }),
+  }, { timeoutMs: 120_000 });
+}

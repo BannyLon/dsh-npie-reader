@@ -26,7 +26,10 @@ import { createPortal } from 'react-dom';
 import { Icon } from './icons.jsx';
 import { readQuickPrompts } from './quick-prompts.js';
 
-export function BookCompanion({ api, context, onClose, onManagePrompts, SessionProvider, renderSlot }) {
+export function BookCompanion({
+  api, context, onClose, onManagePrompts, SessionProvider, renderSlot,
+  onOcr, ocrNeeded = false, ocrUsed = false, ocrBusy = false, ocrError = '',
+}) {
   const [workspaceId, setWorkspaceId] = useState(() => api.defaultChatWorkspace?.());
   const [chat, setChat] = useState(null);
   const [connectError, setConnectError] = useState('');
@@ -220,7 +223,11 @@ export function BookCompanion({ api, context, onClose, onManagePrompts, SessionP
   const detail = context.loaded
     ? (context.text === ''
       ? '这一页没有文字层（扫描版或纯图片页），伴读只看到书名与页码'
-      : ((context.quote ?? '') === '' ? '已带上这一页的文字' : '已带上这一页的文字与划选的那一段'))
+      : (ocrUsed
+        // ★ 必须与「文字层」分开说：OCR 一定有错字，而错字会直接变成 AI 引用的
+        //   错原文。用户有权知道自己看的是哪一种。
+        ? '已带上这一页的文字（本机识别，个别字可能不准）'
+        : ((context.quote ?? '') === '' ? '已带上这一页的文字' : '已带上这一页的文字与划选的那一段')))
     : '正在读取这一页的文字…';
   /** 扫描页没有文字，「解释这一页」无从解释 —— 与旧版顶部 chips 同一条禁用判据。 */
   const pageReadable = context.loaded && context.text !== '';
@@ -238,6 +245,27 @@ export function BookCompanion({ api, context, onClose, onManagePrompts, SessionP
         <strong title={context.title}>{context.title}</strong>
         <small>第 {context.page} 页{context.pages > 0 ? ` / 共 ${context.pages} 页` : ''} · {detail}</small>
       </div>
+      {/**
+        * 扫描页的出口：本地 OCR。
+        *
+        * ★ 只在这一页**确实没有文字**（`ocrNeeded`）时才出现。文字层有字时给一个
+        *   「识别这一页」等于让用户拿一个更差的结果去换更好的 —— 那只会让人误点。
+        * ★ 文案里写「本地、约 1 秒」：用户对 OCR 的印象是「又慢又要钱」，
+        *   不写清楚他不会点。实测 0.6–0.8 秒/页，冷启动第一次会久一些。
+        * ★ 失败要显示在这里而不是一闪而过的 toast：识别失败时用户正盯着这一块，
+        *   而错误信息（比如「没认出字，可能是纯图片页」）恰恰决定他下一步怎么做。
+        */}
+      {ocrNeeded && typeof onOcr === 'function' && (
+        <div className="npr-companion-ocr">
+          <button type="button" className="npr-companion-ocr-btn" disabled={ocrBusy}
+            onClick={() => void onOcr()}>
+            <Icon name="file-text" size={13} />
+            {ocrBusy ? '正在识别这一页…' : '识别这一页的文字'}
+          </button>
+          <small>{ocrBusy ? '本机识别，不联网、不花钱' : '本机识别，约 1 秒，不联网'}</small>
+          {ocrError !== '' && <p className="npr-companion-ocr-error" role="alert">{ocrError}</p>}
+        </div>
+      )}
       {connectError !== '' && (
         <div className="npr-companion-error" role="alert">
           <strong>伴读连接未完成</strong>

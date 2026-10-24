@@ -511,6 +511,9 @@ window.__probe = function (o) {
   /* ★ 0.24.6 判据 ⑰ 的反向对照：把 FAB 压回全透明（0.24.2 的旧行为）
      ⇒「FAB 仍然可见」必须红。 */
   if (o.breakFabVisible) rules.push('.npr-book.is-immersive .npr-book-fab{opacity:0 !important}');
+  /* ★ 0.24.6 判据 ⑰ 的反向对照：把胶囊贴回 y=0（去掉那 10px 留白）——
+     胶囊里的按钮就落进拖动条里 ⇒「胶囊在拖动条下面」必须红。 */
+  if (o.breakPillTop) rules.push('.npr-book.is-immersive .npr-book-chrome{padding-top:0 !important}');
   /* ★ 判据 ㉓ 的反向对照：让 .npr-book-view 退回 static ⇒ 浮动按钮的定位基准回到
      .npr-book-main（右缘 = 整个面板右缘）⇒ 开着伴读时它落到伴读的角上。
      这正是 0.23.0 及之前的形态，用一条 CSS 就能复现，不必另写一份坏 HTML。 */
@@ -1213,12 +1216,20 @@ try {
     `滑出后舞台顶=${fmt(deepToolbar.stage.t)} 收起时=${fmt(deep.stage.t)}`);
   check('⑰ 工具条滑出后可以点（收起时是 pointer-events: none，滑出必须放开）',
     deepToolbar.chromePe === 'auto', `pointer-events=${deepToolbar.chromePe}`);
+  /* ★ 拖动条只有 10px 高，而胶囊里的每一颗 `<button>` 都是宿主的 no-drag 洞
+     （Chromium 按「并集 − 显式 no-drag」算拖动区，且**不按 overflow 裁剪**）。
+     胶囊若压进这 10px，滑出时那一段拖动条就被挖空 ⇒ 按下去拖不动窗口 ——
+     正是 0.22.x「某段拖不动、两侧正常」的复发形态。
+     ⇒ 判据是「胶囊整体落在拖动条**下面**」，不是「看着不挤」。 */
+  check('⑰ 工具条滑出时胶囊落在拖动条**下面**（否则按钮会在拖动区里挖洞）',
+    deepToolbar.pill.t >= parseFloat(deepToolbar.tbHeight) - 0.5,
+    `胶囊顶=${fmt(deepToolbar.pill.t)} 拖动条高=${deepToolbar.tbHeight}`);
   await unhover();
   const deepAway = await probe({ immersive: true });
   check('⑰ 鼠标移开，工具条又收起来（不留在屏上挡字）',
     deepAway.chromeOpacity <= 0.02, `opacity=${deepAway.chromeOpacity}`);
 
-  console.log('\n—— 反向对照（0.24.6 新增的两条判据必须有牙）——');
+  console.log('\n—— 反向对照（0.24.6 新增的三条判据必须有牙）——');
   const brokenSlide = await hoverToolbar({ immersive: true, breakSlide: true });
   check('★ ⑰ 把「悬停滑出」改回「一直收起」：判据「工具条滑出来」必须红',
     brokenSlide.chromeOpacity <= 0.02, `opacity=${brokenSlide.chromeOpacity}`);
@@ -1226,6 +1237,11 @@ try {
   const brokenFabVisible = await probe({ immersive: true, breakFabVisible: true });
   check('★ ⑰ 把 FAB 压回全透明（0.24.2 的旧行为）：判据「FAB 仍然可见」必须红',
     brokenFabVisible.fabOpacity <= 0.02, `opacity=${brokenFabVisible.fabOpacity}`);
+  const brokenPillTop = await hoverToolbar({ immersive: true, breakPillTop: true });
+  check('★ ⑰ 把胶囊贴回 y=0：判据「胶囊在拖动条下面」必须红',
+    brokenPillTop.pill.t < parseFloat(brokenPillTop.tbHeight) - 0.5,
+    `胶囊顶=${fmt(brokenPillTop.pill.t)} 拖动条高=${brokenPillTop.tbHeight}`);
+  await unhover();
   check('⑱ ★ 沉浸态：**书架那一列**不占位（用户要「左边两列都不显示」）',
     deep.sidebarDisplay === 'none' && deep.sidebar.w === 0,
     `display=${deep.sidebarDisplay} 宽=${fmt(deep.sidebar.w)}`);
