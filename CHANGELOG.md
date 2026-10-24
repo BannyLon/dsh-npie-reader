@@ -104,22 +104,23 @@
   ⇒ 夹具改成返回**真 `Response`**（按请求区间切片，`content-range` 自洽）。
   夹具比真货宽松，就是「测试通过但线上崩」的经典来源。
 
-### 六、本轮没能跑完的那部分（环境，不是代码）
+### 六、全量：1878 / 1878
 
-交付时本机的删除操作被安全策略拦住（`EPERM: operation not permitted, unlink`，
-`/tmp`、系统临时目录、仓库内都一样），而测试套件大量用 `mkdtemp` + 收尾删除：
-
-- 全量重跑：**93 红**。逐条审计后 —— 91 条是 `EPERM` 或「N subtests failed」汇总，
-  2 条 60 秒超时（`disposeHarness` 的 `rm(..., maxRetries: 5, retryDelay: 100)` 在删不掉时
-  把 5 次重试跑满）；**断言失败只有 2 条**：一条是本轮自己引入的（已修，见第五节），
-  一条是「删书源要连带删掉书单文件」—— 文件删不掉，`missing` 断言自然不成立。
-- 所以可复现的证据是**单跑**：`net-guard` 27/27、`library-api-range` 10/10、
-  `pdfjs-cache` 9/9、`pdfjs-vendor` 12/12；`service` 139/141（2 条红即上面的删除拦截）。
-- 构建与守卫全部通过：`build.mjs`、`check-build-guard`（含「注入变异体后构建被拒绝」）、
-  `check-book-reading-chrome`（全部通过）、`check-book-panel-layout`（全部断言通过）、
-  `check-classes`（393 定义 / 417 使用，未定义仍只有那个**刻意保留**的 `npr-skill-head`）、
-  `check-host-contract --strict`（2 ERROR，都是「宿主安装树里没有
-  `@deepseek-ai/dsh-client-ui-*`」这条既有环境噪声）。
+- `node --test test/*.test.mjs`：**1878 条全过**（427 个 suite，0 fail / 0 cancelled / 0 skipped）。
+- 交付过程中撞到过一次环境故障，值得记下来：本机的**删除**操作被安全策略拦住
+  （`EPERM: operation not permitted, unlink`，`/tmp`、系统临时目录、仓库内都一样），
+  而测试套件大量用 `mkdtemp` + 收尾删除 ⇒ 那一轮全量 **93 红**。
+  ★ 但**逐条审计后只有 2 条是 `AssertionError`**：一条是本轮自己引入的（已修，见第五节），
+  一条是「删书源要连带删掉书单文件」—— 文件删不掉，`missing` 断言自然不成立；
+  其余全是 `EPERM` / 「N subtests failed」汇总 / 超时（`disposeHarness` 的
+  `rm(..., maxRetries: 5, retryDelay: 100)` 在删不掉时把 5 次重试跑满）。
+  ⇒ **「红了多少条」在这种环境下毫无意义，必须按 error 类型分类**；
+  环境恢复后重跑即全绿，代码一个字没改。
+- 构建与守卫：`build.mjs`（host 378.1 KB / client 912.8 KB）、`check-build-guard`
+  （含「注入变异体后构建被拒绝」那条反向对照）、`check-book-reading-chrome`、
+  `check-book-panel-layout` 全部通过；`check-classes` 393 定义 / 417 使用，
+  未定义仍只有那个**刻意保留**的 `npr-skill-head`；`check-host-contract --strict`
+  2 ERROR，都是「宿主安装树里没有 `@deepseek-ai/dsh-client-ui-*`」这条既有环境噪声。
 
 ## 0.24.3 — 2026-10-24
 
