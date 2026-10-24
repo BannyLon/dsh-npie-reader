@@ -76,7 +76,12 @@ function boot(options = {}) {
   homeCounter += 1;
   const fake = createFakeContext(options);
   globalThis.fetch = fake.state.fetch;
-  const service = new RssService(fake.ctx, {});
+  /* ★ 地址守卫默认**放行**：这一批用例里的域名全是 `blog.example.org` 这种假名字，
+     真守卫会去查 DNS、查不到就拒 ⇒「抓不抓、抓到什么」这些真正要测的东西全被挡在
+     门外。守卫本身在 `test/net-guard.test.mjs`（27 条）；「service 真的把守卫接上了」
+     由本文件「守卫拒绝时退回摘要」那一条钉住 —— 传一个一律拒绝的 pageGuard。 */
+  const pageGuard = options.pageGuard ?? (async () => ({ ok: true }));
+  const service = new RssService(fake.ctx, { pageGuard });
   liveServices.add(service);
   return { ...fake, service };
 }
@@ -1585,6 +1590,36 @@ describe('原文全文抓取', () => {
     const article = await service.getArticle({ key: entries[0].key });
     assert.equal((article.html.match(/<p>/g) ?? []).length, 1, '保留的应是 feed 那一份正文');
     assert.equal(article.article.bodyMissing, false);
+  });
+
+  /**
+   * ★ 0.24.4 的接线判据：service 真的把 `pageGuard` 用上了。
+   *
+   * 没有这一条的话，`fetchPage(..., { checkUrl: this.pageGuard })` 里那个参数
+   * 可能压根没传（或被后来的重构悄悄去掉），而上面那一整批用例仍然全绿 ——
+   * 因为它们注入的守卫本来就是「全部放行」。这里注入一个**一律拒绝**的守卫，
+   * 要求：正文退回摘要、且**一个请求都没发出去**（守卫在 fetch 之前）。
+   */
+  it('★ 守卫拒绝时退回摘要，且一个请求都不发（SSRF 接线判据）', async () => {
+    const { service, state } = boot({
+      fetchFallback: route(articlePage),
+      pageGuard: async () => ({ ok: false, reason: '指向本机或内网地址' }),
+    });
+    const entries = await subscribe(service);
+    const before = state.fetchCalls.length;
+    const article = await service.getArticle({ key: entries[0].key });
+    assert.ok(article.html.includes('Short summary only.'), '守卫拒绝后应退回 feed 给的摘要');
+    assert.equal(article.article.bodyMissing, true, '界面要能说明这篇只有摘要');
+    const pageCalls = state.fetchCalls.slice(before).filter((call) => /blog\.example\.org\/post$/.test(call.url));
+    assert.deepEqual(pageCalls, [], '守卫拒绝之后仍然去抓了原文页 —— 内网服务已经被打过一次了');
+  });
+
+  it('守卫放行时同一个地址仍然能抓到（对照：上一条不是因为地址写错才绿的）', async () => {
+    const { service, state } = boot({ fetchFallback: route(articlePage) });
+    const entries = await subscribe(service);
+    const article = await service.getArticle({ key: entries[0].key });
+    assert.ok(article.html.includes('word word'), '放行时必须真的抓到原文页');
+    assert.ok(state.fetchCalls.some((call) => /blog\.example\.org\/post$/.test(call.url)));
   });
 });
 

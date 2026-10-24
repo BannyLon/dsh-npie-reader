@@ -536,7 +536,7 @@ asar 里（`app.asar` → `dsh/node_modules/@deepseek-ai/…`），profile 的 `
 ```bash
 npm install
 npm run build      # 产出 lib/index.js（host 半区）+ lib/client.js（client 半区）
-npm test           # 1537 个用例，node --test（含一次真构建 + 一次真执行客户端产物 + 一次真渲染组件）
+npm test           # 1878 个用例，node --test（含一次真构建 + 一次真执行客户端产物 + 一次真渲染组件）
 npm run contract   # 与 DSH 宿主的契约守卫，0 ERROR 才算过
 npm run check      # build + test + contract
 npm run verify     # check + 六套主题 × 全部 --npr-* 令牌的对比度核对
@@ -561,6 +561,12 @@ node scripts/catalog-health.mjs --only Newsletter # 只重测一类（几十秒�
 node scripts/prune-catalog.mjs               # 对「探不通」的降并发复检，出删除计划（不动目录）
 node scripts/prune-catalog.mjs --apply       # 按计划裁剪内置目录（先备份到 /tmp，被删的 Newsletter 源先归档）
 ```
+
+**仓库在 git 下**（0.24.4 起，`git init -b main`，首个提交 `e83ddcf` 是 v0.24.3 基线）。
+`.gitignore` 只挡**会变的东西** —— `lib/`（`prepack` 重建）、`test/.build/`（每次重新生成）、
+`test/.tmp/`（`mkdtemp` 落点）、`.build/`（出图草稿）、`probe-*/`（探测会话残留），
+每条都写了理由。★ 本机专用的「8 字符随机名」规则在 `.git/info/exclude`、**不进共享的
+`.gitignore`**：`[a-z0-9_]{8}` 这条模式太宽，写进共享文件会误伤将来任何 8 字符的源文件/目录。
 
 > 体检脚本会**打网络**（每个源一次 GET）但**不碰你的订阅数据**。产出的快照**按类别记测量时间**
 > （`checkedAt`），界面用其中**最旧**的那一类判断「过期没有」—— 只重测了一类却报「刚体检过」，
@@ -768,6 +774,18 @@ if (!Number.isInteger(s)) return r;      // ← 没有它，直接判定「不�
 `TypeError: this[#Ks] is not a function`；`requestDataRange` 在基类上是抽象的。
 —— 顺带发现 `src/client/pdfjs.js` 里那段注释写的是**老版本**的机制
 （`_rangeReaders` + `util_assert`，6.4.299 已改成私有回调 `#Ks`），一并改正。
+
+**取字节这一层另有两条硬约束（0.24.4 加的，`test/library-api-range.test.mjs` 钉住）**：
+
+- **只收 206，200 一律当失败**。以前 `206 || 200` 都收 —— 而 200 意味着「服务端忽略了
+  `Range`、把整个文件返回来了」。那段字节会被当成「从 `begin` 开始的这一片」喂给 pdf.js：
+  长度对不上时报的是**解析错误**（离真实原因十万八千里），对得上时更糟 ——
+  **整本书被当成第一页**，翻页全乱。宁可在这里报一句人话。
+- **有超时**。以前只接外部 signal（pdf.js 取消时才有），网络卡住就永远挂着，用户看到的
+  是「这本书一直在转圈」，而代码里没有任何一处会放弃。★ 超时与外部取消是**两个方向**的
+  取消，必须分开报错：一个是「太慢」，一个是「用户不要了」—— 后者被说成超时是误导。
+- 顺带校验 `content-range` 的**起点**：宿主自己实现的 `contentRange()` 一定对得上，
+  这条守的是「以后换成别的取字节通道」时不会静默喂错段。
 
 > 同类纪律：**封顶探测里 `content-length` 必须报真实大小**。pdf.js 先发一个不带 `Range`
 > 的请求看 `Accept-Ranges` 与文件大小，拿到响应头就把响应丢掉、改用 Range 请求。
@@ -1017,6 +1035,28 @@ cleanup 在 React 提交阶段同步抛 `TypeError`，被 Error Boundary 接住�
     `127.0.0.1`（DNS rebinding），此时请求确实打到了本机，而 `Origin` 与 `Host`
     **都是攻击者的域名**、浏览器视为同源 —— 只看这两个相等**挡不住**它。
     `X-Forwarded-For` 一律不信（既不能否决、也不能授予信任）。
+  - **外抓原文页有私网守卫（SSRF），但只守在「第三方可控的地址」上**。`hydrateBody` 抓的
+    `entry.url` 是 **feed 内容给的**：恶意 feed 只要把条目的 `<link>` 写成
+    `http://127.0.0.1:<端口>/…`，插件就会替它读本机服务 —— 而上面那道栅栏恰好信任
+    「来自回环 socket 的请求」，所以这一跳能绕过去。三条判据（`src/host/net-guard.js`）：
+    协议只收 `http/https`；`localhost` / `*.localhost` / `*.local` / `*.internal` / 裸 IP
+    不用查 DNS 就拒；域名必须解析，**任一**记录落在私网段就拒（只看第一条会被
+    「公网 A 记录 + 私网 A 记录」的混合域名绕过）。解析失败一律**拒绝**（fail-closed）：
+    宁可这次读不到原文，也不要在解析器被投毒时放行。
+    - 私网段**不止** RFC1918：`127/8`（不止 `.0.1`）、`169.254/16`（**云元数据
+      `169.254.169.254` 就在这段**，SSRF 最经典的靶子）、`100.64/10`（CGNAT）、`0/8`、
+      `198.18/15`、三段 TEST-NET、`192.0.0/24`、`224/4` 与 `240/4` 都算。
+      IPv6 不靠字符串前缀判：先解析成 8 个 hextet 再按位比，所以 `::ffff:127.0.0.1`、
+      `fe80::1%en0`、`2001:0db8::`、`64:ff9b::/96` 都拦得住。
+    - ★ **订阅地址不设限**：你在设置里手填的 feed 地址、转 RSS 服务基地址（wewe-rss
+      这类服务本来就常跑在 `localhost:4000`）**必须**能连。守卫只接在抓原文页那一条路上。
+    - ★ **重定向必须逐跳校验**：`redirect: 'follow'` 会让「公网地址 302 到 127.0.0.1」
+      发生在 fetch 内部，前置校验根本看不见。所以是 `redirect: 'manual'` + 每跳重新校验
+      + 跳数上限 5。守卫接在 fetch **之前**（接在后面只是事后报错，内网服务已经被打过一次）。
+    - **残余风险（写在明面上）**：DNS 解析与实际连接之间仍有 TOCTOU 窗口 ——
+      解析时是公网、连接时变成 `127.0.0.1`。要彻底关掉得自己建 socket 连解析出的 IP，
+      `fetch` 做不到。重定向那一半已经堵住，剩下的窗口需要攻击者同时控制 DNS 的 TTL
+      与响应时序。
 - **旧译文不会自动重生成**：0.13.0 的保结构翻译只影响**新**生成的译文；已有译文继续走老路径，
   点「重新生成」后才换。这是用户明确的选择（「等我手动重生成」）。
 - **英文自动翻译是计费行为，所以默认关闭**：打开后每打开一篇**还没有中文版本**的英文原文
@@ -1061,8 +1101,8 @@ cleanup 在 React 提交阶段同步抛 `TypeError`，被 Error Boundary 接住�
   与其留着一个说不清来源的清单，不如先摘掉，只留下能对每一条负责的两类。
   - 被摘掉的数据**没有删除**，移到了 `retired/`：`retired/README.md` 里逐字保留了
     被移除的 `featured` 与 `wechat` 两个数组并写明恢复步骤，
-    `retired/podcast-feeds.json` 是原来的播客清单（本项目**不在版本控制下**，
-    `git rev-parse` 在插件目录与 `NPIE-program` 都失败，所以移除等于永久丢失）。
+    `retired/podcast-feeds.json` 是原来的播客清单（0.24.4 之前本项目**不在版本控制下**，
+    删掉等于永久丢失；现在仓库在 git 下，这类数据也有了历史）。
   - 2026-10-09 又追加了一份 `retired/newsletter-feeds-retired.json`：Newsletter 那 9 条
     **也进体检**之后，被 365 天删除线裁掉的两条（AI Valley 670 天、Grace Leung 727 天）落在那里 ——
     它们是被 `prune-catalog.mjs` **自动归档**的，不靠人手抄。

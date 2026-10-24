@@ -17,14 +17,32 @@ import {
   INITIAL_CHUNK_BYTES, cachedBookCount, forgetBook, openCachedBook, releaseBooks,
 } from '../src/client/pdfjs.js';
 
-/** 取字节的桩：只提供一个合法 206，并记录每一次请求。 */
+/**
+ * 取字节的桩：只提供一个合法 206，并记录每一次请求。
+ *
+ * ★ 必须返回**真 `Response`**，不能手写 `{ status, arrayBuffer }`。真 fetch 的响应
+ *   **一定**带 `headers`；假对象省掉它，就等于允许实现「读 `response.headers`」
+ *   在测试里活下来 —— 0.24.4 给 `fetchBookRange` 加 `content-range` 校验时，这个
+ *   桩当场炸了 9 条用例（`Cannot read properties of undefined (reading 'get')`），
+ *   而线上是好的。夹具比真货宽松，是「测试通过但线上崩」的经典来源。
+ *
+ * ★ 顺手让 body 长度与 `content-range` 自洽（按请求的区间切）。这里不模拟书的
+ *   真实长度（桩不知道），只保证「起点/终点/长度」三者不互相矛盾。
+ */
 function stubFetch({ failing = false } = {}) {
   const calls = [];
   globalThis.fetch = async (url, init) => {
-    calls.push({ url, range: init?.headers?.Range ?? null });
+    const range = init?.headers?.Range ?? null;
+    calls.push({ url, range });
     if (failing) throw new Error('网络断了');
-    const bytes = new Uint8Array([1, 2, 3, 4]);
-    return { status: 206, async arrayBuffer() { return bytes.buffer; } };
+    const match = /^bytes=(\d+)-(\d+)$/.exec(range ?? '');
+    const begin = match ? Number(match[1]) : 0;
+    const end = match ? Number(match[2]) : 0;
+    const body = new Uint8Array(Math.max(end - begin + 1, 1)).fill(7);
+    return new Response(body, {
+      status: 206,
+      headers: { 'content-range': `bytes ${begin}-${end}/${end + 1}` },
+    });
   };
   return calls;
 }

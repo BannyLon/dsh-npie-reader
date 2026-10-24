@@ -74,22 +74,68 @@ export async function reloadLibrary() {
  * ★ `end` 是**开区间** —— 这是 pdf.js 的约定（它内部发的是 `bytes=${begin}-${end - 1}`）。
  *   传闭区间会让每段都多读一个字节，段与段之间就会重叠，页面上看不出来，
  *   但底层拼出来的流是错的。
+ *
+ * ★ 0.24.4 两条硬约束（此前都没有）：
+ *
+ *   ① **只收 206**。以前 `206 || 200` 都收 —— 而 200 意味着「服务端忽略了 Range、
+ *      把整个文件返回来了」。那一段会被当成「从 begin 开始的这一片」塞给 pdf.js：
+ *      字节数对不上时它报的是解析错误（离真实原因十万八千里），对得上时更糟 ——
+ *      整本书被当成第一页，翻页全乱。宁可在这里报一句人话。
+ *   ② **超时**。以前只接外部 signal（pdf.js 取消时才有），网络卡住就永远挂着，
+ *      用户看到的是「这本书一直在转圈」，而代码里没有任何一处会放弃。
+ *      超时与外部 signal 是**两个方向**的取消，必须分开报错：一个是「太慢」，
+ *      一个是「用户不要了」—— 后者不该显示成超时。
+ *
+ * ★ 顺带校验 `content-range` 的起点：宿主自己实现的 `contentRange()` 一定对得上，
+ *   这条守的是「以后换成别的取字节通道」时不会静默喂错段。
  */
-export async function fetchBookRange(bookId, begin, end, signal) {
-  const response = await fetch(`${LIBRARY_API_PREFIX}/book/${bookId}/raw`, {
-    headers: { Range: `bytes=${begin}-${end - 1}` },
-    cache: 'no-store',
-    signal,
-  });
-  if (response.status !== 206 && response.status !== 200) {
-    let detail = `HTTP ${response.status}`;
-    try {
-      const body = await response.json();
-      if (typeof body?.error === 'string') detail = body.error;
-    } catch { /* 非 JSON 就用手上的状态码 */ }
-    throw new Error(`取书失败：${detail}`);
+export async function fetchBookRange(bookId, begin, end, signal, { timeoutMs = TIMEOUT_MS } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  /* 外部 signal（pdf.js 取消）与超时合并：任一个触发都中断这次请求。 */
+  const forwardAbort = () => controller.abort(signal?.reason);
+  if (signal) {
+    if (signal.aborted) forwardAbort();
+    else signal.addEventListener('abort', forwardAbort, { once: true });
   }
-  return new Uint8Array(await response.arrayBuffer());
+  try {
+    // ★ 已经取消就别发请求：真 fetch 会自己 reject，但这一句省掉一次无意义的
+    //   往返，也让「取消后一个请求都不发」成为可断言的行为（不是靠 fetch 实现）。
+    if (controller.signal.aborted) throw new Error('取书已取消');
+    const response = await fetch(`${LIBRARY_API_PREFIX}/book/${bookId}/raw`, {
+      headers: { Range: `bytes=${begin}-${end - 1}` },
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    if (response.status === 200) {
+      throw new Error('取书失败：服务端忽略了 Range 请求（返回 200 整本），分片通道不可用');
+    }
+    if (response.status !== 206) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const body = await response.json();
+        if (typeof body?.error === 'string') detail = body.error;
+      } catch { /* 非 JSON 就用手上的状态码 */ }
+      throw new Error(`取书失败：${detail}`);
+    }
+    const contentRange = response.headers.get('content-range');
+    if (contentRange) {
+      const match = /bytes\s+(\d+)-(\d+)\//i.exec(contentRange);
+      if (match && Number(match[1]) !== begin) {
+        throw new Error(`取书失败：服务端返回的区间不对（要 ${begin} 起，给的是 ${contentRange}）`);
+      }
+    }
+    return new Uint8Array(await response.arrayBuffer());
+  } catch (error) {
+    // ★ 只有「超时」才改写成超时文案；pdf.js 主动取消（signal.aborted）保持原样。
+    if (controller.signal.aborted && !signal?.aborted) {
+      throw new Error(`取书超时（${timeoutMs / 1000} 秒）：${bookId}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener?.('abort', forwardAbort);
+  }
 }
 
 // ---- 书源配置与网盘授权向导 -------------------------------------------

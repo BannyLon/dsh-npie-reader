@@ -41,6 +41,8 @@ import {
   panTokenPath, pluginDataDir,
 } from './store.js';
 import { listFilePath, pruneListsIndex, readListsIndex, removeListFile, writeListFile, writeListsIndex } from './book-lists.js';
+import { fetchPage } from './page-fetch.js';
+import { checkPublicUrl } from './net-guard.js';
 import {
   BOOK_STATES, isBookId, mergeImportedStates, normalizeBookSources, normalizeLibraryListIds, normalizeState, stateOf,
 } from '../library.js';
@@ -50,7 +52,7 @@ const FEED_TIMEOUT_MS = 20_000;
 const PAGE_TIMEOUT_MS = 20_000;
 // 「转 RSS 服务」探活：这是个**本地**服务，8 秒还不回就是没起来，没必要等 20 秒。
 const SERVICE_PROBE_TIMEOUT_MS = 8_000;
-const PAGE_MAX_BYTES = 5 * 1024 * 1024;
+/* 页面大小上限与重定向跳数上限随 `fetchPage` 一起搬到 `./page-fetch.js` 了。 */
 /**
  * 一次能取回的条目数上限。
  *
@@ -138,6 +140,19 @@ export class RssService {
     this.guard = createGenerationGuard();
     // 抓原文失败的域名记一笔：某个站整站反爬时，别对它的每一篇文章都重试一遍。
     this.fullTextFailures = new Set();
+    /**
+     * 抓原文页时的**地址守卫**（SSRF）。默认就是真守卫。
+     *
+     * ★ 这个注入点不是「安全开关」：它存在是因为 service 的测试用
+     *   `blog.example.org` 这类**假域名**，真守卫会去查 DNS、查不到就拒 ——
+     *   于是「抓不抓、抓到什么」这些真正要测的东西全被挡在门外。
+     *   守卫本身有 27 条单测（`test/net-guard.test.mjs`），不在这里重复测；
+     *   但「service 真的把守卫接上了」另有一条集成判据（`test/service.test.mjs`
+     *   的「守卫拒绝时退回摘要」），否则这个参数可能压根没被用过。
+     */
+    this.pageGuard = typeof config.pageGuard === 'function'
+      ? config.pageGuard
+      : (target) => checkPublicUrl(target);
     /**
      * 数据文件读不出来时的原因（读得出来就是 undefined）。
      *
@@ -1151,7 +1166,7 @@ export class RssService {
     const host = hostOf(entry.url);
     if (!force && this.fullTextFailures.has(host)) return null;
     try {
-      const page = await fetchPage(entry.url, PAGE_TIMEOUT_MS);
+      const page = await fetchPage(entry.url, { timeoutMs: PAGE_TIMEOUT_MS, checkUrl: this.pageGuard });
       const extracted = extractMainHtml(page);
       if (!extracted) throw new Error('页面里找不到正文容器');
       const html = sanitizeHtml(extracted.html, { baseUrl: entry.url, maxLength: FEED_LIMITS.maxBodyChars });
@@ -2482,23 +2497,16 @@ async function fetchText(url, timeoutMs) {
   return text;
 }
 
-/**
- * 抓原文页。与 `fetchText` 分开：这里必须校验 content-type，否则一个 PDF / 图片
- * 链接会被当成 HTML 去抽正文，抽出一堆二进制噪声。
+/*
+ * 抓原文页的实现搬到 `./page-fetch.js`（0.24.4）。
+ *
+ * ★ 为什么搬走：这段逻辑有两条必须在**真代码**里跑一遍的判据 ——
+ *   「重定向到私网要拒」与「被守卫拒掉时一个请求都不许发出去」。留在本文件里
+ *   就只能读代码猜，抽出去以后 `test/page-fetch.test.mjs` 用注入的假 fetch
+ *   把两种坏法都真的跑出来。
+ * ★ 它接的是**唯一**一处 SSRF 守卫（URL 来自 feed 内容，第三方可控）；
+ *   `fetchText`（抓 feed，地址是用户自己填的）刻意不设限 —— 详见 page-fetch.js 头注释。
  */
-async function fetchPage(url, timeoutMs) {
-  const response = await fetch(url, {
-    signal: AbortSignal.timeout(timeoutMs),
-    redirect: 'follow',
-    headers: { accept: 'text/html,application/xhtml+xml' },
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
-  const contentType = response.headers.get('content-type') ?? '';
-  if (!/text\/html|application\/xhtml\+xml/i.test(contentType)) throw new Error(`not an HTML page: ${contentType}`);
-  const buffer = await response.arrayBuffer();
-  if (buffer.byteLength > PAGE_MAX_BYTES) throw new Error(`page larger than 5 MB: ${url}`);
-  return new TextDecoder(charsetOf(contentType) ?? 'utf-8', { fatal: false }).decode(buffer);
-}
 
 function hostOf(url) {
   try { return new URL(url).hostname; } catch { return ''; }
