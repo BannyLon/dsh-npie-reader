@@ -273,8 +273,30 @@ export function bookIdFromPath(prefix, seed) {
   return `${prefix}${high}${low}`;
 }
 
-/** 支持的扩展名。`pdf` 是唯一能原版式渲染的；其余保留在书架上但标注「暂不支持」。 */
-export const BOOK_EXTENSIONS = ['pdf', 'epub', 'docx', 'mobi', 'azw3', 'azw', 'txt'];
+/**
+ * 能**重排阅读**的扩展名（正文由宿主解析成块模型，界面上重新排版）。
+ *
+ * ★ 为什么这份清单在 `library.js` 而不是 `host/ebook/index.js`：判「一本书读得了吗」
+ *   发生在两处 —— 宿主侧（`renderable` 要不要置真、`ebookOf` 要不要接）和浏览器侧
+ *   （`BookReader` 要不要挂 `BookEbook`）。两处各写一份清单，加一个格式时必然漏改
+ *   一处，症状是「书架上写着能读，点进去说没接上」。所以只在这里有一份，
+ *   `host/ebook/index.js` 从这里 import 再转出去。
+ *
+ * `.docx` **不在**里面：那是文档不是书，版式、批注、表格与「一章一节」的模型都对不上。
+ */
+export const EBOOK_EXTENSIONS = ['epub', 'mobi', 'azw3', 'azw', 'txt'];
+
+/** 是否是能重排阅读的电子书格式。大小写与点号都容忍（`'.EPUB'` 也算）。 */
+export function isEbookExtension(value) {
+  const text = String(value ?? '').trim().toLowerCase().replace(/^\./, '');
+  return EBOOK_EXTENSIONS.includes(text);
+}
+
+/**
+ * 支持的扩展名。`pdf` 能**原版式**渲染，`EBOOK_EXTENSIONS` 里那几个能**重排**阅读、
+ * 也能抽章解读；`docx` 只保留在书架上（标注「暂不支持」）。
+ */
+export const BOOK_EXTENSIONS = ['pdf', ...EBOOK_EXTENSIONS, 'docx'];
 
 export function normalizeExtension(value) {
   const text = String(value ?? '').trim().toLowerCase().replace(/^\./, '');
@@ -372,13 +394,17 @@ export function normalizeBook(raw) {
     year: Number.isInteger(year) && year > 0 ? year : 0,
     topDir: String(raw.top_dir ?? '').trim(),
     /**
-     * 能不能**原版式渲染**：是 PDF，且**取得到字节**（网盘有 fs_id，或本地有路径）。
+     * 能不能**打开来读**：PDF 或重排电子书（EPUB/MOBI/AZW3/AZW/TXT），且**取得到字节**
+     * （网盘有 fs_id，或本地有路径）。
      *
      * ★ 本地路径在这里只判「有没有」，不判「在不在允许的根目录内」—— 后者要看用户当前
      *   的书源配置，而这是个纯函数、拿不到配置。越界的本地书会在**打开时**被宿主拒掉
      *   并给一句明确的话；把它在这里悄悄标成「暂不支持」反而会让人以为格式不对。
+     *
+     * ★ 名字仍是 `renderable` 而不是 `readable`：`isReadable()` 已经占了后者，含意是
+     *   「取得到字节」，比这里更宽（docx 取得到字节但读不了）。两者不能合并。
      */
-    renderable: ext === 'pdf' && (hasFsId || localPath !== ''),
+    renderable: (ext === 'pdf' || EBOOK_EXTENSIONS.includes(ext)) && (hasFsId || localPath !== ''),
   };
 }
 

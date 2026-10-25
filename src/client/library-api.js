@@ -138,6 +138,51 @@ export async function fetchBookRange(bookId, begin, end, signal, { timeoutMs = T
   }
 }
 
+// ---- 重排电子书（EPUB / MOBI / AZW3 / TXT）-------------------------------
+
+/**
+ * 一本书的「目录 + 分节索引」：`{ format, title, author, warnings, toc, sections }`。
+ *
+ * `sections` 只有元信息（`title / chars / href`），**正文不在里面** —— 一本 25 万字的
+ * 书 JSON 化之后上兆，而用户打开时只看第一节。正文由 `fetchEbookSection` 按需取。
+ *
+ * ★ 超时给到 2 分钟：宿主第一次见到这本书要「取整本字节 → 解 ZIP/LZ77 → 抽块 → 落盘
+ *   缓存」。实测 EPUB 412 KB 用 30 ms、MOBI 2.5 MB 用 24 ms，但网盘书要先把整本
+ *   拉下来（2.5 MB 走网盘 SDK 可能十几秒），20 秒的默认值会卡在「就差一点」的地方。
+ * ★ 第二次开同一本书走缓存，是毫秒级 —— 两者共用一个超时是可以接受的。
+ */
+export async function fetchEbookIndex(bookId, { timeoutMs = 120_000 } = {}) {
+  return await jsonRequest(`/book/${encodeURIComponent(bookId)}/ebook`, {}, { timeoutMs });
+}
+
+/**
+ * 取第 `n` 节（1 起）的块模型：`{ n, title, chars, blocks }`。
+ *
+ * `blocks` 是 `{ k: 'h1'|'h2'|'h3'|'p'|'q'|'li'|'pre', x: string }` 的数组 ——
+ * 渲染端用 React 元素重建，**不用 `dangerouslySetInnerHTML`**，所以书里的任何
+ * 标记都进不了 DOM（XSS 面为零）。
+ *
+ * ★ 节号从 1 起：目录里的 `section` 与 `pages.jsonl` 里的 `page` 是同一个数
+ *   （电子书的「一页」就是「一节」），少一层 ±1 转换就少一处偏移 bug。
+ */
+export async function fetchEbookSection(bookId, n, { timeoutMs = 30_000 } = {}) {
+  return await jsonRequest(`/book/${encodeURIComponent(bookId)}/ebook/section/${Number(n)}`, {}, { timeoutMs });
+}
+
+/**
+ * 电子书一步到位抽取 + 分段（不走浏览器侧 pdf.js 那条循环）。
+ *
+ * 与 PDF 的 `postDigestPages` + `postDigestSegment` 两步相比，这里只有一步：
+ * 正文本来就是宿主解析出来的，没有「渲染进程边读边 POST」的必要。
+ *
+ * 返回 `{ chapters, pages, mode, format, sections }`。
+ * ★ 超时给到 5 分钟：宿主要把缓存里的块展开成 `pages.jsonl`（几十万字）再跑分段，
+ *   与 `postDigestSegment` 同量级。
+ */
+export async function postDigestEbook(bookId, { timeoutMs = 300_000 } = {}) {
+  return await jsonPost(`/digest/${encodeURIComponent(bookId)}/ebook`, {}, { timeoutMs });
+}
+
 // ---- 书源配置与网盘授权向导 -------------------------------------------
 
 /** 带 JSON body 的 POST（少写几遍 header）。 */

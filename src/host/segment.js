@@ -314,14 +314,27 @@ export function chaptersFromWindows(pageCount, step = WINDOW_STEP) {
  * @param input.pages - 每页的行数组（`pages[0]` 是第 1 页）。
  * @param input.outline - 渲染进程解析好的 outline 条目 `[{ title, page }]`。
  * @param input.pageCount - 总页数（`pages` 可能只抽了一部分时用它兜 endPage）。
+ * @param input.assumeText - **调用方已经知道正文一定有字**（重排电子书：文字是我们
+ *   从文件里解出来的）。见下面那段说明。
  * @returns `{ mode, chapters, stats }`。`mode === 'scanned'` 时 `chapters` 为空。
  *
  * ★ 扫描版判定放在**最前面**，因为它决定后面所有事：没有文字层就没有目录页、
  *   没有章标记、也没有可解读的正文。实测 32 本本机 PDF 里 9 本（28%）是扫描版，
  *   这不是边缘情况 —— 界面必须先说清楚「这本书读不了」，而不是先算出一堆章节
  *   再在生成时一页页失败。
+ *
+ * ★ 但这条判据**只对 PDF 成立**，所以留了 `assumeText` 这个口子：
+ *   - 它按「每页至少 `TEXT_PAGE_MIN_CHARS` 字」算 `textRatio`，而电子书的「一页」
+ *     是**一节**，章节扉页、卷标题页、`part0008.html` 里只有一行字都很正常；
+ *   - 一本 3 节的短书会被判成「扫描版」⇒ 面板上写「这本书是扫描版，没有可抽取的
+ *     文字」，而它明明是纯文本 —— 这是最糟的一类错：说得斩钉截铁且完全不对。
+ *   - 电子书一旦走到这里，文字已经在内存里了，「有没有字」不是待猜的事。
+ *
+ * ★ `assumeText` 也跳过「目录页反查」与「章标记识别」两档启发式：那两档是为
+ *   PDF 的排版猜结构写的，套在电子书上只会把正文行误当成目录条目
+ *   （实测会把「2025 年 11 月」切成 43 个假章节）。
  */
-export function segmentBook({ pages = [], outline = [], pageCount } = {}) {
+export function segmentBook({ pages = [], outline = [], pageCount, assumeText = false } = {}) {
   const total = Number.isInteger(pageCount) && pageCount > 0 ? pageCount : pages.length;
   const textPages = pages.filter(isTextPage).length;
   const textRatio = pages.length === 0 ? 0 : textPages / pages.length;
@@ -342,13 +355,22 @@ export function segmentBook({ pages = [], outline = [], pageCount } = {}) {
     return { mode: 'scanned', chapters: [], stats };
   }
 
-  if (textRatio < SCANNED_RATIO) return { mode: 'scanned', chapters: [], stats };
+  if (!assumeText && textRatio < SCANNED_RATIO) return { mode: 'scanned', chapters: [], stats };
 
   const fromOutline = chaptersFromOutline(outline, total);
   // ★ 这里必须过 `numberChapters`：章节序号 `n` 是章节文件名的来源
   //   （`ch${n}.txt`），漏掉它就会写出 `chundefined.txt` —— 而单元测试里
   //   「序号连续」那条只跑了 toc 档，全绿也发现不了（2026-10-23 端到端抓到的）。
-  if (fromOutline.length >= 3) return { mode: 'outline', chapters: numberChapters(markSections(fromOutline, pages)), stats };
+  /**
+   * 够不够格当目录的门槛：PDF 要 3 条（书签常被切碎，1–2 条多半是噪声），
+   * 电子书**要 1 条就够** —— 那是解析器从 nav/ncx 里读出来的真目录，不是猜的。
+   */
+  if (fromOutline.length >= (assumeText ? 1 : 3)) {
+    return { mode: 'outline', chapters: numberChapters(markSections(fromOutline, pages)), stats };
+  }
+
+  // 电子书没有自己的目录（TXT / 无 nav 的 EPUB）：按节切成页窗，不再猜。
+  if (assumeText) return { mode: 'window', chapters: chaptersFromWindows(total), stats };
 
   const toc = chaptersFromToc(pages);
   stats.tocPages = toc.tocPages;

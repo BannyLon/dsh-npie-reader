@@ -171,7 +171,7 @@ describe('normalizeBook', () => {
     assert.equal(normalizeBook(rawBook({ fs_id: '123' })).fsId, 123);
   });
 
-  it('★ renderable 是「pdf 且能取到字节」——反向对照：pdf 但两条凭据都没有就必须不可渲染', () => {
+  it('★ renderable 是「能打开来读（PDF 或重排电子书）且能取到字节」', () => {
     assert.equal(normalizeBook(rawBook({ ext: 'pdf' })).renderable, true);
     // 反向对照：光看扩展名就置 true 的实现会让用户点开一本读不了的书。
     // ★ 必须把 fs_id / abspath / relpath **三条全清掉**才算「取不到字节」：夹具默认带
@@ -181,8 +181,18 @@ describe('normalizeBook', () => {
       normalizeBook(rawBook({ ext: 'pdf', fs_id: 0, abspath: '', relpath: '' })).renderable,
       false,
     );
-    assert.equal(normalizeBook(rawBook({ ext: 'epub' })).renderable, false);
-    assert.equal(normalizeBook(rawBook({ ext: 'txt' })).renderable, false);
+    // 0.25.0 起 EPUB / MOBI / AZW3 / AZW / TXT 也能读了（重排，不是原版式），
+    // 判据与 `EBOOK_EXTENSIONS` **同源** —— 加一个格式只改那一处。
+    for (const ext of ['epub', 'mobi', 'azw3', 'azw', 'txt']) {
+      assert.equal(normalizeBook(rawBook({ ext })).renderable, true, `${ext} 应当可读`);
+      assert.equal(
+        normalizeBook(rawBook({ ext, fs_id: 0, abspath: '', relpath: '' })).renderable,
+        false,
+        `${ext} 取不到字节时不得可读`,
+      );
+    }
+    // 反向对照：`.docx` 仍是「列得出来、读不了」—— 它是文档不是书。
+    assert.equal(normalizeBook(rawBook({ ext: 'docx' })).renderable, false);
   });
 
   it('★ 本地源的书（有 relpath、没有 fs_id）必须可渲染 —— 否则本地书单接进来全是「打不开」', () => {
@@ -462,13 +472,14 @@ describe('libraryStats', () => {
       normalizeBook(rawBook({ id: 'b1', ext: 'pdf', size: 100, fs_id: 1 })),
       normalizeBook(rawBook({ id: 'b2', ext: 'epub', size: 50, fs_id: 2 })),
       // b3 是「三条取字节凭据全空」的 pdf ⇒ 出现在书架上但不可渲染。夹具默认带
-      // `relpath`，不清掉的话新判据会把它当成本地路径、renderable 变成 2。
+      // `relpath`，不清掉的话新判据会把它当成本地路径、renderable 变成 3。
       normalizeBook(rawBook({ id: 'b3', ext: 'pdf', size: 25, fs_id: 0, abspath: '', relpath: '' })),
     ];
     const stats = libraryStats(books, { b1: { state: 'read' }, b2: { state: 'reading' } });
     assert.equal(stats.total, 3);
     assert.equal(stats.bytes, 175);
-    assert.equal(stats.renderable, 1);
+    // b1（pdf）+ b2（epub，0.25.0 起重排可读）算得出；b3 取不到字节，不算。
+    assert.equal(stats.renderable, 2);
     assert.deepEqual(stats.byState, { unread: 1, reading: 1, read: 1, dropped: 0 });
     // 有进度的两条算已加入（老数据兜底），b3 连状态记录都没有 ⇒ 0 进度 ⇒ 不在阅读页里。
     assert.equal(stats.added, 2);

@@ -31,6 +31,8 @@ import { articleLanguage } from '../language.js';
 import { createPanReader } from './pan.js';
 import { createDigestStore } from './digest-store.js';
 import { createOcrRunner } from './ocr.js';
+import { createEbookStore } from './ebook/store.js';
+import { isEbookExtension, parseEbook } from './ebook/index.js';
 import { createAnnotationStore } from './annotation-store.js';
 import { createPanAuth } from './pan-auth.js';
 import { createLocalReader } from './local-books.js';
@@ -278,6 +280,19 @@ export class RssService {
      */
     this.digestStore = createDigestStore({ rootDir: pluginDataDir(), log: message => ctx.logger.info(message) });
     /**
+     * 重排电子书的解析缓存（EPUB / MOBI / AZW3 / TXT）。
+     *
+     * ★ 与 `digestStore` 分目录、与网盘块缓存也分目录：这里的产物是**解析结果**
+     *   （块模型），体积比原书还大；它随时可以扔掉重算，而 `digests/` 里是用户
+     *   花过钱生成的解读。混在一起的话，「清缓存」和「删解读」就成了同一件事。
+     */
+    this.ebookStore = createEbookStore({
+      rootDir: joinPath(pluginDataDir(), 'ebooks'),
+      log: message => ctx.logger.info(message),
+    });
+    /** 并发解析去重：同一本书连点两次不该同时跑两遍 ZIP/LZ77。 */
+    this.ebookPending = new Map();
+    /**
      * 划线 / 笔记。
      *
      * ★ 与 `digestStore` **并存但不同目录**：解读目录会被「重新解读」整本删掉，
@@ -337,6 +352,7 @@ export class RssService {
         digestStore: this.digestStore,
         annotationStore: this.annotationStore,
         ocrRunner: this.ocrRunner,
+        ebookOf: book => this.ebookOf(book),
         // 逐章解读的三个入口。★ 传函数而不是传 `this`：路由层拿不到整个 service，
         //   也就没有办法绕过「单飞 / 取消」这两道闸去直接跑生成。
         startDigests: request => this.startBookDigests(request),
@@ -657,6 +673,54 @@ export class RssService {
     if (book.source === 'local') return await this.local.read(book.localPath, start, end);
     if (book.fsId > 0) return await this.pan.readRange(book.fsId, start, end);
     throw new Error('这本书既没有网盘 fs_id 也没有本地路径，取不到字节');
+  }
+
+  /**
+   * 一本书的**解析结果**（重排格式专用）：先看缓存，没有就整本取字节再解析。
+   *
+   * ★ 为什么整本取：EPUB 的 ZIP 中央目录在**文件尾部**，MOBI 的 record 表在头部但正文
+   *   遍布全文件 —— 这两个格式都没法像 PDF 那样「只取用得到的那几段」。好在它们都小
+   *   （书架上 15 本 EPUB 里最大 3.2 MB，MOBI 最大 8.9 MB），一次取完是合理的。
+   * ★ 缓存键是 `(bookId, size)`：网盘书没有 mtime，体积变了就重解析（见 ebook/store.js）。
+   * ★ 并发只跑一次：面板一开就请求元数据、用户立刻点「抽取目录」是常态，两个请求
+   *   同时进来时跑两遍解析纯属浪费。
+   */
+  async ebookOf(book) {
+    if (!book || typeof book !== 'object') throw new Error('没有这本书');
+    if (!isEbookExtension(book.ext)) {
+      const error = new Error(`这本书是 ${String(book.ext || '未知格式').toUpperCase()}，不是可重排的电子书格式`);
+      error.code = 'EBOOK_FORMAT';
+      throw error;
+    }
+    const cached = await this.ebookStore.read(book.id, book.size);
+    if (cached !== null) return cached;
+
+    const pending = this.ebookPending.get(book.id);
+    if (pending !== undefined) return await pending;
+
+    const task = (async () => {
+      const size = Number(book.size) > 0 ? Number(book.size) : 0;
+      if (size === 0) {
+        const error = new Error('这本书的书单记录里体积是 0，取不到字节');
+        error.code = 'EBOOK_EMPTY';
+        throw error;
+      }
+      const buffer = await this.readBookBytes(book, 0, size - 1);
+      if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+        const error = new Error('取到的字节是空的（网盘直链失效？可以点「重试」）');
+        error.code = 'EBOOK_EMPTY';
+        throw error;
+      }
+      const ebook = parseEbook(buffer, { ext: book.ext, fallbackTitle: book.title });
+      // 写缓存失败不影响这次阅读：内存里已经有一份完好的解析结果。
+      await this.ebookStore.write(book.id, size, ebook).catch((error) => {
+        this.ctx.logger.warn(`[书架] 电子书缓存写失败 ${book.id}：${error?.message ?? error}`);
+      });
+      return ebook;
+    })().finally(() => { this.ebookPending.delete(book.id); });
+
+    this.ebookPending.set(book.id, task);
+    return await task;
   }
 
   /**

@@ -91,6 +91,11 @@ const NOT_CLASSES = new Set([
   // CSS 侧用 `translate(var(--npr-fab-x), var(--npr-fab-y))` 与
   // `transition-delay: calc(var(--npr-fab-i) * 18ms)` 消费 —— 都不是类名。
   'npr-fab-x', 'npr-fab-y', 'npr-fab-i',
+  // 重排电子书（0.25.0）：
+  //   - `npr-ebook-width` 是 **CSS 自定义属性**（`--npr-ebook-width`），由 `BookEbook`
+  //     写在根节点 `style` 上、`.npr-ebook-sheet` 用 `var(...)` 消费；
+  //   - `npr-ebook-fab-list` 是浮动列的 **元素 id**（`aria-controls` 指向它），不是类名。
+  'npr-ebook-width', 'npr-ebook-fab-list',
 ]);
 
 // 有意保留的语义钩子：只用于在 DOM 上标记区块边界，没有对应样式。

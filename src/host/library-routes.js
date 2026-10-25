@@ -45,6 +45,7 @@ import { extname, join, normalize, sep } from 'node:path';
 import { BOOKS_PAGE_LIMIT, LIBRARY_API_PREFIX, PDFJS_VENDOR_PREFIX, isBookId, isReadable } from '../library.js';
 import { contentRange, formatRange, mimeForExtension, parseRange, unsatisfiedContentRange } from '../range.js';
 import { segmentBook } from './segment.js';
+import { digestOutline, pagesOf, sectionIndex } from './ebook/index.js';
 import { OCR_MAX_IMAGE_BYTES, decodeImagePayload, sniffImageExt } from './ocr.js';
 import { isTrustedLocalRequest } from './trust.js';
 
@@ -117,6 +118,23 @@ function readErrorStatus(error) {
   if (code === 'REFRESH_CONSUMED') return 401;
   // 续期失败是**上游**（百度）的问题，不是用户的请求有问题。
   if (code === 'REFRESH_FAILED') return 502;
+  return 400;
+}
+
+/**
+ * 「解析不了这本电子书」要回哪个状态码。
+ *
+ * ★ 415 与 400 的区别对用户有实际意义：415 = **格式本身我们还不支持**
+ *   （DRM、HUFF/CDIC 压缩、未知压缩方式），换一本或转格式即可；
+ *   400 = 文件本身有问题（缺 OPF、截断）。两者的下一步完全不同。
+ */
+function ebookErrorStatus(error) {
+  const code = error?.code ?? '';
+  if (code === 'BOOK_DRM' || code === 'MOBI_HUFFDIC' || code === 'MOBI_COMPRESSION'
+    || code === 'ZIP_METHOD' || code === 'ZIP64' || code === 'EBOOK_FORMAT') return 415;
+  if (code === 'LOCAL_OUTSIDE_ROOT' || code === 'NO_LOCAL_ROOT') return 403;
+  if (code === 'LOCAL_MISSING') return 404;
+  if (code === 'NO_TOKEN' || code === 'NO_APP' || code === 'NO_REFRESH' || code === 'REFRESH_CONSUMED') return 401;
   return 400;
 }
 
@@ -196,6 +214,7 @@ export function makeLibraryRoutes(handlers) {
     exportSkill, skillStatus,
     annotationStore,
     ocrRunner,
+    ebookOf,
   } = handlers;
 
   /**
@@ -219,6 +238,14 @@ export function makeLibraryRoutes(handlers) {
    */
   const digestReady = digestStore !== undefined && digestStore !== null
     && typeof digestStore.appendPages === 'function';
+
+  /**
+   * 重排电子书（EPUB / MOBI / AZW3 / TXT）那几条路由的依赖。
+   *
+   * 缺 `ebookOf` 就退化成 501：测试夹具不必为「读书架」这条路准备一个解析器，
+   * 而真机上它永远在（`service.ebookOf`）。
+   */
+  const ebookReady = typeof ebookOf === 'function';
   const digestGenerateReady = digestReady
     && typeof startDigests === 'function' && typeof stopDigests === 'function';
   /**
@@ -433,6 +460,59 @@ export function makeLibraryRoutes(handlers) {
     return res.end(body);
   };
 
+
+  /**
+   * 「把已抽取的页切成章、写盘」—— PDF 与重排电子书两条路**共用这一段**。
+   *
+   * ★ 为什么必须共用：`meta.chapters` 的形状、`charsByN` 的来源、`task.cursor`
+   *   的语义，下游的生成器与技能导出全都依赖。两处各写一遍的后果不是重复，
+   *   而是**同一个字段在两本书上含义不同**（本项目反复踩的「同一判据两处各写一遍」）。
+   *
+   * @param options.raw - `[{ page, lines }]`（已落盘的页）。
+   * @param options.outline - `[{ title, page }]`，来自 PDF 书签或电子书自带目录。
+   * @param options.pageCount - 总页数；电子书里 = 总节数。
+   * @param options.mode - 覆盖 `segmentBook` 判出来的 mode（电子书用 `'ebook'`）。
+   */
+  async function segmentAndSave(bookId, { raw, outline = [], pageCount, fingerprint, mode }) {
+    const total = Number.isInteger(pageCount) && pageCount > 0 ? pageCount : raw.length;
+    /**
+     * ★ 电子书走 `assumeText`：它的「页」是一**节**，而章节扉页、卷标题页里本来
+     *   就可能只有一行字。按 PDF 那条「每页至少 N 字」的判据，一本 3 节的短书会被
+     *   判成**扫描版**，界面上于是写着「这本书是扫描版，没有可抽取的文字」——
+     *   说得斩钉截铁且完全不对（它的正文就是我们刚从文件里解出来的）。
+     */
+    const result = segmentBook({
+      pages: raw.map(page => page.lines),
+      outline,
+      pageCount: total,
+      assumeText: mode === 'ebook',
+    });
+    await digestStore.writeOutline(bookId, result.chapters);
+    const written = await digestStore.writeChapterTexts(bookId, raw, result.chapters);
+    const charsByN = new Map(written.map(item => [item.n, item.chars]));
+    const previous = (await digestStore.readMeta(bookId)) ?? {};
+    const meta = {
+      ...previous,
+      bookId,
+      fingerprint: fingerprint ?? previous.fingerprint,
+      pageCount: total,
+      extract: result.stats,
+      mode: mode ?? result.mode,
+      chapters: result.chapters.map(chapter => ({
+        n: chapter.n,
+        title: chapter.title,
+        startPage: chapter.startPage,
+        endPage: chapter.endPage,
+        source: chapter.source,
+        chars: charsByN.get(chapter.n) ?? 0,
+        status: 'pending',
+      })),
+      task: { state: 'idle', cursor: total },
+    };
+    await digestStore.writeMeta(bookId, meta);
+    return { mode: meta.mode, stats: result.stats, chapters: meta.chapters };
+  }
+
   const api = {
     kind: 'prefix',
     path: LIBRARY_API_PREFIX,
@@ -598,6 +678,47 @@ export function makeLibraryRoutes(handlers) {
         }
       }
 
+      // ---- 重排电子书（EPUB / MOBI / AZW3 / TXT）--------------------------
+      //
+      // ★ 为什么正文走**宿主解析**、只把「块」发给渲染端：
+      //   EPUB 要先解 ZIP、MOBI 要先做 LZ77、TXT 要先嗅探编码 —— 三件事在浏览器里
+      //   都能做（`DecompressionStream` / `TextDecoder`），但那样每开一本书都要重算一次，
+      //   而宿主侧解析一次就能落盘缓存；更要紧的是「抽章解读」本来就在宿主侧跑，
+      //   两套解析器迟早对不上（同一个文件在阅读器里和在解读里节数不同）。
+      const ebookMatch = /^\/book\/([A-Za-z0-9_-]{1,64})\/ebook$/.exec(rest);
+      const ebookSectionMatch = /^\/book\/([A-Za-z0-9_-]{1,64})\/ebook\/section\/([1-9]\d{0,4})$/.exec(rest);
+      if (ebookMatch !== null || ebookSectionMatch !== null) {
+        if (!ebookReady) return sendJson(res, 501, { ok: false, error: '电子书解析没有接上（缺少 ebookOf）' });
+        if (method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+        const bookId = (ebookMatch ?? ebookSectionMatch)[1];
+        try {
+          const book = await bookById(bookId);
+          if (book === undefined) return sendJson(res, 404, { ok: false, error: '没有这本书' });
+          const ebook = await ebookOf(book);
+          if (ebookSectionMatch === null) {
+            return sendJson(res, 200, {
+              ok: true,
+              format: ebook.format,
+              title: ebook.title,
+              author: ebook.author,
+              warnings: ebook.warnings,
+              toc: ebook.toc,
+              sections: sectionIndex(ebook),
+            });
+          }
+          const n = Number(ebookSectionMatch[2]);
+          const section = ebook.sections[n - 1];
+          if (section === undefined) return sendJson(res, 404, { ok: false, error: `这本书没有第 ${n} 节` });
+          return sendJson(res, 200, {
+            ok: true, n, title: section.title, chars: section.chars, blocks: section.blocks,
+          });
+        } catch (error) {
+          return sendJson(res, ebookErrorStatus(error), {
+            ok: false, error: error?.message ?? String(error), code: error?.code ?? '',
+          });
+        }
+      }
+
       const rawMatch = /^\/book\/([A-Za-z0-9_-]{1,64})\/raw$/.exec(rest);
       if (rawMatch !== null) {
         if (method !== 'GET' && method !== 'HEAD') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
@@ -614,7 +735,7 @@ export function makeLibraryRoutes(handlers) {
       // ★ 为什么每 20 页就落一次盘：阅读器面板一关，渲染进程里的抽取循环就断了。
       //   不落盘的话，用户抽到 180 页时关一下面板，回来要从第 1 页重来。
 
-      const digestMatch = /^\/digest\/([A-Za-z0-9_-]{1,64})\/(pages|segment|status|reset|generate|stop|skill)$/.exec(rest);
+      const digestMatch = /^\/digest\/([A-Za-z0-9_-]{1,64})\/(pages|segment|status|reset|generate|stop|skill|ebook)$/.exec(rest);
       if (digestMatch !== null) {
         if (!digestReady) return sendJson(res, 501, { ok: false, error: '解读功能没有接上（缺少 digestStore）' });
         const bookId = digestMatch[1];
@@ -720,6 +841,37 @@ export function makeLibraryRoutes(handlers) {
           }
         }
 
+        if (action === 'ebook') {
+          /**
+           * 重排电子书的「抽取目录」：**整本一次做完**，不需要客户端逐页抽。
+           *
+           * ★ 为什么不做断点续抽：电子书的正文在宿主侧一次就解析完了（实测一本 2.5 MB
+           *   的 MOBI 约 30 ms），没有「关掉面板就断」的问题；PDF 那条分批落盘的路
+           *   是为「几百次 getTextContent 可能中途被打断」准备的，这里不适用。
+           */
+          if (!ebookReady) return sendJson(res, 501, { ok: false, error: '电子书解析没有接上（缺少 ebookOf）' });
+          if (method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+          try {
+            const book = await bookById(bookId);
+            if (book === undefined) return sendJson(res, 404, { ok: false, error: '没有这本书' });
+            const ebook = await ebookOf(book);
+            const raw = pagesOf(ebook);
+            if (raw.length === 0) return sendJson(res, 400, { ok: false, error: '这本电子书没有可解读的正文' });
+            await digestStore.writePages(bookId, raw);
+            const result = await segmentAndSave(bookId, {
+              raw,
+              outline: digestOutline(ebook),
+              pageCount: raw.length,
+              mode: 'ebook',
+            });
+            return sendJson(res, 200, { ok: true, ...result, format: ebook.format, sections: raw.length });
+          } catch (error) {
+            return sendJson(res, ebookErrorStatus(error), {
+              ok: false, error: error?.message ?? String(error), code: error?.code ?? '',
+            });
+          }
+        }
+
         if (action === 'reset') {
           // 「重新抽取」：书换过文件、或者上次抽到一半把页面抽坏了。
           // ★ 只删这本书自己的目录（`digestStore.remove` 里 bookId 已经过校验），
@@ -768,39 +920,13 @@ export function makeLibraryRoutes(handlers) {
         try {
           const raw = await digestStore.readPages(bookId);
           if (raw.length === 0) return sendJson(res, 409, { ok: false, error: '还没有抽取任何页' });
-          const pageCount = Number.isInteger(body.pageCount) && body.pageCount > 0 ? body.pageCount : raw.length;
-          const pages = raw.map(page => page.lines);
-          const result = segmentBook({
-            pages,
+          const result = await segmentAndSave(bookId, {
+            raw,
             outline: Array.isArray(body.outline) ? body.outline : [],
-            pageCount,
+            pageCount: Number.isInteger(body.pageCount) && body.pageCount > 0 ? body.pageCount : raw.length,
+            fingerprint: body.fingerprint,
           });
-          await digestStore.writeOutline(bookId, result.chapters);
-          const written = await digestStore.writeChapterTexts(bookId, raw, result.chapters);
-          const charsByN = new Map(written.map(item => [item.n, item.chars]));
-          const previous = (await digestStore.readMeta(bookId)) ?? {};
-          const meta = {
-            ...previous,
-            bookId,
-            fingerprint: body.fingerprint ?? previous.fingerprint,
-            pageCount,
-            extract: result.stats,
-            mode: result.mode,
-            // ★ 章节状态按章记，不存在「整本已解读」这种布尔 —— 19 章挂 1 章，
-            //   一个布尔完全看不出来（本项目反复踩的假绿）。
-            chapters: result.chapters.map(chapter => ({
-              n: chapter.n,
-              title: chapter.title,
-              startPage: chapter.startPage,
-              endPage: chapter.endPage,
-              source: chapter.source,
-              chars: charsByN.get(chapter.n) ?? 0,
-              status: 'pending',
-            })),
-            task: { state: 'idle', cursor: pageCount },
-          };
-          await digestStore.writeMeta(bookId, meta);
-          return sendJson(res, 200, { ok: true, mode: result.mode, stats: result.stats, chapters: meta.chapters });
+          return sendJson(res, 200, { ok: true, ...result });
         } catch (error) {
           return sendJson(res, 400, { ok: false, error: error.message });
         }

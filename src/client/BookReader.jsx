@@ -50,6 +50,7 @@ import {
   BOOK_BRIGHTNESS, BOOK_TINTS, nextBookTint, normalizeBookBrightness, normalizeBookTint,
 } from '../reading-settings.js';
 import { layerScaleRatio, quoteBarPlacement, selectionQuote, textLayerCharCount, textLayerMetrics } from './book-text.js';
+import { peekNext, peekOnLeave } from './book-peek.js';
 import {
   FIT_PAGE, FIT_WIDTH, NO_COMMAND, WHEEL_FLIP_COOLDOWN_MS, WHEEL_FLIP_DELTA,
   ZOOM_MAX, ZOOM_MIN, contentBox, createFabHover, displayScale, extractPageText, fabStack, readerCommand,
@@ -157,6 +158,13 @@ export function BookReader({
    *   Esc / I 键，以及**进去时主动弹的那句提示**（见 `toggleImmersive`）。
    */
   const [immersive, setImmersive] = useState(false);
+  /**
+   * 沉浸态：指针靠近面板顶边时胶囊滑出（0.25.4）。
+   * ★ 不能只写 CSS `:hover`：热区 `.npr-book-toolbar` 是宿主的窗口拖动条
+   *   （`-webkit-app-region: drag`），Chromium 当标题栏命中 ⇒ 页面收不到鼠标事件，
+   *   `:hover` 永不成立，胶囊滑出去就回不来（用户报的真机故障）。
+   */
+  const [peek, setPeek] = useState(false);
   /** 书页配色（`paper` / `sepia` / `mint` / `night`）。**持久化**，它是一项阅读偏好。 */
   const [tint, setTint] = useState('paper');
   /** 书页亮度（1 = 不调）。与配色分开：色温和明度是两件事，见 `reading-settings.js`。 */
@@ -850,6 +858,23 @@ export function BookReader({
   useEffect(() => {
     onImmersiveChange?.(immersive);
   }, [immersive, onImmersiveChange]);
+
+  /**
+   * 沉浸态的「胶囊滑出」判据（0.25.4）：指针离面板顶边 ≤56px 就滑出、>72px 才收。
+   * 滞回写在 `book-peek.js`（有单测），这里只把指针坐标换算成距离。
+   */
+  const onPeekPointerMove = (event) => {
+    if (!immersive) return;
+    const top = event.currentTarget.getBoundingClientRect().top;
+    const next = peekNext(peek, event.clientY - top);
+    if (next !== peek) setPeek(next);
+  };
+  const onPeekPointerLeave = (event) => {
+    if (!immersive) return;
+    const top = event.currentTarget.getBoundingClientRect().top;
+    const next = peekOnLeave(event.clientY - top);
+    if (next !== peek) setPeek(next);
+  };
 
   /**
    * 点空白处收起右下角那一列。
@@ -1603,10 +1628,11 @@ export function BookReader({
     return (
       <div className="npr-book-empty" role="status">
         <Icon name="file-check" size={24} />
-        <h2>这种格式暂不支持原版式阅读</h2>
+        <h2>这种格式暂不支持阅读</h2>
         <p>
-          本插件目前只内置了 PDF 渲染器（书架里 {book.ext.toUpperCase() || '这种'} 共 31 本，占 1.2%）。
-          这一本没有坏 —— 它在网盘上是好的，只是这里还读不了。
+          内置阅读器认 PDF（原版式）与 EPUB / MOBI / AZW3 / TXT（重排）。
+          这一本 {book.ext.toUpperCase() || '这种文件'} 不在其中 —— 它没有坏，
+          只是本插件还没有对应它的渲染器。
         </p>
         {book.panPath !== '' && (
           <div className="npr-book-path">
@@ -1662,8 +1688,9 @@ export function BookReader({
   });
 
   return (
-    <div ref={bookRef} className={`npr-book${immersive ? ' is-immersive' : ''}`} data-tint={tint}
-      style={{ '--npr-book-brightness': brightness }}>
+    <div ref={bookRef} className={`npr-book${immersive ? ' is-immersive' : ''}${immersive && peek ? ' is-peek' : ''}`}
+      data-tint={tint} style={{ '--npr-book-brightness': brightness }}
+      onPointerMove={onPeekPointerMove} onPointerLeave={onPeekPointerLeave}>
       {/* ---- 顶部：一条 10px 的拖动条 + 一颗**居中的工具胶囊** ----------------
           ★ 谁在顶部、谁在右下角（用户 2026-10-23 第三轮定的分工）：
             · **顶部胶囊** = 与「这本书」有关的**开关类**动作：标记读完 / 伴读 / 划线 /

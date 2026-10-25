@@ -819,6 +819,14 @@ async function unhover() {
  *   .npr-book-chrome` 这条**兄弟选择器**生效的，强制伪类只能给某个元素加 `:hover`，
  *   影响不到它的兄弟。
  * ★ 必须带 `options`：`probe` 每次都重写 class / 尺寸，不带参数就等于顺手退出了沉浸态。
+ * ⚠️ **这条判据在真机上不成立**（0.25.4 才知道）：宿主给 `[data-window-drag]` 的行加了
+ *   `-webkit-app-region: drag`，Chromium 把它当窗口标题栏命中（`HTCAPTION`）⇒ 页面
+ *   **收不到鼠标事件**，`:hover` 永远不成立，胶囊滑出去就回不来（用户报的
+ *   「顶部的菜单条一旦隐藏就出不来了」）。这个脚本自己搭页面、**没有**那条声明，
+ *   所以它一直是绿的 —— 一条假绿。
+ *   ⇒ 真正的出口是组件里的 `is-peek`（按鼠标到面板顶边的距离判断，见
+ *   `src/client/book-peek.js`），由 `test/book-peek.test.mjs` 与
+ *   `test/book-hooks-render.test.mjs` 的接线守卫覆盖。别把这里的绿当成真机验证。
  */
 async function hoverToolbar(options = {}) {
   const box = await probe({ ...options });

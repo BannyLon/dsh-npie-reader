@@ -129,6 +129,23 @@ export function createDigestStore({ rootDir, log = () => {} } = {}) {
     await appendFile(join(dir, 'pages.jsonl'), `${lines}\n`, 'utf8');
   }
 
+  /**
+   * **整份**重写 pages.jsonl（重排电子书用）。
+   *
+   * ★ 与 `appendPages` 的分工：PDF 是边抽边追加（一页页来，需要断点续跑），
+   *   而电子书的正文在宿主侧一次就解析完了 —— 整份覆盖才是对的。
+   *   用追加的话，用户点两次「抽取目录」会让同一节在文件里出现两遍，
+   *   而 `readPages` 会按 page 排序后返回**两条同号记录**，章节区间就会算重。
+   */
+  async function writePages(bookId, pages) {
+    const dir = await ensureDir(bookId);
+    const lines = (Array.isArray(pages) ? pages : [])
+      .filter(page => Number.isInteger(page?.page) && Array.isArray(page?.lines))
+      .map(page => JSON.stringify({ page: page.page, lines: page.lines }))
+      .join('\n');
+    await writeFile(join(dir, 'pages.jsonl'), lines === '' ? '' : `${lines}\n`, 'utf8');
+  }
+
   /** 读回已抽的全部页（断点续跑 / 抽完之后算章节）。坏行跳过，不让一行毁掉整本。 */
   async function readPages(bookId) {
     let raw;
@@ -478,6 +495,7 @@ export function createDigestStore({ rootDir, log = () => {} } = {}) {
     readOutline,
     writeOutline,
     appendPages,
+    writePages,
     readPages,
     ocrFileOf,
     readOcr,

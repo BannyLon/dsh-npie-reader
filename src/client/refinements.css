@@ -976,11 +976,18 @@
   transform: translateY(-100%); opacity: 0; pointer-events: none;
   transition: transform .18s ease, opacity .18s ease;
 }
+.npr-book.is-immersive.is-peek .npr-book-chrome,
 .npr-book.is-immersive .npr-book-toolbar:hover ~ .npr-book-chrome,
 .npr-book.is-immersive .npr-book-chrome:hover,
 .npr-book.is-immersive .npr-book-chrome:focus-within {
   transform: translateY(0); opacity: 1; pointer-events: auto;
 }
+/* ★ `is-peek` 是 0.25.4 补的那一条，而且它才是**真机上唯一有效的那条**：
+   `.npr-book-toolbar` 在宿主里带 `-webkit-app-region: drag`，是窗口拖动条 ——
+   Chromium 把它当标题栏命中（HTCAPTION），页面**收不到任何鼠标事件**，
+   于是 `:hover` 永远不成立，胶囊滑出去就回不来（用户原话：「顶部的菜单条一旦隐藏
+   就出不来了」）。上面那三条留着的意义只剩「探针页 / 没有 app-region 的环境」，
+   别再指望它们。 */
 .npr-book.is-immersive .npr-book-stage { padding: 8px 10px 12px; }
 
 /* ---- 沉浸时把**书架那一列**也收掉 ----
@@ -1595,11 +1602,12 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 }
 .npr-book[data-tint="night"] .npr-book-mark { mix-blend-mode: screen; opacity: .5; }
 
-/* 色值只在这一处定义：卡片左边框、面板里的色点、书页上的高亮共用它。 */
-.npr-book-mark[data-tone="yellow"], .npr-mark-card[data-tone="yellow"], .npr-mark-tone[data-tone="yellow"] { --npr-mark-color: #f2c200; }
-.npr-book-mark[data-tone="green"], .npr-mark-card[data-tone="green"], .npr-mark-tone[data-tone="green"] { --npr-mark-color: #34c759; }
-.npr-book-mark[data-tone="blue"], .npr-mark-card[data-tone="blue"], .npr-mark-tone[data-tone="blue"] { --npr-mark-color: #3a96ff; }
-.npr-book-mark[data-tone="pink"], .npr-mark-card[data-tone="pink"], .npr-mark-tone[data-tone="pink"] { --npr-mark-color: #ff2d78; }
+/* 色值只在这一处定义：卡片左边框、面板里的色点、PDF 的高亮矩形、电子书的行内
+   高亮共用它（四类选择器各写一遍，但颜色只有一份）。 */
+.npr-book-mark[data-tone="yellow"], .npr-mark-card[data-tone="yellow"], .npr-mark-tone[data-tone="yellow"], .npr-ebook-mark[data-tone="yellow"] { --npr-mark-color: #f2c200; }
+.npr-book-mark[data-tone="green"], .npr-mark-card[data-tone="green"], .npr-mark-tone[data-tone="green"], .npr-ebook-mark[data-tone="green"] { --npr-mark-color: #34c759; }
+.npr-book-mark[data-tone="blue"], .npr-mark-card[data-tone="blue"], .npr-mark-tone[data-tone="blue"], .npr-ebook-mark[data-tone="blue"] { --npr-mark-color: #3a96ff; }
+.npr-book-mark[data-tone="pink"], .npr-mark-card[data-tone="pink"], .npr-mark-tone[data-tone="pink"], .npr-ebook-mark[data-tone="pink"] { --npr-mark-color: #ff2d78; }
 
 /* 气泡里的「划线」是主操作：实心强调色，一眼能和旁边三颗区分开。 */
 .npr-book-quotebar button.is-primary { background: var(--npr-accent-strong); border-color: transparent; color: #fff; font-weight: 600; }
@@ -1686,3 +1694,436 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
   background: var(--npr-accent-strong); color: #fff; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
 }
 .npr-marks-primary:hover { filter: brightness(1.1); }
+
+/* ==== 重排电子书（EPUB / MOBI / AZW3 / TXT）=================================
+   ★ 与 PDF 那条链路的关系：**外壳同款、书页完全不同**。
+     外壳（胶囊 / 浮动按钮 / 目录栏 / 伴读栏）沿用上面的 `npr-book-` 系列，
+     所以用户在两种书之间切换时不用重新认界面；书页这一层是「真文字」，
+     于是所有与位图相关的东西（画布、文字层、纸色乘算覆盖层）一个都用不上。
+
+   ★ 纸色靠**改底色**而不是压一层乘算色：PDF 的白纸画在像素里，只能叠色；
+     这里背景本来就是 CSS 画的，直接给 `--npr-bg` 就够了 —— 也正因此
+     「配色」只改 `readingTheme`，不碰 `bookTint`（那套是位图滤镜）。
+
+   ★ 0.25.1 重做版式。三条判断，全部对着真截图改的：
+     ① **阅读区要像一页纸，不像一块白板**：纸面比四周略亮、有一道几乎看不见的边，
+        正文才「浮」得起来。整屏纯白时读者分不清哪里是页边、哪里是窗口 —— 上一版
+        正文区就是一块通铺的白，看起来像「网页里放了一段字」。
+     ② **导航信息进页眉页脚，不要进正文**：上一版在正文顶上画一条灰色带下划线的
+        「节标题」，而书自己的 `<h1>` 就在下面一行 —— 同一个标题连着出现两遍。
+        顶部还压着一行 5 段小字的元信息（格式 / 大小 / 字号 / 行距 / 快捷键），
+        那是给开发者看的。现在：页眉 = 书名 · 所属的部 / 卷，页脚 = 位置 + 进度条。
+        ★ 页眉右边**不写当页标题**：当页标题就在正文第一行，写两遍是重复（判据见
+          `ebook-outline.js` 的 `runningHead`）。
+     ③ **顶部占高从 90px 收到 42px**：胶囊去掉书名、压到 32px，元信息行整行删掉。
+        同样一屏，正文多出两行半 —— 阅读器里「屏幕」就是这本书。
+   ========================================================================= */
+
+/* ---- 页眉：只剩一行**书眉**（书名与六个动作都搬回顶部胶囊了，0.25.3）----
+   ★ 上一版把工具胶囊并进这一行，看起来省了 40px；但它挂在**滚动容器**里 ⇒
+     一开目录 / 划线 / 伴读，阅读列变窄、胶囊跟着挤，最后那颗「沉浸」被裁到
+     纸面外面（用户截图里的「出框」）。胶囊属于**窗口**，宽度只该跟窗口变 ——
+     所以它回到了 `.npr-book-chrome`（与 PDF 阅读器同一个位置、同一套类）。
+   ★ 这一行现在只声明「我在哪一卷」（纸质书的 running head）。它属于书页那一层：
+     `sticky` + 纸色背景，滚动时正文从它下面穿过去。
+   ★ 没有上级章节的页**不渲染它**（见 `BookEbook.jsx` 的条件），所以这里不再需要
+     「书名列 + 分隔点」那两段样式。 */
+.npr-ebook-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: var(--npr-ebook-width, 760px);
+  height: 34px;
+  margin: 0 auto;
+  padding: 0 clamp(12px, 6.2%, 48px);
+  border-radius: 3px 3px 0 0;
+  background: var(--npr-bg);
+  color: var(--npr-faint);
+  font-size: 11px;
+  letter-spacing: .04em;
+  user-select: none;
+}
+.npr-ebook-head-chapter {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- 顶部胶囊：宽度预算（电子书作用域）--------------------------------
+   ★ 胶囊本身与 PDF 共用 `.npr-book-chrome` / `.npr-book-pill` 那套样式，这里只补
+     「放不下的时候怎么办」。
+   ★ **不能靠 `overflow: hidden` 收场**：被裁掉的那几颗仍然能 Tab 到、却点不到 ——
+     本项目为这种「看得见摸不着」记过账（README 里那颗被挤出去的复制按钮）。
+     所以窄到放不下时先砍**文字**、只留图标：图标本身认得出来，`title` 也还在。
+   ★ 阈值是**量出来的**，不是猜的（真 Chrome 探针，书架列 236px，`--geom` 读胶囊实宽）：
+       六颗带文字：胶囊 467 → 需要 chrome(=视口−236) ≥ 491 → 视口 ≥ 727
+       只留图标 + 书名：胶囊 264 → 需要 chrome ≥ 288 → 视口 ≥ 524
+       只留图标：胶囊 204 → 需要 chrome ≥ 228 → 视口 ≥ 464
+     所以 760 / 560 两档，各留约 30px 余量。上一版写的是 920 / 640 —— 920 那档
+     比实际需要多砍了将近 200px 的窗口，900 宽的窗口明明放得下却只剩一排图标。
+   ★ 作用域限定 `.npr-ebook` —— PDF 那边胶囊的几何另有真机门禁
+     （`scripts/check-book-reading-chrome.mjs`）在量，不在这里顺手改它的阈值。
+   ★ 这里要把 0.22.0 那条 `@container (max-width: 700px)` 在电子书里**部分还原**：
+     那时胶囊还在面板内部，按面板宽度收书名是对的；现在它在窗口层、只跟窗口变，
+     而那条规则会把书名在 700px 就收掉（实测书名 + 图标只要 264，视口 524 才真的放不下）。
+     文字照旧收掉（下面 760 那档也这么干），只把书名还回去。 */
+@container (max-width: 700px) {
+  .npr-ebook .npr-book-pill-title { display: block; }
+}
+@media (max-width: 760px) {
+  .npr-ebook .npr-book-pill-item span { display: none; }
+  .npr-ebook .npr-book-pill-item { padding: 0 8px; }
+  .npr-ebook .npr-book-pill-title { max-width: 120px; }
+}
+@media (max-width: 560px) {
+  .npr-ebook .npr-book-pill-item { padding: 0 7px; }
+  .npr-ebook .npr-book-pill-title { display: none; }
+}
+
+/* ---- 阅读区：舞台是「桌面」，纸面是「书页」----
+   ★ 桌面与纸的差值只有 7%：再深一点，护眼纸色（sage / mist）就会被染浑，
+     白纸也会变成灰纸。到了深色主题反而要往**黑**里走（见下面的 data-theme 覆盖）——
+     否则会得到「深色纸压在浅色桌上」的反向层次，眼睛第一下就觉得不对。 */
+.npr-ebook { --npr-ebook-desk: color-mix(in srgb, var(--npr-bg) 93%, var(--npr-fg)); }
+.npr-ebook[data-theme="dark"],
+.npr-ebook[data-theme="black"] { --npr-ebook-desk: color-mix(in srgb, var(--npr-bg) 66%, #000); }
+
+/* 舞台：从「flex 居中一块画布」改成「一块可滚动的桌面」。
+   ★ `justify-content/margin:auto` 那一套是给画布居中用的；文字版式要的是整幅纸，
+     不需要居中，`display:block` 才不会让段落变成 flex item（那会让每个 <p> 变成
+     一列）。
+   ★ `flex-direction: column` 加在 `.npr-book-view` 上（只在电子书作用域）：
+     页脚是正常流里的一行，不是浮层 —— 浮层就要给舞台塞 `padding-bottom` 防遮挡，
+     而那个 padding 在短节里会把页脚顶到半空。 */
+.npr-ebook .npr-book-view { flex-direction: column; }
+.npr-ebook-stage {
+  display: block;
+  padding: 0;
+  overflow-x: hidden;
+  background: var(--npr-ebook-desk);
+  scrollbar-gutter: stable;
+}
+.npr-book.is-immersive .npr-ebook-stage { padding: 0; }
+
+/* ---- 纸面 ----
+   ★ 阴影压到「几乎看不见」这一档是刻意的：卡片式的大阴影会把这页变成 App 里的
+     一个模块；书页要的是**平面**，只需要一点边界感。描边用 5% 前景色而不是
+     `--npr-border`（那条约 8%，在白色纸面上会显成一条灰线）。
+   ★ 入场动画 180ms、位移 6px：翻节时如果整块瞬间换掉，眼睛会短暂「失焦」；
+     一点点位移就能把「换了一页」说清楚。 */
+.npr-ebook-sheet {
+  box-sizing: border-box;
+  width: 100%;
+  /* ★ `position: relative` 是划词气泡的定位基准（0.25.1）：气泡是 `absolute`，
+     而正文在滚动容器里 —— 挂到舞台上的话，滚两屏之后气泡会留在原地。 */
+  position: relative;
+  max-width: var(--npr-ebook-width, 760px);
+  /* ★ 0.25.1b：纸面不再是一块「浮在桌面的卡片」，而是**从页眉一直铺到页脚**的
+     一整页 —— 上边距与圆角交给页眉、下边距交给页脚，中间那段缝会让页眉看起来
+     是「标签」而不是「书的一部分」。`min-height` 用 `calc(100% - 页眉高)`：
+     短到只有两段的节也照样占满一屏，读者不会看到「半张纸」。 */
+  min-height: calc(100% - 34px);
+  margin: 0 auto;
+  /* 左右内边距取 `(纸宽 − 版心宽) / 2`：纸宽 = 字号×每行字数 + 96，所以
+     48px 两侧正好把「版心」还给正文 —— 设置里写的 36 字/行就是真的 36 字/行。 */
+  padding: 42px clamp(20px, 6.2%, 48px) 48px;
+  border-radius: 0;
+  background: var(--npr-bg);
+  color: var(--npr-fg);
+  font-family: var(--npr-font-family, "Songti SC", "Source Han Serif SC", Georgia, serif);
+  font-size: var(--npr-font-size, 19px);
+  line-height: var(--npr-line-height, 1.85);
+  /* ★ `left` 而不是 `justify`：两端对齐在 33 字/行的栏宽下会把中文行拉出很明显的
+     空档（截图里第二行「在巴黎，三月还在下雨……」字距就是不匀的），一行越长越难看。
+     纸书的中文排版本来是「左对齐 + 首行缩进」，不是字字对齐到右边界。 */
+  text-align: left;
+  overflow-wrap: break-word;
+  -webkit-font-smoothing: antialiased;
+  animation: npr-ebook-in .18s ease-out both;
+}
+@keyframes npr-ebook-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.npr-ebook[data-theme="dark"] .npr-ebook-sheet,
+.npr-ebook[data-theme="black"] .npr-ebook-sheet {
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 4%),
+    0 12px 34px -20px rgb(0 0 0 / 70%);
+}
+
+/* 段落：首行缩进两字，段间不留空 —— 中文书的通行排版。
+   ★ 不用 `margin` 制造段距：一段一行的小说（MOBI 常见）在段距下会散成一片，
+     读起来没有「成段」的感觉。 */
+.npr-ebook-p { margin: 0; text-indent: 2em; }
+/* 标题后的第一段不缩进（缩进会让标题看起来像「悬空」）。 */
+.npr-ebook-h1 + .npr-ebook-p, .npr-ebook-h2 + .npr-ebook-p,
+.npr-ebook-h3 + .npr-ebook-p, .npr-ebook-ul + .npr-ebook-p { text-indent: 0; }
+
+.npr-ebook-h1, .npr-ebook-h2, .npr-ebook-h3 {
+  margin: 1.7em 0 .62em;
+  font-weight: 650;
+  line-height: 1.4;
+  text-align: left;
+  text-indent: 0;
+  letter-spacing: 0;
+  /* 标题里的长串也要能断，否则窄面板下会横向溢出。 */
+  overflow-wrap: break-word;
+}
+.npr-ebook-h1 { font-size: 1.34em; margin-top: .3em; }
+.npr-ebook-h2 { font-size: 1.24em; }
+.npr-ebook-h3 {
+  font-size: 1.12em;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--npr-fg) 88%, transparent);
+}
+/* 一节的第一块就是标题时，不要那 1.7em 的上边距 —— 否则正文永远从半空开始。 */
+.npr-ebook-sheet > :first-child { margin-top: 0; }
+
+/* ---- 电子书的划线（0.25.1）----
+   ★ 与 PDF 的 `.npr-book-mark` 是**两种实现**，不是两套样式：PDF 那边是在位图上
+     另铺一层绝对定位的矩形（文字层透明、坐标由 pdf.js 给定），电子书这边直接给
+     文字包一层 `<mark>` —— 重排文本的坐标随字号 / 版心 / 窗口宽度在变，量矩形等于
+     每次改字号都要重算一遍，而行内元素浏览器自己会跟着换行。
+   ★ 仍然是 `multiply` 才像荧光笔：纸色透出来、字仍然清楚。深色纸必须换 `screen`，
+     否则「深底 × 半透明色」等于什么都看不见 —— 与 PDF 那条同一个理由。
+   ★ `color: inherit` 不能让浏览器用 `<mark>` 的默认黑字：深色纸上会变成黑字黑底。
+   ★ 色值不在这里定义，见下方那四条 `--npr-mark-color`（PDF / 卡片 / 色点共用）。 */
+.npr-ebook-mark {
+  padding: 0;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--npr-mark-color, #f2c200) 34%, transparent);
+  color: inherit;
+  mix-blend-mode: multiply;
+}
+.npr-ebook[data-theme="dark"] .npr-ebook-mark,
+.npr-ebook[data-theme="black"] .npr-ebook-mark { mix-blend-mode: screen; opacity: .55; }
+
+.npr-ebook-quote {
+  margin: 1.35em 0;
+  padding: 0 0 0 1.15em;
+  border-left: 3px solid color-mix(in srgb, var(--npr-fg) 18%, transparent);
+  color: color-mix(in srgb, var(--npr-fg) 72%, transparent);
+  font-size: .95em;
+  text-indent: 0;
+}
+.npr-ebook-ul { margin: .9em 0; padding-left: 1.45em; }
+.npr-ebook-li { margin: .32em 0; padding-left: .15em; }
+.npr-ebook-li::marker { color: color-mix(in srgb, var(--npr-accent-strong) 72%, transparent); }
+/* 预格式化块（诗歌、代码）：白空格必须保留，且要能横向滚 —— 折行会把诗行读乱。 */
+.npr-ebook-pre {
+  margin: 1.2em 0;
+  padding: .8em 1em;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--npr-fg) 5%, transparent);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: .84em;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+/* ---- 页脚：位置 + 进度 ----
+   ★ 一条 2px 的进度条贴在**最底边**：读者不需要读数字就知道「还剩多少」。
+     `tabular-nums` 让「第 9 节」翻到「第 10 节」时数字不跳位。 */
+.npr-ebook-foot {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--npr-ebook-width, 760px);
+  height: 30px;
+  margin: 0 auto;
+  padding: 0 clamp(12px, 6.2%, 48px);
+  border-top: 1px solid color-mix(in srgb, var(--npr-fg) 7%, transparent);
+  border-radius: 0 0 3px 3px;
+  background: color-mix(in srgb, var(--npr-bg) 88%, transparent);
+  color: var(--npr-faint);
+  font-size: 10.5px;
+  letter-spacing: .03em;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.npr-ebook-foot-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: block;
+  height: 2px;
+  background: color-mix(in srgb, var(--npr-fg) 7%, transparent);
+}
+.npr-ebook-foot-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 0 2px 2px 0;
+  background: var(--npr-accent-strong);
+  opacity: .5;
+  transition: width .18s ease;
+}
+
+/* 加载 / 出错：一整屏就一句话时，垂直居中比顶在上面好看。 */
+.npr-ebook-stage > .npr-book-hint,
+.npr-ebook-stage > .npr-book-error { margin: 14vh auto 0; max-width: 46ch; text-align: center; }
+
+/* 沉浸态：只留正文。页眉页脚是导航，不是内容 —— 用 `opacity` 而不是 `display:none`，
+   否则它们一隐一现会把整页文字往上顶一格（那一下跳动比藏着更刺眼）。 */
+.npr-book.is-immersive .npr-ebook-head,
+.npr-book.is-immersive .npr-ebook-foot { display: none; }
+
+/* 节尾的上一节 / 下一节：读到底不用把鼠标移回右下角。
+   ★ 无边框、无底色，只有文字与箭头 —— 它是一个「出口」，不是一块按钮。
+     上一版给了描边 + 圆角 + 底色，两枚胶囊在段末抢走正文的注意力。 */
+.npr-ebook-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 2.6em 0 0;
+  padding-top: 1.3em;
+  border-top: 1px solid color-mix(in srgb, var(--npr-fg) 8%, transparent);
+  color: var(--npr-faint);
+  font-size: 12px;
+}
+.npr-ebook-nav button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--npr-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color .15s ease;
+}
+.npr-ebook-nav button:hover:not(:disabled) { color: var(--npr-accent-strong); }
+.npr-ebook-nav button:disabled { opacity: .3; cursor: default; }
+
+/* 配色面板的脚注：格式 / 大小 / 节数（原「元信息行」的去处）。 */
+.npr-book-palette-foot {
+  margin: 2px 0 0;
+  color: var(--npr-faint);
+  font-size: 10.5px;
+  letter-spacing: .02em;
+}
+
+/* 浮动按钮让开页脚：它原来压着右下角的百分比。 */
+.npr-ebook .npr-book-fab { bottom: 44px; }
+
+/* 浮动按钮里的「Aa」：用文字而不是图标 —— 齿轮说的是「系统设置」，
+   阅读器里这一颗管的是字号与纸色，`Aa` 是全行业通行的写法。 */
+.npr-ebook-fab-aa { font-size: 13px; font-weight: 650; letter-spacing: -.01em; line-height: 1; }
+
+/* 减少动态：入场动画是「换了一页」的提示，不是装饰；系统要求关掉时就该关掉。
+   只关这一处 —— 滑动 / 淡入那类装饰性过渡不在这里管。 */
+@media (prefers-reduced-motion: reduce) {
+  .npr-ebook-sheet { animation: none; }
+  .npr-ebook-foot-bar i { transition: none; }
+}
+
+/* ---- 配色面板：电子书那六档纸色 -------------------------------
+   ★ 这里曾经有个真缺陷：色块的颜色是按 PDF 的 `bookTint`（paper / sepia / mint /
+     night）写死的，而电子书用的是 `readingTheme`（light / paper / sage / mist /
+     dark / black）—— 两套名字只有 `paper` 重合，于是**六个色块里四个是空白方块**，
+     用户根本看不出能选什么。判据是「data-tint 的值域」而不是「它是不是色块」。
+   ★ 宽度也要跟着改：6 × 30px + 5 × 8px = 220px，而面板内容宽只有 184px，
+     最后一格会被裁掉。27px + 6px 刚好排满。 */
+.npr-ebook .npr-book-palette { width: 228px; }
+.npr-ebook .npr-book-swatches { gap: 6px; }
+.npr-ebook .npr-book-swatch { width: 27px; height: 27px; border-radius: 7px; }
+
+.npr-ebook .npr-book-swatch[data-tint="light"] { background: #ffffff; }
+.npr-ebook .npr-book-swatch[data-tint="paper"] { background: #f5efdf; border-color: #d8cfb8; }
+.npr-ebook .npr-book-swatch[data-tint="sage"] { background: #e8eee3; border-color: #c3d0bf; }
+.npr-ebook .npr-book-swatch[data-tint="mist"] { background: #e7edf2; border-color: #bccbd6; }
+.npr-ebook .npr-book-swatch[data-tint="dark"] { background: #252525; border-color: #3a3f45; }
+.npr-ebook .npr-book-swatch[data-tint="black"] { background: #090909; border-color: #2a2f36; }
+/* 选中的那一格：一圈纸色 + 一圈强调色（两层描边），比只加粗边框更清楚，
+   也不会把 27px 的方块挤变形。 */
+.npr-ebook .npr-book-swatch[aria-checked="true"] {
+  box-shadow: 0 0 0 2px var(--npr-bg), 0 0 0 4px var(--npr-accent-strong);
+}
+
+
+/* 页脚两端：左边「第 N 节 / 共 M 节」允许被挤（窗口窄时它先省略），
+   右边百分比不缩、并且比左边实一档 —— 它是这一页唯一在动的数字。 */
+.npr-ebook-foot-pos { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npr-ebook-foot-pct { flex: 0 0 auto; color: var(--npr-muted); font-variant-numeric: tabular-nums; }
+
+/* ---- 目录面板（与解读面板同一格、同一宽度）---- */
+.npr-ebook-toc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 8px 14px;
+  border-bottom: 1px solid var(--npr-border);
+}
+.npr-ebook-toc-title { color: var(--npr-fg); font-size: 12.5px; font-weight: 600; }
+.npr-ebook-toc-count { flex: 1; color: var(--npr-faint); font-size: 11px; }
+.npr-ebook-toc-close {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px;
+  background: transparent; color: var(--npr-muted); cursor: pointer;
+}
+.npr-ebook-toc-close:hover { background: var(--npr-hover); color: var(--npr-fg); }
+.npr-ebook-toc-warn {
+  display: flex; align-items: flex-start; gap: 6px;
+  margin: 0; padding: 7px 14px;
+  border-bottom: 1px solid var(--npr-border);
+  color: var(--npr-muted); font-size: 10.5px; line-height: 1.6;
+}
+.npr-ebook-toc-warn svg { flex: 0 0 auto; margin-top: 1px; }
+.npr-ebook-toc-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 9px 12px 10px;
+  border-top: 1px solid var(--npr-border);
+}
+.npr-ebook-toc-foot small { color: var(--npr-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+
+/* 「当前这一章的首条」：比高亮弱一档 —— 它只说明「你在这章的范围内」，
+   而不是「你正停在这一行」。只靠颜色区分，所以用左边缘一道细条。 */
+.npr-digest-row.is-read { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--npr-accent-strong) 42%, transparent); }
+
+/* ---- 目录的两级缩进（章 → 节）----
+   纸质书的目录就是这样排的：卷名顶格粗一号，底下的小节缩进去、字号小半号。
+   之前是一层平铺 99 条，看不出「这一节属于哪一卷」。
+   ★ 作用域挂在 `.npr-ebook-toc` 上：解读面板用的是同一套 digest 行类名，
+     全局改会把那边也一起缩进。 */
+.npr-ebook-toc .npr-digest-item.is-depth-0 { margin-top: 6px; }
+.npr-ebook-toc .npr-digest-item:first-child { margin-top: 0; }
+.npr-ebook-toc .npr-digest-item.is-depth-0 .npr-digest-row { padding-left: 6px; }
+.npr-ebook-toc .npr-digest-item.is-depth-0 .npr-digest-title { font-weight: 600; }
+.npr-ebook-toc .npr-digest-item.is-depth-0 .npr-digest-n { color: var(--npr-muted); }
+.npr-ebook-toc .npr-digest-item.is-depth-1 .npr-digest-row { padding-left: 20px; }
+.npr-ebook-toc .npr-digest-item.is-depth-1 .npr-digest-title {
+  font-size: 11.5px;
+  color: var(--npr-muted);
+}
+.npr-ebook-toc .npr-digest-item.is-depth-2 .npr-digest-row { padding-left: 32px; }
+.npr-ebook-toc .npr-digest-item.is-depth-2 .npr-digest-title {
+  font-size: 11px;
+  color: var(--npr-faint);
+}
+
+/* 打不开时的「重试」按钮（`npr-book-empty` 里原本只有一段说明）。 */
+.npr-book-empty-actions { display: flex; gap: 8px; margin-top: 4px; }
+.npr-book-empty-actions button {
+  min-height: 32px; padding: 0 13px;
+  border: 1px solid var(--npr-border-strong); border-radius: 8px;
+  background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; cursor: pointer;
+}
+.npr-book-empty-actions button:hover { background: var(--npr-hover); }
+

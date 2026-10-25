@@ -26,10 +26,11 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   READING_STATE_FILTERS, addedBooks, bookRowView, bookScopes, countSources, filterBooks, formatBytes,
-  libraryStats, normalizeState, parseScope, scopeValue, sourceLabelOf, stateOf,
+  isEbookExtension, libraryStats, normalizeState, parseScope, scopeValue, sourceLabelOf, stateOf,
 } from '../library.js';
 import { Icon } from './icons.jsx';
 import { BookReader } from './BookReader.jsx';
+import { BookEbook } from './BookEbook.jsx';
 import { SettingsPage } from './SettingsPage.jsx';
 import { ViewSwitch } from './ViewSwitch.jsx';
 import { fetchBooks, fetchStates, reloadLibrary, saveBookState } from './library-api.js';
@@ -817,17 +818,33 @@ export function LibraryApp({ reading, onExit, notify, api, SessionProvider, rend
         {selected ? (
           // `api` / `SessionProvider` / `renderSlot` 只是**转交**给阅读器里的 AI 伴读：
           // 伴读用的是 Harness 自己的对话，槽位设施在 `ReaderPage` 那一层才有。
-          <BookReader key={selected.id} book={selected} reading={reading} states={states}
-            notify={notify} onPageChange={onPageChange}
-            onImmersiveChange={setImmersive}
-            // 抽取目录时发现是扫描版 ⇒ 左栏那一行**当场**挂上标记，不等下次刷新。
-            onScannedChange={(id, scanned) => setStates((previous) => ({
-              ...previous,
-              [id]: normalizeState({ ...stateOf(previous, id), scanned }),
-            }))}
-            api={api} SessionProvider={SessionProvider} renderSlot={renderSlot}
-            onManagePrompts={() => setSettingsEntry({ open: true, tab: 'prompts', addPrompt: false })}
-            onFinished={() => void persist(selected.id, { state: 'read' })} />
+          //
+          // ★ 按格式分流到**两个组件**，不把电子书塞进 `BookReader` 里加个 if：
+          //   PDF 那条链路是「位图 + 文字层 + 缩放 + 划线锚点」，重排那条是
+          //   「块模型 + 字号 + 分节」，除了顶部的胶囊与右下角的浮动按钮，两者没有
+          //   可复用的实现。塞进一个组件里会让 PDF 那边的 hook 顺序与电子书互相牵连
+          //   （`BookReader` 在开始处就有大量 hook，任何提前 return 都在破坏规则），
+          //   而分流之后两个组件各自的卸载重建由 `key` 保证。
+          isEbookExtension(selected.ext) ? (
+            <BookEbook key={selected.id} book={selected} states={states}
+              notify={notify} onPageChange={onPageChange}
+              onImmersiveChange={setImmersive}
+              api={api} SessionProvider={SessionProvider} renderSlot={renderSlot}
+              onManagePrompts={() => setSettingsEntry({ open: true, tab: 'prompts', addPrompt: false })}
+              onFinished={() => void persist(selected.id, { state: 'read' })} />
+          ) : (
+            <BookReader key={selected.id} book={selected} reading={reading} states={states}
+              notify={notify} onPageChange={onPageChange}
+              onImmersiveChange={setImmersive}
+              // 抽取目录时发现是扫描版 ⇒ 左栏那一行**当场**挂上标记，不等下次刷新。
+              onScannedChange={(id, scanned) => setStates((previous) => ({
+                ...previous,
+                [id]: normalizeState({ ...stateOf(previous, id), scanned }),
+              }))}
+              api={api} SessionProvider={SessionProvider} renderSlot={renderSlot}
+              onManagePrompts={() => setSettingsEntry({ open: true, tab: 'prompts', addPrompt: false })}
+              onFinished={() => void persist(selected.id, { state: 'read' })} />
+          )
         ) : (
           <div className="npr-welcome">
             <div className="npr-welcome-brand">NPIE BOOKSHELF</div>
@@ -836,13 +853,14 @@ export function LibraryApp({ reading, onExit, notify, api, SessionProvider, rend
               左侧分「阅读」和「书架」两页。<strong>书架是网盘上的全部书，只作展示</strong> ——
               点书名右边的「+ 阅读」把想读的收进「阅读」页；<strong>取书阅读在「阅读」页</strong>，
               点书名即可。PDF 用内置 pdf.js 按原版式渲染，只从网盘取当前需要的那几段，
-              不会整本下载。
+              不会整本下载；EPUB / MOBI / AZW3 / TXT 由宿主解出全文后<strong>重排阅读</strong>，
+              可以调字号、跳目录、逐章生成解读。
             </p>
             <div className="npr-welcome-keys">
               {[
                 ['书单', `${shelfStats.total} 本`],
                 ['已在阅读', `${shelfStats.added} 本`],
-                ['可原版式阅读', `${shelfStats.renderable} 本`],
+                ['可阅读', `${shelfStats.renderable} 本`],
                 ['总体积', formatBytes(shelfStats.bytes)],
               ].map(([key, label]) => (
                 <span key={key}><kbd>{key}</kbd><span>{label}</span></span>
