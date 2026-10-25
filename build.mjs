@@ -80,9 +80,36 @@ const footer = `
 });
 `;
 
+/**
+ * CSS 以**文本**内联进 client bundle，但**注释先剥掉**。
+ *
+ * ★ 为什么必须剥：这个仓库把说明写在 CSS 注释里（每一项样式为什么长这样），
+ *   而 `refinements.css` 有 100+ KB 注释，其中绝大多数是中文 —— esbuild 会把
+ *   非 ASCII 转成 `\uXXXX`（6 个字符换 1 个字），于是注释在产物里的体积是源码的
+ *   六倍。实测：剥注释后 client bundle 从 ~1.01 MB 降到 ~0.72 MB。
+ * ★ 为什么注释在运行期一个字节都不需要：它们既不是样式也不是行为，浏览器解析
+ *   样式表时直接丢弃。
+ * ★ 为什么不靠「把守卫的数字抬上去」：`test/build.test.mjs` 那条体积闸真正要抓的是
+ *   「有整个依赖被内联进来了」（pdf.mjs 512 KB / pdf.worker.mjs 1.3 MB）。
+ *   注释把基线顶高之后，闸就只能在「已经被自己撑肿」的尺子上报警 —— 牙就钝了。
+ *   剥掉注释，它重新量的是**代码**。
+ * ★ 只剥注释，不做别的压缩：不做 minify 是刻意的 —— 产物要能在真机上读懂调用栈。
+ */
+const stripCssComments = css => css.replace(/\/\*[\s\S]*?\*\//g, '');
+
+const cssAsText = {
+  name: 'css-as-text',
+  setup(build) {
+    build.onLoad({ filter: /\.css$/ }, (args) => ({
+      contents: stripCssComments(readFileSync(args.path, 'utf8')),
+      loader: 'text',
+    }));
+  },
+};
+
 await esbuild.build({
   entryPoints: [join(here, 'src/client/index.jsx')],
-  loader: { '.css': 'text' },
+  plugins: [cssAsText],
   bundle: true,
   platform: 'browser',
   format: 'cjs',
