@@ -87,7 +87,18 @@ const HOST_ANCHORS = new Map([
  * `--dsw-*` 令牌，令牌本身随宿主换肤，所以没有需要手动开灯的深色覆盖层。
  * （§4 那条「主题信号跟随 data-ds-dark-theme」针对的是手写深色覆盖层的场景。）
  */
-const OWNED_ATTRS = new Set(['data-dragging', 'data-titlebar', 'data-reading-theme', 'data-images', 'data-plugin', 'data-backfilling', 'data-tint', 'data-tone']);
+const OWNED_ATTRS = new Set([
+  'data-dragging', 'data-titlebar', 'data-reading-theme', 'data-images', 'data-plugin',
+  'data-backfilling', 'data-tint', 'data-tone',
+  // 重排电子书（0.25.x）自己写到 DOM 上的三个：
+  //   `data-block` —— 每个正文块的下标，划线锚点靠它认「选区落在第几块」（少了划不出线且不报错）；
+  //   `data-theme` —— `.npr-ebook` 根节点上的纸色/主题（`dark` / `black`），自有 CSS 选它；
+  //   `data-depth` —— 目录条目的层级（0/1/2），自有 CSS 按它缩进。
+  // 三者都是本插件自己的选择器依据，**不是宿主锚点** —— 登记进 HOST_ANCHORS 会被
+  // 下面那条「宿主产物里必须命中」的反向检查判红。
+  'data-block', 'data-theme', 'data-depth',
+]);
+
 
 const LOOSE_ENGINES = '>=0.1.2-alpha.2 || >=0.1.5-rc.2 || >=0.1.7-alpha.2';
 

@@ -897,6 +897,37 @@ export function countSources(books) {
 }
 
 /**
+ * 按**书源**把书分成几堆：`[{ kind, label, total, bytes }]`，书多的排在前面。
+ *
+ * 欢迎页那行统计要说的是「我的书都在哪」，那是**来源**维度 —— 与 `libraryStats`
+ * 的**状态**维度（已在阅读 / 可阅读）正交。原来只报状态，用户配了网盘又配了本地
+ * 目录时，那行字里一个字的来源信息都没有。
+ *
+ * ★ 按 `kind` 聚合，不按书单名：一条源 = 一份书单，用户可能配了六七个目录，
+ *   逐个列会把那行 chips 撑成三行；同类型下的明细在书架页的「来源」筛选里本来
+ *   就给得到（`bookScopes` 已经把每个书单的书数算好了）。
+ * ★ 标签用短的（本地 / 网盘），不用设置页那套（本地目录 / 百度网盘）：这行是
+ *   10px 的小字，「本地目录」四个字会把后面的「本数 · 体积」挤到换行。
+ * ★ `kind` 的取法与 `sourceLabelOf` 一致（先 `listKind` 后 `source`）—— 两处判据
+ *   必须同源，否则同一本书在书行上写「网盘」、在统计里算进「其他」。
+ */
+export function sourceTotals(books) {
+  const groups = new Map();
+  for (const book of books ?? []) {
+    const kind = String(book?.listKind ?? '') || String(book?.source ?? '');
+    const key = kind === '' ? 'other' : kind;
+    const group = groups.get(key)
+      ?? { kind: key, label: SOURCE_KIND_LABELS[key] ?? '其他', total: 0, bytes: 0 };
+    group.total += 1;
+    // `size` 可能是 `undefined`（外部书单缺字段），`+=` 会立刻把整堆体积污染成 NaN。
+    group.bytes += Number(book?.size) || 0;
+    groups.set(key, group);
+  }
+  return [...groups.values()]
+    .sort((a, b) => b.total - a.total || a.label.localeCompare(b.label, 'zh-Hans-CN'));
+}
+
+/**
  * 书架的统计条：总数、已加入「阅读」数、各状态数、可渲染数、总体积。
  *
  * ★ `total` 与 `byState` 都是**对传进来的这批书**算的 —— 传全量书单就是书架页要的

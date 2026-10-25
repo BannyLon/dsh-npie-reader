@@ -49,8 +49,8 @@ import { extractBookPages, planDigestRun, resolveOutline } from './book-digest.j
 import {
   BOOK_BRIGHTNESS, BOOK_TINTS, nextBookTint, normalizeBookBrightness, normalizeBookTint,
 } from '../reading-settings.js';
-import { layerScaleRatio, quoteBarPlacement, selectionQuote, textLayerCharCount, textLayerMetrics } from './book-text.js';
-import { peekNext, peekOnLeave } from './book-peek.js';
+import { layerScaleRatio, quoteBarLeft, quoteBarPlacement, selectionQuote, textLayerMetrics } from './book-text.js';
+import { insidePanel, peekNext, peekOnLeave } from './book-peek.js';
 import {
   FIT_PAGE, FIT_WIDTH, NO_COMMAND, WHEEL_FLIP_COOLDOWN_MS, WHEEL_FLIP_DELTA,
   ZOOM_MAX, ZOOM_MIN, contentBox, createFabHover, displayScale, extractPageText, fabStack, readerCommand,
@@ -350,16 +350,6 @@ export function BookReader({
    *   文字层真的渲完再算，而「渲完了」这件事只能由那个 effect 自己上报。
    */
   const [textLayerVersion, setTextLayerVersion] = useState(0);
-  /**
-   * 这一页**完全没有**文字层（扫描页 / 纯图片页）。
-   *
-   * ★ 为什么要有这个状态：加了文字层之后，「选不中」就不再是一个笼统的故障了 ——
-   *   文字版现在能选，而扫描版**本质上就没有字可选**。不给一句说明的话，用户打开
-   *   一本扫描书会得到和修复之前一模一样的观感，然后合理地认为「根本没修」。
-   * ★ 判据取 `=== 0` 而不是「字数很少」：封面、章节扉页只有两三个字，那些页报
-   *   「没有文字层」是错的；真正为零才叫没有。
-   */
-  const [textless, setTextless] = useState(false);
   /** 渲染任务与文档的存活句柄：换页/换书/卸载时必须显式取消，否则会叠影。 */
   const renderRef = useRef(null);
   const docRef = useRef(null);
@@ -417,7 +407,6 @@ export function BookReader({
     reportedPageRef.current = 0;
     setQuote(null);
     setCompanionQuote('');
-    setTextless(false);
     setMarksOpen(false);
     setMarkFocusId('');
     setMarkRects([]);
@@ -575,8 +564,6 @@ export function BookReader({
       textLayerTaskRef.current = null;
       textLayerRef.current.textContent = '';
       setQuote(null);
-      // 上一页的「没有文字层」结论不能留给新页：新页还没量呢。
-      setTextless(false);
     }
     const timer = setTimeout(() => {
       void (async () => {
@@ -666,7 +653,6 @@ export function BookReader({
               await task.render();
               // 渲染完成后才有资格下结论：这时候容器里就是这一页**全部**的可见文字。
               if (!cancelled) {
-                setTextless(textLayerCharCount(layerEl) === 0);
                 // 划线要按真实文本节点量矩形 —— 通知那一支 effect「这一页的文字层好了」。
                 setTextLayerVersion(value => value + 1);
               }
@@ -865,6 +851,12 @@ export function BookReader({
    */
   const onPeekPointerMove = (event) => {
     if (!immersive) return;
+    /* 指针在面板上不滑出、已滑出的立刻收 —— 否则胶囊会盖住面板右上角的关闭按钮
+       （0.25.7，电子书那边同一处；判据在 `book-peek.js` 的 `insidePanel`）。 */
+    if (insidePanel(event.target)) {
+      if (peek) setPeek(false);
+      return;
+    }
     const top = event.currentTarget.getBoundingClientRect().top;
     const next = peekNext(peek, event.clientY - top);
     if (next !== peek) setPeek(next);
@@ -1688,7 +1680,7 @@ export function BookReader({
   });
 
   return (
-    <div ref={bookRef} className={`npr-book${immersive ? ' is-immersive' : ''}${immersive && peek ? ' is-peek' : ''}`}
+    <div ref={bookRef} className={`npr-book${immersive ? ' is-immersive' : ''}${immersive && peek ? ' is-peek' : ''}${immersive && (digestOpen || marksOpen) ? ' has-side' : ''}`}
       data-tint={tint} style={{ '--npr-book-brightness': brightness }}
       onPointerMove={onPeekPointerMove} onPointerLeave={onPeekPointerLeave}>
       {/* ---- 顶部：一条 10px 的拖动条 + 一颗**居中的工具胶囊** ----------------
@@ -1898,15 +1890,22 @@ export function BookReader({
                   )))}
                 </div>
               )}
-              {/* 扫描页的说明。★ 不写成红条：书没坏，只是这一页本来就没有字。 */}
-              {textless && (
-                <p className="npr-book-notice" role="status">这一页没有文字层（扫描图片），选不中文字</p>
-              )}
+              {/* ★ 0.25.9：这里原本有一条「这一页没有文字层（扫描图片），选不中文字」的
+                  常驻说明（0.20.5 加的），现在**删掉**了。用户原话：「这个提示不要了」。
+                  理由不是「它错」，而是它**已经没有信息量**了：
+                  ① 扫描页现在会自动本机 OCR（0.24.8），伴读面板里会写「已识别 N 字 ·
+                     已交给伴读」，文字从哪儿来、能不能看，那里说得更准；
+                  ② 这一页是不是扫描页，**看一眼就知道**（整页是图片）—— 再用一条
+                     压在书页下沿的胶囊重复一遍，只是每翻一页闪一次噪音；
+                  ③ 它是 `pointer-events: none` 的绝对定位浮层，翻页瞬间闪一下还容易被
+                     误读成「出错了」。
+                  ⇒ 随之删掉的还有 `textless` 状态与 `.npr-book-notice` 样式（类名一旦
+                    「定义但没人用」，`scripts/check-classes.mjs` 会红）。 */}
               {quote !== null && quotePlacement !== null && (
                 <div className="npr-book-quotebar" role="toolbar" aria-label="选中的文字"
                   style={quotePlacement.side === 'above'
-                    ? { left: quote.centerX, bottom: quotePlacement.value }
-                    : { left: quote.centerX, top: quotePlacement.value }}>
+                    ? { left: quoteBarLeft(quote.centerX), bottom: quotePlacement.value }
+                    : { left: quoteBarLeft(quote.centerX), top: quotePlacement.value }}>
                   <span className="npr-book-quotebar-text" title={quote.text}>{quote.text}</span>
                   {/* 划线是这颗气泡的**主操作**（最常点），所以放前面。
                       「笔记」= 划线 + 立刻写一句：写完的那份摘录留在左边的面板里。
@@ -2024,6 +2023,7 @@ export function BookReader({
             ocrUsed={ocrUsed}
             ocrBusy={ocrBusy}
             ocrError={ocrError}
+            ocrText={ocrText}
             onClose={() => setCompanion(false)}
             onManagePrompts={onManagePrompts}
             SessionProvider={SessionProvider}

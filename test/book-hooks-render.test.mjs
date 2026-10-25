@@ -317,6 +317,9 @@ describe('沉浸态胶囊滑出：两个阅读器都走了 is-peek', () => {
       assert.match(src, /onPointerMove=\{onPeekPointerMove\}/, '根节点没挂指针监听');
       assert.match(src, /onPointerLeave=\{onPeekPointerLeave\}/, '指针离开面板时不会复位');
       assert.match(src, /peekNext\(peek, event\.clientY - top\)/, '没用算出来的距离去判');
+      // 0.25.7：指针在面板上不滑出。少了这一条，一打开目录、鼠标往上移去点「收起」，
+      // 胶囊就滑出来盖住那颗按钮 —— 用户报的正是这个。
+      assert.match(src, /insidePanel\(event\.target\)/, '没挡「指针在面板上」—— 关闭按钮又会被胶囊盖住');
       assert.match(src, /is-peek/, '没有 is-peek 这个类，CSS 那三条 hover 在真机上不成立');
     });
   }
@@ -328,5 +331,116 @@ describe('沉浸态胶囊滑出：两个阅读器都走了 is-peek', () => {
     const group = css.slice(css.indexOf('.npr-book.is-immersive.is-peek'));
     assert.match(group.slice(0, 600), /\.npr-book-toolbar:hover ~ \.npr-book-chrome/,
       'hover 兜底那条被删了 —— 没有 app-region 的环境（探针 / 普通浏览器）会失去滑出');
+  });
+
+  /**
+   * 沉浸 + 左侧面板：胶囊要**让开那一列**（0.25.7）。
+   *
+   * `is-peek` + `insidePanel` 保证「指针在面板上时不滑出」，但只要用户从正文顶部
+   * 把胶囊叫出来，`left:0; right:0` 的满宽铺法仍会让它压住面板右上角那颗「收起」。
+   * 所以还要一条几何上的让位。
+   */
+  it('沉浸 + 面板：两个阅读器都加 has-side，CSS 的让位规则也在', () => {
+    for (const file of ['BookReader.jsx', 'BookEbook.jsx']) {
+      const src = stripComments(readFileSync(join(pluginRoot, 'src/client', file), 'utf8'));
+      assert.match(src, /' has-side'/, `${file} 没加 has-side —— 胶囊会压在面板右缘`);
+    }
+
+    const raw = readFileSync(join(pluginRoot, 'src/client/refinements.css'), 'utf8');
+    const css = stripComments(raw);
+
+    // 规则必须在 `@container (min-width: 821px)` 里：窄容器下面板改成上下排、铺满整宽，
+    // 那时再 `left: 306px` 会把胶囊推到面板右缘之外。
+    const at = css.indexOf('.npr-book.is-immersive.has-side .npr-book-chrome');
+    assert.ok(at > -1, 'CSS 里没有 has-side 的让位规则');
+    const container = css.lastIndexOf('@container', at);
+    assert.ok(container > -1, '让位规则不在容器查询里');
+    assert.match(css.slice(container, at), /min-width:\s*821px/,
+      '让位只在「面板占左侧一列」时才成立（821 与 820 那条阈值同源）');
+    assert.match(css.slice(at, at + 160), /left:\s*var\(--npr-book-side-w\)/,
+      '让位没用变量 —— 面板改宽之后会漂移');
+
+    // 变量只有一份定义，面板宽度必须读它。
+    assert.match(css, /--npr-book-side-w:\s*306px/, '--npr-book-side-w 没定义');
+    assert.equal((css.match(/--npr-book-side-w:/g) ?? []).length, 1, '变量定义了不止一处');
+    assert.doesNotMatch(css, /\.npr-book-digest \{[^}]*width:\s*306px/, '目录面板宽度又写死 306');
+    assert.doesNotMatch(css, /\.npr-marks \{[^}]*width:\s*306px/, '划线面板宽度又写死 306');
+  });
+});
+
+/**
+ * 划词气泡的「问伴读」——两个阅读器都要有（0.25.8）。
+ *
+ * 用户原话：「为什么 EPUB 电子书阅读划线时，没有伴读这个选项」。
+ * 0.25.2 给电子书加划线时搬了三颗按钮（划线 / 笔记 / 复制），漏了 PDF 气泡上的
+ * 「问伴读」；而 `BookCompanion` 的 `context.quote` 那边还写着空串 `''` ——
+ * 接线在、口子在，只是没人用。所以这里守的是**三件套**：按钮、写 quote 的那个 setter、
+ * 以及 context 真的读它（不是又写回空串）。
+ */
+describe('★ 划词气泡：两个阅读器都有「问伴读」（0.25.8）', () => {
+  const read = (file) => stripComments(readFileSync(join(pluginRoot, 'src/client', file), 'utf8'));
+
+  for (const file of ['BookReader.jsx', 'BookEbook.jsx']) {
+    it(`${file}：气泡里有「问伴读」，且它把选区写进了伴读的 quote`, () => {
+      const src = read(file);
+      assert.match(src, /onClick=\{askAboutQuote\}[^>]*>问伴读</, '气泡上没有「问伴读」这颗按钮');
+      assert.match(src, /setCompanionQuote\(quote\.text\)/, '没把这一句写进伴读上下文');
+      assert.match(src, /quote:\s*companionQuote/, 'context.quote 没读 companionQuote —— 伴读看不到划的那一句');
+      assert.doesNotMatch(src, /quote:\s*''/, "context.quote 又写回空串了 —— 那等于「问伴读」问了个空气");
+    });
+  }
+
+  it('★ 反向对照：把电子书的 context.quote 改回空串必须判红', () => {
+    const before = read('BookEbook.jsx').replace('quote: companionQuote', "quote: ''");
+    assert.notEqual(before, read('BookEbook.jsx'), '变异没生效 —— 这条反向对照是假的');
+    assert.match(before, /quote:\s*''/, '判据本身没能识别空串');
+  });
+
+  it('两边按钮顺序一致：划线 → 笔记 → 问伴读 → 复制', () => {
+    for (const file of ['BookReader.jsx', 'BookEbook.jsx']) {
+      const src = read(file);
+      const at = (needle) => src.indexOf(needle);
+      assert.ok(at('>划线</button>') > -1 && at('>笔记</button>') > -1
+        && at('>问伴读</button>') > -1 && at('>复制</button>') > -1, `${file} 少了某颗按钮`);
+      assert.ok(
+        at('>划线</button>') < at('>笔记</button>')
+        && at('>笔记</button>') < at('>问伴读</button>')
+        && at('>问伴读</button>') < at('>复制</button>'),
+        `${file} 气泡按钮顺序变了 —— 换个格式读就会点错`,
+      );
+    }
+  });
+});
+
+/**
+ * 伴读里「识别这一页」的结果必须**看得到、能复制**（0.25.9）。
+ *
+ * 用户原话：「识别后的文字是喂给AI了吗？识别完就结束了，我看不到，也不能复制。」
+ * 之前识别成功会让那块按钮**整块消失**（`ocrNeeded` 变成 false），唯一痕迹是
+ * 上下文那行小字换了一句 —— 点完按钮界面反而更空，而文字明明在内存里。
+ */
+describe('★ 伴读的 OCR 结果：看得到、能复制（0.25.9）', () => {
+  const companion = stripComments(readFileSync(join(pluginRoot, 'src/client/BookCompanion.jsx'), 'utf8'));
+  const reader = stripComments(readFileSync(join(pluginRoot, 'src/client/BookReader.jsx'), 'utf8'));
+
+  it('BookCompanion：收 ocrText，识别之后摊出原文 + 复制', () => {
+    assert.match(companion, /ocrText = ''/, 'props 里没有 ocrText');
+    assert.match(companion, /ocrUsed && ocrReadable !== ''/, '「识别之后」那块 UI 没接 ocrUsed / ocrReadable');
+    assert.match(companion, /className="npr-companion-ocr-text"/, '没有展示原文的元素');
+    assert.match(companion, /已交给伴读/, '没写清这段文字喂给谁了 —— 用户问的就是这一句');
+    assert.match(companion, /clipboard\.writeText\(ocrReadable\)/, '复制没复制识别出来的原文');
+    assert.match(companion, /已复制/, '复制成功没有反馈');
+  });
+
+  it('BookReader：把识别结果传下去（不传等于没做）', () => {
+    assert.match(reader, /ocrText=\{ocrText\}/, 'BookReader 没把 ocrText 传给伴读');
+  });
+
+  it('★ 反向对照：删掉传递、或让它永远空，必须判红', () => {
+    const dropped = reader.replace('ocrText={ocrText}', '');
+    assert.doesNotMatch(dropped, /ocrText=\{ocrText\}/, '变异没生效 —— 这条反向对照是假的');
+    // 传空串同样等于没传：面板永远不渲染那块 UI。
+    const emptied = reader.replace('ocrText={ocrText}', "ocrText={''}");
+    assert.doesNotMatch(emptied, /ocrText=\{ocrText\}/);
   });
 });

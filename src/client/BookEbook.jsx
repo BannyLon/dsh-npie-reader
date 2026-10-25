@@ -35,8 +35,8 @@ import { DigestCard } from './DigestCard.jsx';
 import {
   annotationsOnPage, coveringAnnotation, normalizeAnnotations,
 } from './annotations.js';
-import { quoteBarPlacement, selectionQuote } from './book-text.js';
-import { peekNext, peekOnLeave } from './book-peek.js';
+import { quoteBarLeft, quoteBarPlacement, selectionQuote } from './book-text.js';
+import { insidePanel, peekNext, peekOnLeave } from './book-peek.js';
 import {
   anchorOfSelection, blockSpans, marksForBlock, splitByMarks,
 } from './ebook-marks.js';
@@ -192,6 +192,17 @@ export function BookEbook({
    *   摆放规则，必然一处往上、一处往下，用户换个格式读就觉得「气泡乱跑」。
    */
   const [quote, setQuote] = useState(null);
+  /**
+   * 用户刚划的那一句，交给伴读当引文（空串 = 没划）。
+   *
+   * ★ 与 `quote` 是**两份** state，不能合并：气泡会随着点别处消失，而伴读那一份
+   *   必须留着 —— 否则用户点完「问伴读」再点一下页面，模型看到的上下文就被抽走了。
+   *   它进 `BookCompanion` 的 `contextKey`，所以划一次只重绑一次。
+   * ★ 这一格 0.25.2 搬气泡时只在 `context` 里写了个 `quote: ''` 占位，
+   *   气泡上也漏了「问伴读」那一颗 —— 用户 0.25.8 报的就是它（「为什么 EPUB 划线时
+   *   没有伴读这个选项」）。接线本来就在，缺的只是入口。
+   */
+  const [companionQuote, setCompanionQuote] = useState('');
 
   /** 阅读外观：`{ fontSize, lineHeight, textWidth, family, theme }`。 */
   const [look, setLook] = useState({
@@ -560,6 +571,17 @@ export function BookEbook({
    */
   const onPeekPointerMove = (event) => {
     if (!immersive) return;
+    /*
+      ★ 指针在面板上（目录 / 划线 / 解读 / 伴读）时**不滑出**，已经在外面滑出的也要立刻收。
+        用户要关目录，鼠标必须划过面板顶部那行 —— 而胶囊滑出正好铺在那儿，
+        关闭按钮就被盖住了（用户 0.25.7 的原话：「菜单就会遮挡掉目录框的关闭按钮」）。
+        注意这里不是「return 就完事」：`peek` 可能已经是 true（指针刚从正文顶部进来），
+        不收的话胶囊还挂在那儿，按钮照样点不到。
+    */
+    if (insidePanel(event.target)) {
+      if (peek) setPeek(false);
+      return;
+    }
     const top = event.currentTarget.getBoundingClientRect().top;
     const next = peekNext(peek, event.clientY - top);
     if (next !== peek) setPeek(next);
@@ -700,6 +722,23 @@ export function BookEbook({
     return runningHead(outlineEntries(index), page, pageTitle);
   }, [index, page, pageTitle]);
 
+  /**
+   * 「问伴读」：把这一句交给伴读的上下文，并把面板打开。
+   *
+   * ★ 与 PDF 同一个口子（`BookCompanion` 的 `context.quote`），行为也对齐：
+   *   关掉左侧那三块（目录 / 解读 / 划线）—— 中间永远只留一栏；
+   *   但**不立刻清空** `companionQuote`，用户随手点一下正文，伴读里的那一句还在。
+   * ★ 先 `closePanels()` 再开伴读：反过来的话，伴读刚开就被关掉的那一块挤走一秒，
+   *   视觉上是「面板闪了一下」。
+   */
+  const askAboutQuote = useCallback(() => {
+    if (quote === null) return;
+    setCompanionQuote(quote.text);
+    closePanels();
+    setCompanion(true);
+    setQuote(null);
+  }, [quote, closePanels]);
+
   /** 「复制」：把选中的原文放进剪贴板。 */
   const copyQuote = useCallback(async () => {
     if (quote === null) return;
@@ -769,7 +808,7 @@ export function BookEbook({
   }
 
   return (
-    <div ref={bookRef} className={`npr-book npr-ebook${immersive ? ' is-immersive' : ''}${immersive && peek ? ' is-peek' : ''}`}
+    <div ref={bookRef} className={`npr-book npr-ebook${immersive ? ' is-immersive' : ''}${immersive && peek ? ' is-peek' : ''}${immersive && (tocOpen || marksOpen || digestOpen) ? ' has-side' : ''}`}
       style={rootStyle} data-theme={look.theme}
       onPointerMove={onPeekPointerMove} onPointerLeave={onPeekPointerLeave}>
       <div className="npr-book-toolbar" data-window-drag />
@@ -992,8 +1031,8 @@ export function BookEbook({
                 {quote !== null && quotePlacement !== null && (
                   <div className="npr-book-quotebar" role="toolbar" aria-label="选中的文字"
                     style={quotePlacement.side === 'above'
-                      ? { left: quote.centerX, bottom: quotePlacement.value }
-                      : { left: quote.centerX, top: quotePlacement.value }}>
+                      ? { left: quoteBarLeft(quote.centerX), bottom: quotePlacement.value }
+                      : { left: quoteBarLeft(quote.centerX), top: quotePlacement.value }}>
                     <span className="npr-book-quotebar-text" title={quote.text}>{quote.text}</span>
                     {/* 「划线」是主操作（最常点）。`onMouseDown` 阻止默认：不阻止的话
                         按下去浏览器就把选区收掉，想「点错了再点一次」就没得点了。 */}
@@ -1003,6 +1042,9 @@ export function BookEbook({
                     <button type="button"
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => { void createMark({ openNote: true }); }}>笔记</button>
+                    {/* 「问伴读」与 PDF 那颗同名同位（划线 / 笔记之后、复制之前）：
+                        两边的气泡按钮顺序不同的话，用户换个格式读就会点错。 */}
+                    <button type="button" onClick={askAboutQuote}>问伴读</button>
                     <button type="button" onClick={() => { void copyQuote(); }}>复制</button>
                   </div>
                 )}
@@ -1093,7 +1135,7 @@ export function BookEbook({
               pages: total,
               loaded: section !== null && section.n === page,
               text: sectionText,
-              quote: '',
+              quote: companionQuote,
             }}
             onClose={() => setCompanion(false)}
             onManagePrompts={onManagePrompts}

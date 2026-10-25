@@ -19,8 +19,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { stripComments } from '../scripts/strip-comments.mjs';
 import {
-  QUOTE_BAR_HEIGHT, QUOTE_LIMIT, layerScaleRatio, quoteBarPlacement, selectionQuote,
-  textLayerCharCount, textLayerMetrics,
+  QUOTE_BAR_EDGE, QUOTE_BAR_HALF, QUOTE_BAR_HEIGHT, QUOTE_LIMIT, layerScaleRatio, quoteBarLeft,
+  quoteBarPlacement, selectionQuote, textLayerCharCount, textLayerMetrics,
 } from '../src/client/book-text.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -282,5 +282,55 @@ describe('文字层的源码契约（BookReader.jsx）', () => {
     assert.match(pdfjs, /return module;/);
     assert.doesNotMatch(pdfjs, /return\s*\{\s*getDocument/,
       '把模块收窄成 { getDocument, … } 之后 TextLayer 就没了 —— 文字层会静默不渲染');
+  });
+});
+
+/**
+ * 气泡的横向位置（0.25.8）。
+ *
+ * 起因：给电子书气泡加「问伴读」之后，气泡撑到 `max-width: 320px`，而选区在段首
+ * （最常被划的那一句）时 `left = 中心` 减去半宽是负数 —— 气泡被包含块裁掉左端，
+ * 而 flex 里第一个被牺牲的是那段摘录（按钮都是 `flex: 0 0 auto`）。
+ * 截图证据：气泡上只剩「划线 笔记 问伴读 复制」，认不出划的是哪一句。
+ */
+describe('quoteBarLeft：气泡横向夹在页面内', () => {
+  it('居中的选区原样使用它的中心', () => {
+    assert.equal(
+      quoteBarLeft(300),
+      `clamp(${QUOTE_BAR_HALF + QUOTE_BAR_EDGE}px, 300px, calc(100% - ${QUOTE_BAR_HALF + QUOTE_BAR_EDGE}px))`,
+    );
+  });
+
+  it('★ 下界是「半宽 + 边距」，不是「边距」（漏掉半宽就等于没夹）', () => {
+    const hit = quoteBarLeft(10, { half: 120, edge: 6 }).match(/^clamp\((\d+)px/);
+    assert.ok(hit, '读不出下界');
+    assert.equal(Number(hit[1]), 126, '下界漏了半宽 —— 气泡照样会被裁掉左端');
+  });
+
+  it('上界与下界对称', () => {
+    const bound = QUOTE_BAR_HALF + QUOTE_BAR_EDGE;
+    const out = quoteBarLeft(500);
+    assert.ok(out.startsWith(`clamp(${bound}px, `), `下界不对：${out}`);
+    assert.ok(out.endsWith(`calc(100% - ${bound}px))`), `上界不对：${out}`);
+  });
+
+  it('读不出中心时退回 50%（宁可居中，也别写 NaN 进 CSS）', () => {
+    assert.equal(quoteBarLeft(Number.NaN), '50%');
+    assert.equal(quoteBarLeft(undefined), '50%');
+    assert.equal(quoteBarLeft(null), '50%');
+  });
+
+  it('★ 半宽与 CSS 的 max-width 必须同源：320 / 2 = 160', () => {
+    // 两处不同步时，气泡要么被裁（JS 半宽偏小）、要么离页边空一条（偏大）。
+    assert.match(css, /\.npr-book-quotebar \{[^}]*max-width: min\(320px, 92%\)/, '气泡 max-width 变了');
+    assert.equal(QUOTE_BAR_HALF * 2, 320, 'QUOTE_BAR_HALF 与 CSS 的 320 对不上了');
+  });
+
+  it('两个阅读器都走这个判据（别再直接写 left: quote.centerX）', () => {
+    const bookEbook = stripComments(readFileSync(join(here, '..', 'src', 'client', 'BookEbook.jsx'), 'utf8'));
+    for (const [name, src] of [['BookReader', bookReader], ['BookEbook', bookEbook]]) {
+      assert.match(src, /left: quoteBarLeft\(quote\.centerX\)/, `${name} 没夹 —— 段首那句的气泡会被裁`);
+      assert.doesNotMatch(src, /left: quote\.centerX/, `${name} 还留着未夹的原始坐标`);
+    }
   });
 });

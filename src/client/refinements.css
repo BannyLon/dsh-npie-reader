@@ -195,6 +195,18 @@
 .npr-companion-ocr-btn:focus-visible { outline: 2px solid var(--npr-accent-strong); outline-offset: 2px; }
 .npr-companion-ocr-btn:disabled { opacity: .6; cursor: progress; }
 .npr-companion-ocr-error { flex: 1 0 100%; margin: 0; color: var(--npr-fg); font-size: 11px; line-height: 1.5; }
+/* ---- 识别**之后**那一条（0.25.9）----
+   ★ 虚线橙色框改成实线中性框：虚线+品牌色是「这里有个动作等你点」的语气，
+     而这一块是「做完了，结果在这儿」—— 同一个框不能同时表达两种语气，
+     用户会以为还得再点一次。
+   ★ 文字块 `flex: 1 0 100%` 独占一行：父级是 `flex-wrap: wrap` 的横排，
+     不给 100% 它就挤在「复制」右边变成一条窄柱。 */
+.npr-companion-ocr.is-done { border-style: solid; border-color: var(--npr-border); background: var(--npr-bg-2); }
+.npr-companion-ocr-title { flex: 1; min-width: 0; color: var(--npr-fg); font-size: 11.5px; line-height: 1.4; }
+.npr-companion-ocr-act { flex: none; height: 24px; padding: 0 10px; border: 1px solid var(--npr-border); border-radius: 999px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 11px; cursor: pointer; transition: background-color .14s ease; }
+.npr-companion-ocr-act:hover { background: var(--npr-hover); }
+.npr-companion-ocr-act:focus-visible { outline: 2px solid var(--npr-accent-strong); outline-offset: 2px; }
+.npr-companion-ocr-text { flex: 1 0 100%; margin: 2px 0 0; max-height: 132px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: var(--npr-bg); color: var(--npr-fg); font: inherit; font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; user-select: text; }
 .npr-companion-prompt-anchor { min-width: 0; width: 100%; flex: none; }
 .npr-companion-prompt-strip { display: flex; align-items: center; gap: 5px; min-width: 0; width: 100%; padding: 7px 14px 8px; white-space: nowrap; color: var(--npr-fg); }
 .npr-companion-prompt-scroll { display: flex; align-items: center; gap: 5px; min-width: 0; flex: 1; overflow-x: auto; overflow-y: hidden; overscroll-behavior-inline: contain; scrollbar-width: none; }
@@ -748,7 +760,11 @@
      ② 窄面板下面板底部空出一大块（实测书页区只占 473 / 734）。
    所以这条规则和 LibraryApp.jsx 上那个类名是一对，删任何一个都会静默回到上面两个症状。 */
 .npr-reader-book { display: flex; flex-direction: column; }
-.npr-book { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--npr-bg); position: relative; --npr-book-brightness: 1; }
+.npr-book { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--npr-bg); position: relative; --npr-book-brightness: 1;
+  /* 左侧面板（目录 / 划线 / 解读）占的那一列有多宽。定义在这里是因为**三处**要读它：
+     面板自己的宽度，以及沉浸态胶囊「让开面板」时的 `left`。写死两份就会漂移
+     —— 面板改宽、胶囊还按老数字让位，中间空一条或压上去半格。 */
+  --npr-book-side-w: 306px; }
 .npr-book-toolbar { display: flex; align-items: center; gap: 10px; height: 44px; flex-shrink: 0; padding: 5px 10px 5px 14px; }
 /* ---- 阅读器的顶部：一条 10px 拖动条 + 一颗**居中的工具胶囊**（0.22.0 起）----
    ★ 分工（用户 2026-10-23 定的）：**开关类**动作（标记读完 / 伴读 / 划线 / 目录 /
@@ -990,6 +1006,21 @@
    别再指望它们。 */
 .npr-book.is-immersive .npr-book-stage { padding: 8px 10px 12px; }
 
+/* ---- 沉浸 + 左侧面板打开：胶囊只在**阅读列**里居中（0.25.7）----
+   ★ 胶囊是 `left:0; right:0` 铺满窗口、再在中间居中；面板从窗口左缘起 306px 宽。
+     窗口一窄（1000px 上下），胶囊左端就压到面板右上角那颗「收起」上 —— 用户报的
+     「菜单就会遮挡掉目录框的关闭按钮」就是它。另一条防线在 `book-peek.js` 的
+     `insidePanel`：指针在面板上时**根本不滑出**。两条都要：只挡指针的话，
+     从正文顶部滑出来的胶囊仍然压着面板；只让位的话，指针在面板上滑出仍会短暂遮挡。
+   ★ 只在面板**还占左侧一列**时偏移：`@container (max-width: 820px)` 会把面板改成
+     上下排、铺满整宽，那时 `left: var(--npr-book-side-w)` 会把胶囊推到面板右缘之外。
+     821 与那个 820 是同一处阈值，改一个必须改另一个。
+   ★ `has-side` 由两个阅读器按「**左侧**面板是否打开」加（目录 / 划线 / 解读）。
+     伴读在右侧，不能加 —— 加了胶囊会往左让，正好让到伴读身上去。 */
+@container (min-width: 821px) {
+  .npr-book.is-immersive.has-side .npr-book-chrome { left: var(--npr-book-side-w); }
+}
+
 /* ---- 沉浸时把**书架那一列**也收掉 ----
    ★ 用户原话「左边两列缩掉，只显示阅读的这一列」：第二列就是这个 `.npr-sidebar`；
      第一列是宿主自己的侧栏 —— 插件改不到（0.24.2 起也不再借全屏去盖它，
@@ -1056,7 +1087,7 @@
 .npr-book-companion-hint { padding: 16px; color: var(--npr-muted); font-size: 12px; line-height: 1.7; }
 
 /* ---- 目录面板：与伴读**互斥占同一格**（不开第三列，正文宽度是读字用的）---- */
-.npr-book-digest { flex: 0 0 306px; width: 306px; min-width: 0; border-right: 1px solid var(--npr-border); display: flex; flex-direction: column; }
+.npr-book-digest { flex: 0 0 var(--npr-book-side-w); width: var(--npr-book-side-w); min-width: 0; border-right: 1px solid var(--npr-border); display: flex; flex-direction: column; }
 .npr-digest-progress { display: grid; gap: 6px; padding: 10px 14px; }
 .npr-digest-bar { height: 4px; border-radius: 999px; background: var(--npr-hover); overflow: hidden; }
 .npr-digest-bar i { display: block; height: 100%; background: var(--npr-accent-strong); transition: width .2s ease; }
@@ -1259,28 +1290,19 @@
   box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
   font-size: 11px;
 }
-.npr-book-quotebar-text { min-width: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--npr-muted); }
+/* ★ `min-width` 是**保底**，不是排版洁癖（0.25.8）：气泡是 `absolute` + `translateX(-50%)`，
+   可用宽度按「包含块右边 − left」算，右半边超出时 flex 会**按比例收缩**，而这段摘录是
+   唯一能被压到 0 的那一项（按钮都是 `flex: 0 0 auto`）。四颗按钮之后它真的被压没了 ——
+   截图里只剩「划线 笔记 问伴读 复制」，用户认不出自己划的是哪一句。
+   56px ≈ 三个半字 + 省略号，够认出开头。 */
+.npr-book-quotebar-text { flex: 0 1 auto; min-width: 56px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--npr-muted); }
 .npr-book-quotebar button { flex: 0 0 auto; height: 24px; padding: 0 8px; border: 0; border-radius: 999px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 11px; cursor: pointer; }
 .npr-book-quotebar button:hover { background: var(--npr-hover); }
 
-/* 扫描页说明（0.20.5）：文字版能选了，扫描版**本来就没有字可选** —— 不说这一句，
-   用户会得到和修复之前完全一样的观感，然后合理地认为没修。
-   ★ `pointer-events:none` 是必须的：它压在书页下沿，挡住选区就等于把这句话变成了障碍。 */
-.npr-book-notice {
-  position: absolute;
-  left: 50%;
-  bottom: 8px;
-  z-index: 2;
-  margin: 0;
-  padding: 3px 9px;
-  transform: translateX(-50%);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--npr-bg) 90%, transparent);
-  color: var(--npr-muted);
-  font-size: 10px;
-  white-space: nowrap;
-  pointer-events: none;
-}
+/* 扫描页那条说明胶囊（book-notice，0.20.5 加）已在 0.25.9 删除 —— 用户原话「这个提示不要了」。
+   扫描页现在自动本机 OCR，「有没有文字」由伴读面板回答；「整页是图片」用户看一眼就知道。
+   ★ 这里**不要**再把类名写全（带 npr- 前缀）：`scripts/check-classes.mjs` 扫 CSS 时
+     不剥注释，写全了就会被算成「定义了但没人用」，直接判失败。 */
 .npr-book-hint, .npr-book-error { align-self: center; margin: auto; max-width: 420px; color: var(--npr-muted); font-size: 12px; line-height: 1.7; text-align: center; }
 .npr-book-error { display: grid; justify-items: center; gap: 8px; text-align: left; }
 .npr-book-error h2 { margin: 4px 0 0; color: var(--npr-fg); font-size: 16px; }
@@ -1613,7 +1635,7 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-book-quotebar button.is-primary { background: var(--npr-accent-strong); border-color: transparent; color: #fff; font-weight: 600; }
 .npr-book-quotebar button.is-primary:hover:not(:disabled) { filter: brightness(1.1); }
 
-.npr-marks { flex: 0 0 306px; width: 306px; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--npr-border); }
+.npr-marks { flex: 0 0 var(--npr-book-side-w); width: var(--npr-book-side-w); min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--npr-border); }
 .npr-marks-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 12px 12px 6px; }
 .npr-marks-head h2 { margin: 0; font-size: 13px; font-weight: 600; color: var(--npr-fg); }
 .npr-marks-head p { margin: 2px 0 0; font-size: 10.5px; line-height: 1.5; color: var(--npr-muted); }

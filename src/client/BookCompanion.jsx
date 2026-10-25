@@ -24,11 +24,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './icons.jsx';
+import { tidyOcrText } from './ocr-text.js';
 import { readQuickPrompts } from './quick-prompts.js';
 
 export function BookCompanion({
   api, context, onClose, onManagePrompts, SessionProvider, renderSlot,
-  onOcr, ocrNeeded = false, ocrUsed = false, ocrBusy = false, ocrError = '',
+  onOcr, ocrNeeded = false, ocrUsed = false, ocrBusy = false, ocrError = '', ocrText = '',
 }) {
   const [workspaceId, setWorkspaceId] = useState(() => api.defaultChatWorkspace?.());
   const [chat, setChat] = useState(null);
@@ -42,6 +43,17 @@ export function BookCompanion({
   const [bindAttempt, setBindAttempt] = useState(0);
   const [prompts, setPrompts] = useState(() => readQuickPrompts('book'));
   const [promptMount, setPromptMount] = useState(null);
+  /**
+   * OCR 结果要不要摊开、复制过没有。
+   *
+   * ★ 默认**摊开**（用户 0.25.9 的原话：「识别完就结束了，我看不到，也不能复制」）。
+   *   识别成功的唯一痕迹原本是上面那行小字换了一句，而「识别这一页」那块按钮
+   *   会整块消失 —— 用户点完，界面反而变空了。文字明明在内存里，就是不给看。
+   * ★ 换页 / 换书时 `ocrText` 变空或换成另一页，`useEffect` 把它收回「摊开」，
+   *   不留在上一页的阅读状态里。
+   */
+  const [ocrOpen, setOcrOpen] = useState(true);
+  const [ocrCopied, setOcrCopied] = useState(false);
   const [emptyConversation, setEmptyConversation] = useState(false);
   const chatRoot = useRef(null);
   const owned = useRef(null);
@@ -220,6 +232,45 @@ export function BookCompanion({
     }
   }
 
+  /**
+   * 换到另一页的识别结果时，重新摊开并复位「已复制」。
+   *
+   * ★ 依赖 `ocrText` 而不是 `context.page`：翻页但还没识别时 `ocrText` 会变成空串
+   *   （它在 `BookReader` 里按页过滤），那块 UI 本来就不渲染；等新一页识别出来
+   *   `ocrText` 又有值，这里就把它摊开 —— 用户正想知道「AI 读到了什么」。
+   */
+  useEffect(() => {
+    setOcrOpen(true);
+    setOcrCopied(false);
+  }, [ocrText]);
+
+  /**
+   * 摊出来给人看的那一份。
+   *
+   * ★ 必须过 `tidyOcrText`：OCR 是按「图上每一行」输出的，行末硬断。直接丢进
+   *   380px 的面板里，每行都会二次折行（一句话断成两截）。合并行、保留段落。
+   * ★ 复制也用它 —— 用户要的是这段话，不是它在纸上怎么断行。
+   */
+  const ocrReadable = ocrText === '' ? '' : tidyOcrText(ocrText);
+
+  /**
+   * 复制识别出来的原文。
+   *
+   * ★ 失败要说出来：Electron 在窗口失焦或被撤权限时会拒。默默不响应等于
+   *   「点了没反应」，而这颗按钮存在的意义就是「把这段字拿出来用」。
+   * ★ 成功只在按钮上闪一下「已复制」，不弹 toast：用户此刻就在这块界面上，
+   *   弹到屏幕底部反而要去找。
+   */
+  const copyOcr = async () => {
+    try {
+      await navigator.clipboard.writeText(ocrReadable);
+      setOcrCopied(true);
+      window.setTimeout(() => setOcrCopied(false), 1600);
+    } catch {
+      setActionError('复制失败：剪贴板不可用 —— 可以点「查看」后手动选中这段字');
+    }
+  };
+
   const detail = context.loaded
     ? (context.text === ''
       ? '这一页没有文字层（扫描版或纯图片页），伴读只看到书名与页码'
@@ -264,6 +315,32 @@ export function BookCompanion({
           </button>
           <small>{ocrBusy ? '本机识别，不联网、不花钱' : '本机识别，约 1 秒，不联网'}</small>
           {ocrError !== '' && <p className="npr-companion-ocr-error" role="alert">{ocrError}</p>}
+        </div>
+      )}
+      {/**
+        * 识别**之后**：把文字摊出来（0.25.9）。
+        *
+        * ★ 用户原话：「识别后的文字是喂给AI了吗？识别完就结束了，我看不到，也不能复制。」
+        *   之前识别成功只会让上面那块按钮**整块消失**（`ocrNeeded` 变成 false），
+        *   唯一痕迹是上下文那行小字换了一句 —— 点完按钮界面反而更空了，
+        *   文字明明在内存里（它喂给了伴读），却一个入口都没有。
+        * ★ 「已交给伴读」这五个字是刻意写的：它直接回答「喂给 AI 了吗」，
+        *   而不是让用户从「已带上这一页的文字（本机识别…）」那行小字里去猜。
+        * ★ 用 `<pre>` + `white-space: pre-wrap`：OCR 结果是带换行的多段文字，
+        *   丢进普通 `<p>` 会挤成一坨。`user-select: text` 保证「查看」之后能手动选。
+        */}
+      {ocrUsed && ocrReadable !== '' && (
+        <div className="npr-companion-ocr is-done">
+          <span className="npr-companion-ocr-title">
+            {`已识别 ${ocrReadable.replace(/\s+/g, '').length} 字 · 已交给伴读`}
+          </span>
+          <button type="button" className="npr-companion-ocr-act"
+            aria-expanded={ocrOpen}
+            onClick={() => setOcrOpen((value) => !value)}>{ocrOpen ? '收起' : '查看'}</button>
+          <button type="button" className="npr-companion-ocr-act" onClick={() => void copyOcr()}>
+            {ocrCopied ? '已复制' : '复制'}
+          </button>
+          {ocrOpen && <pre className="npr-companion-ocr-text">{ocrReadable}</pre>}
         </div>
       )}
       {connectError !== '' && (

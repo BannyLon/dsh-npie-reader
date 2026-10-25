@@ -231,7 +231,11 @@ describe('目录在左、伴读在右', () => {
     const narrowMain = css.indexOf('.npr-book-main { flex-direction: column; }');
     assert.ok(narrowMain > 0, '找不到窄容器里的 .npr-book-main 覆盖 —— 断言自己失效了');
     for (const base of [
-      '.npr-book-digest { flex: 0 0 306px;',
+      // ★ 只钉「声明存在」这个意图，**不抄取值**：0.25.x 把这里的 `306px` 换成了
+      //   `var(--npr-book-side-w)`（面板宽度变成可配的），照抄字面量的锚点当场失效，
+      //   报出来的却是「找不到基础规则」—— 看着像布局塌了，其实只是断言过期。
+      //   锚点要能活过「取值改成变量」这类重构，否则它保护的是常量而不是意图。
+      '.npr-book-digest { flex: 0 0 ',
       '.npr-book-companion { flex: 0 0 348px;',
       '.npr-book-stage { flex: 1;',
     ]) {

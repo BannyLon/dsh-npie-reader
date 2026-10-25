@@ -12,7 +12,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { PEEK_HIDE, PEEK_SHOW, peekNext, peekOnLeave } from '../src/client/book-peek.js';
+import { PEEK_HIDE, PEEK_PANEL_CLASSES, PEEK_SHOW, insidePanel, peekNext, peekOnLeave } from '../src/client/book-peek.js';
 
 describe('peekNext：沉浸态胶囊滑出', () => {
   it('指针进到 56px 以内就滑出', () => {
@@ -66,5 +66,66 @@ describe('peekOnLeave：指针离开面板时收不收', () => {
   it('读不出坐标时按「收掉」处理（宁可少露一会儿，别一直糊在书上）', () => {
     assert.equal(peekOnLeave(Number.NaN), false);
     assert.equal(peekOnLeave(Number.NEGATIVE_INFINITY), false);
+  });
+});
+
+/**
+ * 「指针在面板上就别滑出」—— 0.25.7。
+ *
+ * 用户原话：「在沉浸阅读的时候，打开目录，目录的框就会关闭了，因为鼠标一移动上去，
+ * 就会划出菜单，菜单就会遮挡掉目录框的关闭按钮」。
+ * 关目录必须点面板右上角那颗按钮，鼠标路径必然经过面板顶部那一行；判据只有 y 时，
+ * 胶囊就在那一刻滑出来正好盖住它。
+ */
+function node(className, parent = null) {
+  return { className, parentElement: parent };
+}
+
+describe('insidePanel：指针在不在面板上', () => {
+  it('面板根节点自己', () => {
+    assert.equal(insidePanel(node('npr-book-digest npr-ebook-toc')), true);
+    assert.equal(insidePanel(node('npr-marks')), true);
+    assert.equal(insidePanel(node('npr-companion')), true);
+  });
+
+  it('面板里面很深的子节点（沿父链往上找得到）', () => {
+    const deep = node('npr-icon', node('icon-wrap', node('npr-ebook-toc-close', node('npr-ebook-toc-head', node('npr-book-digest')))));
+    assert.equal(insidePanel(deep), true);
+  });
+
+  it('★ 相似前缀不算：`npr-marks-list` / `npr-book-digest-bar` 不能混淆', () => {
+    // 用 `includes` 而不是按空白切词就会在这里判错 —— 面板里满是这种前缀相同的类名。
+    assert.equal(insidePanel(node('npr-marks-list')), false);
+    assert.equal(insidePanel(node('npr-book-digest-bar')), false);
+  });
+
+  it('正文 / 胶囊 / 拖动条都不算面板', () => {
+    assert.equal(insidePanel(node('npr-ebook-sheet')), false);
+    assert.equal(insidePanel(node('npr-book-chrome', node('npr-book'))), false);
+    assert.equal(insidePanel(node('npr-book-toolbar')), false);
+  });
+
+  it('target 是 null（合成事件 / 指针已移出文档）时不炸，按「不在面板上」处理', () => {
+    assert.equal(insidePanel(null), false);
+    assert.equal(insidePanel(undefined), false);
+  });
+
+  it('SVG 元素的 className 是对象，不能拼成 [object SVGAnimatedString]', () => {
+    // 面板里的图标就是 `<svg>`；若这里判不出来，指针停在图标上时胶囊照样滑出。
+    const svg = { className: { baseVal: 'npr-icon-svg' }, parentElement: node('npr-book-digest') };
+    assert.equal(insidePanel(svg), true);
+  });
+
+  it('父链成环也不会死循环（深度上限兜住）', () => {
+    const a = node('a');
+    const b = node('b', a);
+    a.parentElement = b;
+    assert.equal(insidePanel(a), false);
+  });
+
+  it('自定义面板类名可替换（PDF / 电子书以后加面板不必改判据）', () => {
+    assert.equal(insidePanel(node('my-panel'), ['my-panel']), true);
+    assert.equal(insidePanel(node('npr-marks'), ['my-panel']), false);
+    assert.deepEqual([...PEEK_PANEL_CLASSES].sort(), ['npr-book-digest', 'npr-companion', 'npr-marks']);
   });
 });

@@ -122,6 +122,63 @@ describe('★ 阅读器的渲染与生命周期契约', () => {
   });
 });
 
+/**
+ * ★ 0.25.9：书页上**不许再压常驻说明**。
+ *
+ * 用户原话：「这个提示不要了」——指的是 0.20.5 加的那条
+ * 「这一页没有文字层（扫描图片），选不中文字」，它压在书页下沿，每翻到一页扫描页
+ * 就闪一次。删它的理由不是它错，而是**它已经没有信息量**：
+ *   ① 扫描页现在会自动本机 OCR（0.24.8），伴读面板里那句「已识别 N 字 · 已交给伴读」
+ *      既说了文字从哪来、又给了「查看 / 复制」，比一条只说「选不中」的胶囊有用得多；
+ *   ② 这一页是不是扫描页，看一眼就知道（整页是图片）；
+ *   ③ 它是 `pointer-events: none` 的绝对定位浮层，翻页瞬间闪一下还容易被读成「出错了」。
+ *
+ * ★ 为什么这条断言只能读源码：它只在 `status === 'ready'` 且文字层量出 0 个字时
+ *   才渲染，而 `renderToString` 不跑 effect ⇒ 真渲染到不了那个分支。
+ *   `test/book-hooks-render.test.mjs` 那边负责的是「渲染期不炸」，管不到这里。
+ * ⇒ 判据退而求其次，但**反向对照必须成立**：把那一行塞回真源码，判据要变红。
+ */
+describe('★ 书页上不压常驻说明（0.25.9 删掉的那条）', () => {
+  /** 判据：这段源码有没有在书页上画那条常驻说明。返回违规说明的数组。 */
+  function noticeViolations(code) {
+    const found = [];
+    // ① 类名：那条说明的样式钩子（样式定义已随提示一起删了）。
+    if (/\bnpr-book-notice\b/.test(code)) {
+      found.push('又出现了 npr-book-notice —— 书页下沿那条常驻说明回来了');
+    }
+    // ② 文案：换个类名但把同一句话说回去，同样是「每页闪一次噪音」。
+    if (code.includes('选不中文字')) {
+      found.push('又出现了「选不中文字」这句常驻说明');
+    }
+    // ③ 它当初靠 `textless` 这个状态驱动；状态留着不用，就是下一次被接回去的把手。
+    if (/\bsetTextless\s*\(/.test(code)) {
+      found.push('又出现了 setTextless( —— 扫描页说明的状态机被接回来了');
+    }
+    return found;
+  }
+
+  it('当前实现没有那条说明', () => {
+    assert.deepEqual(noticeViolations(bookReader), []);
+  });
+
+  it('★ 反向对照：把 0.20.5 那一行塞回真源码 ⇒ 判据必须变红', () => {
+    // 变异的是**真源码**，不是另写一段坏代码 —— 否则这条对照永远绿。
+    // 变异体照 0.20.5 的原样补全：状态 + 那一行 JSX（只补 JSX 会漏掉第三条判据，
+    // 那样「>= 3」就成了在数我自己刚打的字面量，不是判据真的抓到了三样东西）。
+    const mutant = `${bookReader}
+  const [textless, setTextless] = useState(false);
+  setTextless(false);
+              {textless && (
+                <p className="npr-book-notice" role="status">这一页没有文字层（扫描图片），选不中文字</p>
+              )}`;
+    const found = noticeViolations(mutant);
+    assert.ok(found.length >= 3, `变异体只被判出 ${found.length} 条，判据太弱：${JSON.stringify(found)}`);
+    assert.ok(found.some((item) => item.includes('npr-book-notice')), '必须抓到类名');
+    assert.ok(found.some((item) => item.includes('选不中文字')), '必须抓到文案');
+    assert.ok(found.some((item) => item.includes('setTextless')), '必须抓到状态机');
+  });
+});
+
 describe('★ pdfjs.js 的销毁入口', () => {
   it('销毁取的是 loadingTask（task），不是文档代理', () => {
     assert.match(pdfjsCode, /entry\.task\s*\?\?\s*entry\.doc\?\.loadingTask/,

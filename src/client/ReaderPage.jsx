@@ -180,6 +180,12 @@ const PANEL_CSS = `
 .npr-welcome-brand{font-size:10px;font-weight:600;letter-spacing:.2em;color:var(--npr-faint);margin-bottom:28px}
 .npr-welcome h2{font-family:var(--npr-font-family);font-size:clamp(25px,3vw,34px);font-weight:400;letter-spacing:.02em;line-height:1.5;margin:0 0 12px;color:var(--npr-fg)}
 .npr-welcome-intro{font-size:13px;line-height:1.8;color:var(--npr-muted);margin:0}
+/* 说明文字分成三段（书架 / 怎么开始 / 能干什么）：段间留 12px，比行距 23px 的一半多一点，
+   读起来是「三块」而不是「一大段被切开」—— 断句靠间距，不靠标点。 */
+.npr-welcome-intro + .npr-welcome-intro{margin-top:12px}
+/* 「阅读」这种界面标签是**一个词**，不能让换行把它劈成「阅 / 读」—— 中文可以在任意字之间断行，
+   而四个字的标签被劈开就认不出来了。只包标签本身，不包整句（整句 nowrap 会顶破 440px 版心）。 */
+.npr-welcome-intro .npr-keep{white-space:nowrap}
 .npr-welcome-keys{display:flex;flex-wrap:wrap;gap:18px;margin-top:44px;color:var(--npr-faint);font-size:10px}
 .npr-welcome-keys > span{display:flex;align-items:center;gap:5px}
 .npr-welcome-keys kbd{font:inherit;font-size:10px}

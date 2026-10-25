@@ -928,3 +928,91 @@ describe('★ 搜索词的作用域：两页各记各的（0.18.3）', () => {
     assert.ok(found.some((item) => item.includes('筛选：xxx')), `没判出缺 chip：${found.join(' | ')}`);
   });
 });
+
+/**
+ * 欢迎页那段说明文字：**不许只写网盘**（0.25.5）。
+ *
+ * 用户原话：「这个说明文字改一下。不仅是只有网盘还有本地目录」。
+ * 书源有三种（本地目录 / 百度网盘 / 外部书单），而原本文案标题就叫「读网盘里的书」、
+ * 首句写「书架是网盘上的全部书」—— 一个只配了本地目录的用户读到这页，
+ * 会以为这不是给他看的地方。**文案错一层，功能就白做。**
+ *
+ * ★ 标题后来改成了 slogan「随心所阅，无界书房」，它**不承担列举数据源的责任**；
+ *   列源落在第一段（书架放全部的书：本地目录 / 百度网盘 / 外部书单）。判据取的是
+ *   h2 + 三段说明这一整块：slogan 里不出现这两个词不影响，而一旦有人把第一段里的
+ *   「本地目录、百度网盘、外部书单」抹掉，就必然判红。
+ *
+ * ★ 0.25.5 修订：说明文字从**一个自然段**拆成三段（书架 / 怎么开始读 / 能干什么）。
+ *   用户原话：「现在根本就看不懂」。判据本身不用改 —— 它扫的是整块可见文字，
+ *   拆段只是让这句话更好读，不该影响「有没有说本地」这条事实。
+ */
+function welcomeCopyOf(code) {
+  const at = code.indexOf('className="npr-welcome"');
+  if (at === -1) return '';
+  const end = code.indexOf('className="npr-welcome-keys"', at);
+  return code.slice(at, end === -1 ? at + 2000 : end);
+}
+
+function welcomeViolationsOf(code) {
+  const copy = welcomeCopyOf(code);
+  if (copy === '') return ['找不到欢迎页文案 —— 结构改了，这条守卫要跟着改'];
+  const found = [];
+  // 「本地」是判据的核心：三种书源里它是**最容易被文案漏掉**的那一种，
+  // 因为它不像「网盘」那样自带一个服务名。
+  if (!/本地/.test(copy)) found.push('欢迎页文案没有「本地」—— 只配了本地目录的用户会以为这页不是给他的');
+  if (!/网盘/.test(copy)) found.push('欢迎页文案没有「网盘」—— 反过来漏掉网盘，配了网盘的人读不到对应说明');
+  return found;
+}
+
+describe('★ 欢迎页文案：书源不止网盘一种（0.25.5）', () => {
+  it('当前实现通过（首句把本地 / 网盘 / 外部书单都说了）', () => {
+    assert.deepEqual(welcomeViolationsOf(app), []);
+  });
+
+  it('★ 反向对照：把第一段的三种源抹掉必须判红', () => {
+    // 标题是 slogan（「随心所阅，无界书房」），**不承担列举数据源的责任** ——
+    // 所以变异只动第一段，标题保持原样。判据因此只该看正文。
+    const before = app.replace('（本地目录、百度网盘、外部书单里的都算）', '');
+    assert.notEqual(before, app, '变异没生效 —— 这条反向对照是假的');
+    const found = welcomeViolationsOf(before);
+    assert.ok(found.some((item) => item.includes('本地')), `没判出「只写网盘」：${found.join(' | ')}`);
+  });
+});
+
+/**
+ * 欢迎页统计行必须**按书源分项**（0.25.6）。
+ *
+ * 用户原话：「这地方是不是根据用户添加的书源时时表达：比如目前：书源：网盘的情况。
+ * 本地目录的情况。」
+ * 之前那行写死四项（书单 / 已在阅读 / 可阅读 / 总体积），一个字的来源信息都没有；
+ * 「书单」与「总体积」还和各源本数之和重复 —— 等于让读者自己加一遍。
+ */
+function statsViolationsOf(code) {
+  const at = code.indexOf('className="npr-welcome-keys"');
+  if (at === -1) return ['找不到统计行 —— 结构改了，这条守卫要跟着改'];
+  const block = code.slice(at, code.indexOf('</div>', at));
+  const found = [];
+  if (!/sourceStats\.map\(|\bsourceTotals\(/.test(block)) {
+    found.push('统计行没有接书源分项 —— 又变回「书单/已在阅读/可阅读/总体积」了');
+  }
+  // 「书单」「总体积」是总和的另一说法：各源本数之和 / 体积之和。留着就是重复计数。
+  if (/'书单'/.test(block)) found.push('「书单」那项又回来了 —— 各源本数之和已经是它');
+  if (/'总体积'/.test(block)) found.push('「总体积」那项又回来了 —— 各源体积之和已经是它');
+  return found;
+}
+
+describe('★ 欢迎页统计行：按书源分项（0.25.6）', () => {
+  it('当前实现通过（源项 + 已在阅读 + 可阅读）', () => {
+    assert.deepEqual(statsViolationsOf(app), []);
+  });
+
+  it('★ 反向对照：写死原来那四项必须判红', () => {
+    const before = app.replace(
+      /\.\.\.sourceStats\.map\([\s\S]*?\),\n/,
+      "['书单', `${shelfStats.total} 本`],\n                ['已在阅读', `${shelfStats.added} 本`],\n                ['可阅读', `${shelfStats.renderable} 本`],\n                ['总体积', formatBytes(shelfStats.bytes)],\n",
+    );
+    assert.notEqual(before, app, '变异没生效 —— 这条反向对照是假的');
+    const found = statsViolationsOf(before);
+    assert.ok(found.length >= 2, `没判出写死的四项：${found.join(' | ')}`);
+  });
+});

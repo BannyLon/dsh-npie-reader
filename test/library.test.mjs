@@ -52,6 +52,7 @@ import {
   progressPercent,
   READING_STATE_FILTERS,
   sourceListId,
+  sourceTotals,
   stateOf,
   stateRank,
   titleFromFilename,
@@ -1057,5 +1058,62 @@ describe('结构性契约：src/library.js 不许出现运行环境专属 API', 
     const polluted = stripComments(`import { readFile } from 'node:fs';\nconst a = document.title;\n`);
     assert.equal(polluted.includes('node:'), true);
     assert.equal(polluted.includes('document.'), true);
+  });
+});
+
+/**
+ * 欢迎页那行统计的**来源**维度（0.25.6）。
+ *
+ * 用户原话：「这地方是不是根据用户添加的书源时时表达：比如目前：书源：网盘的情况。
+ * 本地目录的情况。」
+ * 原来四项（书单 / 已在阅读 / 可阅读 / 总体积）全是状态与总量，一个字的来源信息都没有 ——
+ * 同时配了网盘和本地目录的人，读不出来「2637 本里有几本在网盘上」。
+ */
+describe('sourceTotals：按书源分堆', () => {
+  const book = (id, kind, size, extra = {}) => ({ id, listKind: kind, size, ...extra });
+
+  it('两种源各算各的本数与体积', () => {
+    const totals = sourceTotals([
+      book('a', 'local', 100), book('b', 'local', 300), book('c', 'pan', 1000),
+    ]);
+    assert.deepEqual(totals.map((row) => [row.kind, row.label, row.total, row.bytes]), [
+      ['local', '本地', 2, 400],
+      ['pan', '网盘', 1, 1000],
+    ]);
+  });
+
+  it('书多的排前面（体积不参与排序 —— 一本 1GB 的书不该压过 800 本小书）', () => {
+    const totals = sourceTotals([
+      book('a', 'pan', 5_000_000_000), book('b', 'local', 1), book('c', 'local', 1),
+    ]);
+    assert.deepEqual(totals.map((row) => row.kind), ['local', 'pan']);
+  });
+
+  it('没有 listKind 时回落到 source —— 与 sourceLabelOf 同一套判据', () => {
+    const totals = sourceTotals([{ id: 'a', source: 'pan', size: 10 }]);
+    assert.deepEqual(totals.map((row) => [row.kind, row.label]), [['pan', '网盘']]);
+  });
+
+  it('来源完全缺失的书算进「其他」，不丢、也不写 NaN', () => {
+    const totals = sourceTotals([{ id: 'a', size: 10 }, { id: 'b' }]);
+    assert.deepEqual(totals.map((row) => [row.kind, row.label, row.total, row.bytes]), [
+      ['other', '其他', 2, 10],
+    ]);
+  });
+
+  it('空书架返回空数组（调用方不用判空）', () => {
+    assert.deepEqual(sourceTotals([]), []);
+    assert.deepEqual(sourceTotals(undefined), []);
+  });
+
+  it('★ 反向对照：按书单名分组会多出堆 —— 证明聚合粒度确实是 kind', () => {
+    // 三个本地目录 = 三条源。若判据改成按 listName 分组，这里会数出 3 堆而不是 1 堆。
+    const books = [
+      book('a', 'local', 1, { listId: 'x', listName: '小说' }),
+      book('b', 'local', 1, { listId: 'y', listName: '技术' }),
+      book('c', 'local', 1, { listId: 'z', listName: '画册' }),
+    ];
+    assert.equal(sourceTotals(books).length, 1, '同类型的多个目录必须在同一堆里，否则那行会被撑爆');
+    assert.equal(new Set(books.map((item) => item.listName)).size, 3, '反向对照本身要有牙：这三本书确实分属三个书单');
   });
 });

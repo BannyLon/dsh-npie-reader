@@ -104,6 +104,41 @@ export function selectionQuote(selection, layer, { limit = QUOTE_LIMIT } = {}) {
 export const QUOTE_BAR_HEIGHT = 34;
 
 /**
+ * 气泡**半宽**，与 CSS 里 `.npr-book-quotebar { max-width: min(320px, 92%) }` 是同一个数。
+ *
+ * ★ 两处必须一起改：这里算的是「气泡横向最多能伸出中心多少」，CSS 那边是它的上限。
+ *   只改一边的话，气泡要么被裁掉左端（文本先没）、要么离页边空一条。
+ */
+export const QUOTE_BAR_HALF = 160;
+
+/** 气泡离页面左右边缘至少留这么多。 */
+export const QUOTE_BAR_EDGE = 8;
+
+/**
+ * 气泡的 `left`：以选区中心居中，但**夹在页面内**。
+ *
+ * ★ 为什么需要夹（0.25.8 量出来的）：气泡是 `absolute` + `translateX(-50%)`，
+ *   `left` 直接吃选区中心。选区靠左（就是每段开头那一句，最常被划）时，
+ *   左边缘 = 中心 − 160 会变成负数 —— 气泡被包含块裁掉左边一段，而 flex 里
+ *   **第一个被牺牲的就是那段摘录**（按钮是 `flex: 0 0 auto`，文本可收缩）。
+ *   症状：用户划了一句，气泡上只剩四颗按钮，认不出自己划的是哪一句。
+ * ★ 返回 CSS 字符串而不是数字：上界要读**包含块宽度**（`100%`），而宽度在 JS 里
+ *   读不到（气泡还没渲染）。`clamp()` 正好干这件事。
+ * ★ `48.5` 这类小数不取整：亚像素偏移在 Retina 上看得出来（气泡贴着边缘抖）。
+ */
+export function quoteBarLeft(centerX, { half = QUOTE_BAR_HALF, edge = QUOTE_BAR_EDGE } = {}) {
+  // `Number(null)` 是 0、`Number('')` 也是 0 —— 它们会静默变成「贴左边」，
+  // 所以先按「没量到」处理，别让空值混进 clamp。
+  if (centerX === null || centerX === undefined || centerX === '') return '50%';
+  const center = Number(centerX);
+  if (!Number.isFinite(center)) return '50%';
+  // 夹的是**中心**（`left` 配 `translateX(-50%)`），所以下界要减掉半宽：
+  // 中心 ≥ half + edge ⇔ 左边缘 ≥ edge。
+  const bound = half + edge;
+  return `clamp(${bound}px, ${center}px, calc(100% - ${bound}px))`;
+}
+
+/**
  * 气泡该放在选区上方还是下方，以及它的 `top` / `bottom` 用哪个。
  *
  * ★ 判据是**上方有没有位置**，不是「选区在页面上半还是下半」：

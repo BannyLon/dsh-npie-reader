@@ -26,7 +26,7 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   READING_STATE_FILTERS, addedBooks, bookRowView, bookScopes, countSources, filterBooks, formatBytes,
-  isEbookExtension, libraryStats, normalizeState, parseScope, scopeValue, sourceLabelOf, stateOf,
+  isEbookExtension, libraryStats, normalizeState, parseScope, scopeValue, sourceLabelOf, sourceTotals, stateOf,
 } from '../library.js';
 import { Icon } from './icons.jsx';
 import { BookReader } from './BookReader.jsx';
@@ -555,6 +555,11 @@ export function LibraryApp({ reading, onExit, notify, api, SessionProvider, rend
     return parsed.dir === '' ? group.label : `${group.label} / ${parsed.dir}`;
   }, [scope, scopes]);
   const shelfStats = useMemo(() => libraryStats(books, states), [books, states]);
+  /**
+   * 按书源分堆。放 `useMemo` 里不是为了省几个微秒 —— `books` 有 2600 多条，
+   * 而欢迎页在「切换选中书 → 清空选中」时会重渲染，不缓存就每次白扫一遍。
+   */
+  const sourceStats = useMemo(() => sourceTotals(books), [books]);
   const readingStats = useMemo(() => libraryStats(readingList, states), [readingList, states]);
   const selected = books.find((book) => book.id === selectedId);
 
@@ -848,20 +853,43 @@ export function LibraryApp({ reading, onExit, notify, api, SessionProvider, rend
         ) : (
           <div className="npr-welcome">
             <div className="npr-welcome-brand">NPIE BOOKSHELF</div>
-            <h2>读网盘里的书</h2>
+            {/*
+              ★ 这里是**入口说明**，不是功能清单：一段只说一件事，三段讲完
+                「两页各放什么 → 怎么开始读 → 打开后能干什么」。
+                0.25.5 第一版把五件事（两页、书架是什么、+阅读、PDF 渲染、重排、断网）
+                挤进一个自然段，用户的原话是「现在根本就看不懂」。
+              ★ 不许出现 `pdf.js` / 重排 / 宿主 / 磁盘 这类内部词：读者不关心怎么实现，
+                只关心「我点下去会发生什么」。
+              ★ 标题是 slogan，不列数据源；列源的责任在第一段（本地目录 / 百度网盘 /
+                外部书单）。守卫在 `test/library-app.test.mjs`（第一段缺「本地」即判红）。
+            */}
+            <h2>随心所阅，无界书房</h2>
             <p className="npr-welcome-intro">
-              左侧分「阅读」和「书架」两页。<strong>书架是网盘上的全部书，只作展示</strong> ——
-              点书名右边的「+ 阅读」把想读的收进「阅读」页；<strong>取书阅读在「阅读」页</strong>，
-              点书名即可。PDF 用内置 pdf.js 按原版式渲染，只从网盘取当前需要的那几段，
-              不会整本下载；EPUB / MOBI / AZW3 / TXT 由宿主解出全文后<strong>重排阅读</strong>，
-              可以调字号、跳目录、逐章生成解读。
+              左边分两页：<strong>书架</strong>放全部的书（本地目录、百度网盘、外部书单里的都算），
+              只看不读；<strong>阅读</strong>放你想读的。
             </p>
+            <p className="npr-welcome-intro">
+              想读哪本，到书架里点它右边的「<strong>+ 阅读</strong>」。加进来之后，
+              在<span className="npr-keep">「阅读」页</span>点书名就打开了。
+            </p>
+            <p className="npr-welcome-intro">
+              PDF 按原样显示；EPUB、MOBI、AZW3、TXT 会重新排版，能调字号、按目录跳、
+              逐章生成解读。书存在本机的，断网也能读。
+            </p>
+            {/*
+              ★ 这行先报**来源**（有几种源就几项，只有一种就只一项），再报**状态**。
+                原来只有「书单 / 已在阅读 / 可阅读 / 总体积」四项，全是状态与总量 ——
+                用户同时配了网盘和本地目录时，这行字里没有任何一处说得出「哪些书在哪儿」
+                （用户 2026-10-25 的原话：「是不是根据用户添加的书源时时表达」）。
+              ★ 「书单」「总体积」两项**撤掉**了：各源的本数之和就是书单总数、
+                体积之和就是总体积，再列一遍等于让读者自己做加法，还把行撑到换行。
+              ★ 「已在阅读」「可阅读」留着：它们与来源正交，换不出重复。
+            */}
             <div className="npr-welcome-keys">
               {[
-                ['书单', `${shelfStats.total} 本`],
+                ...sourceStats.map((source) => [source.label, `${source.total} 本 · ${formatBytes(source.bytes)}`]),
                 ['已在阅读', `${shelfStats.added} 本`],
                 ['可阅读', `${shelfStats.renderable} 本`],
-                ['总体积', formatBytes(shelfStats.bytes)],
               ].map(([key, label]) => (
                 <span key={key}><kbd>{key}</kbd><span>{label}</span></span>
               ))}
