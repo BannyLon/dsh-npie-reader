@@ -700,7 +700,10 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   const [companionWidth, setCompanionWidth] = useState(() => { const saved = Number(localStorage.getItem('npr.companionWidth')); return Number.isFinite(saved) && saved >= 25 && saved <= 75 ? saved : 44; });
   const companionWidthRef = useRef(companionWidth);
   useEffect(() => { const root = rootRef.current; if (!root) return; const update = () => { const r = root.getBoundingClientRect(); root.dataset.titlebar = String(window.location.protocol === 'dsh-app:' && /Mac/.test(navigator.platform) && r.left < 110 && r.top < 45); }; update(); if (!globalThis.ResizeObserver) return; const observer = new ResizeObserver(update); observer.observe(root); return () => observer.disconnect(); }, []);
-  useEffect(() => { const record = selected?.article; if (record) localStorage.setItem('npr.view.' + channel, JSON.stringify({ key: record.key, active: selected.active })); }, [selected?.article?.key, selected?.active, channel]);
+  // ★ 这里曾经在每次选中时写 `npr.view.<频道>`（`{key, active}`），供「打开面板回到上次
+  //   那篇」读回来。那条恢复 2026-10-26 删了（理由见下面 `openArticle` 之后那段注释），
+  //   写也就一起删 —— 只写不读的持久化会让人以为还有人在用，下次又照着它加回去。
+  //   老用户 localStorage 里那几条记录**不动**：没人读，留着无害，专门去清理反而多一次写盘。
 
   useEffect(() => { setPassage(null); }, [selected?.article?.key]);
   useEffect(() => {
@@ -938,18 +941,19 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   };
 
   /**
-   * 面板打开时回到上次那篇（`npr.view.<频道>`）。
+   * 这里**曾经**有一条「面板打开时回到上次那篇」（`npr.view.<频道>`），2026-10-26 删掉。
    *
-   * ★ 以「书」那半边打开时**不恢复**（2026-10-26）：那时 subscribe 页根本没画出来，
-   *   恢复只会在后台打开一篇文章 —— 遇到英文还会顺手生成中文版本并在用户看不见的
-   *   地方把 `active` 切成 `translation`。等用户切回订阅页，看到的是「谁替我译的」。
-   *   这里依赖是空数组 ⇒ 读到的 `mode` 就是**初始模式**，正是要判的那一个。
+   * 用户连着报两次：① 从「书」切回来落在上一篇；② 从侧边栏点「阅读器」进来直接打开了
+   * 第一条 RSS。第二个才是原话里的「每次进来」，而它跟切模式无关 —— 是这一条恢复。
+   *
+   * 删掉的理由不止「用户不想要」：面板一打开就 `openArticle`，而 `openArticle` 里挂着
+   * 「英文自动生成中文版本」。于是**打开一个面板 = 替你花一次模型调用**，而那时用户
+   * 连列表都还没看。想继续读，点一下那一行就行 —— 那一下是用户做的决定。
+   *
+   * ★ 不要把它加回来当「贴心功能」：这条恢复和「自动翻译」是一个按钮的两面。
+   *   `test/reader-mode-switch.test.mjs` 里有一条结构性判据守着「effect 里不许自动
+   *   打开文章」，加回来会直接判红。
    */
-  useEffect(() => {
-    if (mode === 'library') return;
-    try { const saved = JSON.parse(localStorage.getItem('npr.view.' + channel) || 'null'); if (saved?.key) void openArticle(saved.key, saved.active); } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const refresh = async (target) => {
     // 防重入：定时器与手动点按可能撞在一起。两路刷新并发会把「订阅源 N 个」

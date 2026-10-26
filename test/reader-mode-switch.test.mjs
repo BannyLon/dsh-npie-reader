@@ -1,18 +1,20 @@
 /**
- * 切模式回来必须是**初始态**（`src/client/ReaderPage.jsx`）。
+ * 打开阅读器面板必须是**初始态**：右侧「订阅你关注的作者」，列表无选中。
  *
- * 缺陷（用户 2026-10-26 真机 + 截图）：读到一半点右上角切到「书」，再切回「订阅」，
- * 右侧直接落在上一篇文章上；那篇原文是英文时，译文也一并摆出来。用户的原话是
- * 「这不是我想的」——他要的是切回来看到「订阅你关注的作者」那张欢迎页。
+ * 这条判据被用户按了三次才长成现在这样，每一次都指向同一个动作 —— **自动打开一篇**：
  *
- * ★ 根因不止一处，两处都在本文件里：
- *   ① `selected` 挂在 ReaderPage 上（订阅页只是它的一个渲染分支），切到书架时它**不卸载**，
- *      于是那篇文章原封不动地留着；
- *   ② 反方向也有一处：面板以 `mode === 'library'` 打开时，那条「回到上次那篇」仍会跑，
- *      在用户看不见的地方 `openArticle` —— 英文还会顺手自动生成译文。
+ *   2026-10-26 第一次（切模式）：从「书」切回订阅，阅读区落在上一篇。
+ *   2026-10-26 第二次（开面板）：从侧边栏点「阅读器」进来，直接打开了第一条 RSS。
+ *   两次都不是「布局不对」，而是有条 effect 在 `openArticle` —— 而 `openArticle` 里
+ *   挂着「英文自动生成中文版本」⇒ **打开一个面板 = 替你花一次模型调用**。
  *
- * ★ 为什么是源码级：这条判据的形状是「effect 里有没有模式守卫」，真跑要 DOM + 宿主槽位；
- *   而缺陷的因果恰好全在静态结构里。每条判据都配**反向对照**（喂回未修版本必须变红），
+ * 所以现在的规则是**结构性**的，不是「某一行有没有加守卫」：
+ *   ① 任何 `useEffect` 里都不许调用 `openArticle`（打开文章只能由用户动作发起）；
+ *   ② `npr.view.*` 那套「回到上次那篇」的读写一并删掉（只写不读的持久化会招人加回去）；
+ *   ③ 切到书架时把选中清空（`selected` 挂在 ReaderPage 上，切走不卸载）。
+ *
+ * ★ 为什么是源码级：判据的形状是「effect 里有没有那个调用」，真跑要 DOM + 宿主槽位；
+ *   而缺陷的因果恰好全在静态结构里。每条判据都配**反向对照**（塞回旧代码必须变红），
  *   并显式断言锚点找得到 —— 锚点失效时宁可报错，也不要静默全绿。
  */
 import assert from 'node:assert/strict';
@@ -25,10 +27,41 @@ import { stripComments } from '../scripts/strip-comments.mjs';
 const clientDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'client');
 const reader = stripComments(readFileSync(join(clientDir, 'ReaderPage.jsx'), 'utf8'));
 
-/**
- * 取包含 marker 的那个 `useEffect(() => { … }, [deps])`。
- * 返回 null 表示锚点没对上 —— 那时判据必须报错。
- */
+/** 切掉单个 effect 的正文（从 `useEffect(() => {` 到它的 `}, [deps]`）。 */
+function effectsOf(code) {
+  const out = [];
+  let at = code.indexOf('useEffect(() => {');
+  while (at >= 0) {
+    const end = code.indexOf('}, [', at);
+    if (end < 0) break;
+    out.push(code.slice(at, end));
+    at = code.indexOf('useEffect(() => {', end);
+  }
+  return out;
+}
+
+/** ① 没有任何 effect 会自己打开文章。 */
+function noAutoOpenInEffects(code) {
+  const effects = effectsOf(code);
+  if (effects.length === 0) return false; // 一个 effect 都扫不到 ⇒ 锚点坏了，不许当通过
+  return effects.every((body) => !/openArticle\s*\(/.test(body));
+}
+
+/** ② 「回到上次那篇」的读写都不在了。 */
+function noViewRestore(code) {
+  return !/npr\.view\./.test(code);
+}
+
+/** ③ 切到书架时清空选中：守卫、清空、作废在途请求，三条缺一不可。 */
+function dropsSelectionOnLibrary(effect) {
+  if (typeof effect !== 'string') return false;
+  const guarded = /if\s*\(\s*mode\s*!==\s*'library'\s*\)\s*return/.test(effect);
+  const cleared = /setSelected\(\s*undefined\s*\)/.test(effect);
+  const cancels = /articleRequest\.current\s*\+=\s*1/.test(effect);
+  return guarded && cleared && cancels;
+}
+
+/** 取包含 marker 的那个 effect。null 表示锚点没对上。 */
 function effectAt(code, marker) {
   const at = code.indexOf(marker);
   if (at < 0) return null;
@@ -39,61 +72,57 @@ function effectAt(code, marker) {
   return code.slice(start, end);
 }
 
-/** 「初始模式是书架时不许恢复上次阅读」。 */
-function guardsRestoreOnLibrary(effect) {
-  return typeof effect === 'string' && /if\s*\(\s*mode\s*===\s*'library'\s*\)\s*return/.test(effect);
-}
-
-/** 「切到书架时把选中清空」。三条缺一不可：守卫、清空、作废在途请求。 */
-function dropsSelectionOnLibrary(effect) {
-  if (typeof effect !== 'string') return false;
-  const guarded = /if\s*\(\s*mode\s*!==\s*'library'\s*\)\s*return/.test(effect);
-  const cleared = /setSelected\(\s*undefined\s*\)/.test(effect);
-  const cancels = /articleRequest\.current\s*\+=\s*1/.test(effect);
-  return guarded && cleared && cancels;
-}
-
-// ★ 锚点用 `getItem('npr.view.'`（读回）而不是 `npr.view.`：后者先命中上面那条**写**缓存的
-//   effect，切片就会切到别人的 effect 里去 —— 判据在那上面照样全绿，守的却不是这里。
-const restoreEffect = effectAt(reader, "getItem('npr.view.'");
 const dropEffect = effectAt(reader, 'setSelected(undefined)');
 
-describe('切到书架再切回来，订阅页保持初始态', () => {
-  it('锚点存在：两处 effect 都还找得到', () => {
-    assert.notEqual(restoreEffect, null, '没找到「恢复上次阅读」那条 effect —— 锚点失效');
+/** 把用户第二次报的那条恢复原样塞回去 —— 反向对照的素材。 */
+function withOldRestore(code) {
+  return code.replace(
+    /const refresh = async \(target\) => \{/,
+    "useEffect(() => { try { const saved = JSON.parse(localStorage.getItem('npr.view.' + channel) || 'null'); if (saved?.key) void openArticle(saved.key, saved.active); } catch {} }, []);\n  const refresh = async (target) => {",
+  );
+}
+
+describe('打开阅读器/切回来，都必须是初始态', () => {
+  it('锚点存在：能扫到 effect，也找得到「清空选中」那一条', () => {
+    assert.ok(effectsOf(reader).length >= 5, '扫不到 effect —— 锚点失效，判据会静默全绿');
     assert.notEqual(dropEffect, null, '没找到「清空选中」那条 effect —— 锚点失效');
   });
 
-  it('① 面板以书架模式打开时不恢复上次那篇（否则会在后台自动翻译）', () => {
-    assert.equal(guardsRestoreOnLibrary(restoreEffect), true,
-      '「恢复上次阅读」没有 mode 守卫 —— 书架模式下它仍会 openArticle 并自动生成译文');
+  it('① 没有任何 effect 自己打开文章（自动打开 = 自动翻译）', () => {
+    assert.equal(noAutoOpenInEffects(reader), true,
+      '有 effect 在调用 openArticle —— 打开面板就会落在某篇文章上，英文还会自动生成译文');
   });
 
-  it('② 切到书架时清空选中，并作废还在路上的正文请求', () => {
+  it('② 「回到上次那篇」的读写都删干净了', () => {
+    assert.equal(noViewRestore(reader), true,
+      '源码里还有 npr.view.* —— 那条恢复只要在，迟早会有人接回去');
+  });
+
+  it('③ 切到书架时清空选中，并作废还在路上的正文请求', () => {
     assert.equal(dropsSelectionOnLibrary(dropEffect), true,
       '切到书架时没有把 selected 清空（或缺守卫 / 缺在途请求作废）—— 切回来会落在上一篇上');
   });
 
-  it('★ 反向对照：去掉恢复处的 mode 守卫，判据必须变红', () => {
-    const before = restoreEffect.replace(/if\s*\(\s*mode\s*===\s*'library'\s*\)\s*return\s*;?/, '');
-    assert.notEqual(before, restoreEffect, '替换没生效，反向对照是假绿');
-    assert.equal(guardsRestoreOnLibrary(before), false);
+  it('★ 反向对照：把旧的恢复塞回去，① 和 ② 必须同时变红', () => {
+    const before = withOldRestore(reader);
+    assert.notEqual(before, reader, '替换没生效，反向对照是假绿');
+    assert.equal(noAutoOpenInEffects(before), false, '塞回了 openArticle 却仍判绿 —— 判据没牙');
+    assert.equal(noViewRestore(before), false, '塞回了 npr.view.* 却仍判绿 —— 判据没牙');
   });
 
-  it('★ 反向对照：去掉 setSelected(undefined)，判据必须变红', () => {
+  it('★ 反向对照：去掉 setSelected(undefined)，③ 必须变红', () => {
     const before = dropEffect.replace(/setSelected\(\s*undefined\s*\)/, '');
     assert.notEqual(before, dropEffect, '替换没生效，反向对照是假绿');
     assert.equal(dropsSelectionOnLibrary(before), false);
   });
 
-  it('★ 反向对照：只留清空、丢掉在途请求作废，也必须判红', () => {
+  it('★ 反向对照：只留清空、丢掉在途请求作废，③ 也必须变红', () => {
     const before = dropEffect.replace(/articleRequest\.current\s*\+=\s*1/, '');
     assert.equal(dropsSelectionOnLibrary(before), false,
       '在途请求不作废时，它回来会把刚清掉的 selected 又填上');
   });
 
   it('守它的理由还在：没有选中时右侧确实是那张欢迎页', () => {
-    // 若这条文案没了，说明「初始态」被换成了别的形状，上面的判据要重新评估。
     assert.match(reader, /订阅你关注的作者/, '欢迎页文案不见了 —— 请重新评估这几条判据');
   });
 });
