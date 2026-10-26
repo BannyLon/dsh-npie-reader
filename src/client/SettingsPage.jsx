@@ -9,6 +9,7 @@ import { AddFeedDialog } from './dialogs.jsx';
 import { probeText } from './service-probe.js';
 import { fetchBooks, reloadLibrary } from './library-api.js';
 import { BookSources } from './BookSources.jsx';
+import { CacheSettings } from './CacheSettings.jsx';
 import { aiModelOptions, describeModelCatalog } from '../ai-model.js';
 import { pageOwnedPatch } from './settings-patch.js';
 
@@ -326,6 +327,9 @@ export function SettingsPage({ api, onClose, notify, onSubscriptionsChanged, ini
               onReload={applyLibraryPath}
               onIndexChanged={readLibrary}
               notify={notify} />
+            {/* 「存储」放在三步**之后**：它是维护动作，不是配书流程的一步。
+                放前面会让「配源 → 生成 → 载入」这三步被一个与流程无关的卡片打断。 */}
+            <CacheSettings notify={notify} />
           </section>}
           {settings && tab === 'sources' && <section aria-label="订阅设置">
             <div className="npr-settings-intro"><h2>订阅管理</h2><p>添加订阅地址、整理分组，或迁移现有 OPML 清单。</p></div>

@@ -344,6 +344,15 @@ describe('沉浸态胶囊滑出：两个阅读器都走了 is-peek', () => {
     for (const file of ['BookReader.jsx', 'BookEbook.jsx']) {
       const src = stripComments(readFileSync(join(pluginRoot, 'src/client', file), 'utf8'));
       assert.match(src, /' has-side'/, `${file} 没加 has-side —— 胶囊会压在面板右缘`);
+      // ★ 0.26.0：**每一个占左侧那一栏的面板**都要进这个条件。判据抄的是
+      //   「什么时候加 has-side」而不是「有没有这个词」—— 漏掉搜索面板时，
+      //   开目录好、开搜索坏，症状比两边都坏更难看出来。
+      const cond = /immersive && \(([^)]*)\) \? ' has-side'/.exec(src);
+      assert.ok(cond !== null, `${file} 的 has-side 条件换了写法，请同步这条判据`);
+      for (const flag of ['digestOpen', 'marksOpen', 'findOpen']) {
+        if (flag === 'digestOpen' && file === 'BookEbook.jsx') continue; // 电子书的解读挂在目录面板里
+        assert.ok(cond[1].includes(flag), `${file} 的 has-side 漏了 ${flag} —— 开那个面板时胶囊会压上去`);
+      }
     }
 
     const raw = readFileSync(join(pluginRoot, 'src/client/refinements.css'), 'utf8');

@@ -1,5 +1,5 @@
 /**
- * `book_*` 五个工具的**真跑**：真的注册上、真的读到落盘的解读、真的把包写出去。
+ * `book_*` 六个工具的**真跑**：真的注册上、真的读到落盘的解读、真的把包写出去。
  *
  * ★ 为什么必须真跑而不是断言源码里出现了 `book_chapter`：
  *   这五个工具是「逐章解读」对 agent 存在的唯一方式。它们坏掉的样子是
@@ -84,9 +84,9 @@ const GOOD_SYNTHESIS = JSON.stringify({
 });
 
 describe('book_* 工具：注册', () => {
-  it('★★ 五个工具都真的注册到了宿主上', async () => {
+  it('★★ 六个工具都真的注册到了宿主上', async () => {
     const { tools } = await bootBook();
-    for (const name of ['book_list', 'book_outline', 'book_chapter', 'book_search', 'book_export_skill']) {
+    for (const name of ['book_list', 'book_outline', 'book_chapter', 'book_search', 'book_export_skill', 'book_annotations']) {
       assert.ok(tools.has(name), `${name} 没有注册 —— 模型永远不会知道它存在`);
     }
     // 反向对照：名字拼错的情况必须能被这条断言抓到。
@@ -95,7 +95,7 @@ describe('book_* 工具：注册', () => {
 
   it('每个工具的 parameters 都是合法 JSON Schema（type: object）', async () => {
     const { tools } = await bootBook();
-    for (const name of ['book_list', 'book_outline', 'book_chapter', 'book_search', 'book_export_skill']) {
+    for (const name of ['book_list', 'book_outline', 'book_chapter', 'book_search', 'book_export_skill', 'book_annotations']) {
       const schema = tools.get(name).parameters;
       assert.equal(schema.type, 'object', `${name} 的 parameters 缺 type: object`);
       assert.equal(typeof schema.properties, 'object');
@@ -364,6 +364,146 @@ describe('book_export_skill：写出一个真的能被别人用的目录', () =>
     await assert.rejects(
       () => runTool(tools, 'book_export_skill', { bookId: BOOK_ID, model: 'not-a-model' }),
       /provider\/model/,
+    );
+  });
+});
+
+/**
+ * `book_list` 的书名从哪儿来 —— **真跑工具**，看渲染出来的那行文本。
+ *
+ * ★ 2026-10-25 审查发现：`listBookDigests` 读的是 `libraryPayload()`，而那个方法
+ *   返回 `{ sources, lists, loadedListIds, external, output, legacy }` —— **没有 `books`**。
+ *   于是 `Array.isArray(payload?.books)` 恒 false、书名恒等于 `meta.bookTitle`
+ *   （抽取那一刻的快照），与那段代码自己的注释**正好相反**。
+ *   整条链上没有任何一处会报错（`?.` + `??` + 空 `catch`），所以只能靠这条用例钉住。
+ *
+ * ★ 这里把 `loadLibrary` 换成受控返回值：要验的是「消费方读的是不是书架的 books」，
+ *   而不是「书架解析得对不对」（那由 `library-e2e-http` / `library.test` 覆盖）。
+ */
+describe('book_list 的书名：从书架取，不从 meta 快照取', () => {
+  it('书架上改过书名 ⇒ 显示新名，不显示 meta 里的旧名', async () => {
+    const { tools, service } = await bootBook();
+    service.loadLibrary = async () => ({ books: [{ id: BOOK_ID, title: '书架上改过的新名' }] });
+    const text = await runTool(tools, 'book_list');
+    assert.match(text, /《书架上改过的新名》/, `书名没走书架：${text}`);
+    assert.equal(text.includes('某本技术书'), false, '还在用 meta 里的旧书名');
+  });
+
+  it('书已移出书架 ⇒ 退回 meta 快照（兜底必须还在）', async () => {
+    const { tools, service } = await bootBook();
+    service.loadLibrary = async () => ({ books: [] });
+    const text = await runTool(tools, 'book_list');
+    assert.match(text, /《某本技术书》/, `兜底失效：${text}`);
+  });
+
+  it('★ 反向对照：数据源没有 books（`libraryPayload()` 的形状）⇒ 只能显示旧名', async () => {
+    const { tools, service } = await bootBook();
+    // 这就是修之前那份数据源的真实形状：有 sources / lists，就是没有 books。
+    service.loadLibrary = async () => ({ sources: [], lists: [], loadedListIds: [], external: null, output: {}, legacy: null });
+    const text = await runTool(tools, 'book_list');
+    assert.match(text, /《某本技术书》/, '反向对照失效：这个形状竟然能拿到书架书名');
+    assert.equal(text.includes('书架上改过的新名'), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// book_annotations（0.27.0）
+// ---------------------------------------------------------------------------
+
+/**
+ * 划线是**用户亲手做的判断**，解读是模型写的摘要。两件事在上下文里的分量不同，
+ * 所以这个工具的输出必须让模型分得清「他标记的」与「书里说的」——
+ * 混成一句的后果是模型把用户的观点当成书里的原文引用出来。
+ */
+describe('book_annotations：把用户亲手标的重点交给模型', () => {
+  const ann = (over = {}) => ({ page: 2, start: 0, end: 5, quote: '一致性', note: '', tone: 'yellow', ...over });
+
+  async function seed(service, bookId, list) {
+    for (const one of list) await service.annotationStore.add(bookId, one);
+  }
+
+  it('读出划线 + 笔记，按页分组，并说明这是用户自己划的', async () => {
+    const { tools, service } = await bootBook();
+    await seed(service, BOOK_ID, [
+      ann({ note: '这块要重读' }),
+      ann({ page: 5, start: 3, end: 9, quote: '复制策略', tone: 'blue' }),
+    ]);
+    const text = await runTool(tools, 'book_annotations', { bookId: BOOK_ID });
+    assert.match(text, /## 第 2 页/, text);
+    assert.match(text, /## 第 5 页/, text);
+    assert.ok(text.includes('> 一致性'), text);
+    assert.ok(text.includes('我的笔记：这块要重读'), text);
+    assert.ok(text.includes('> 复制策略'), text);
+    // 模型必须被明确告知这是**用户的判断**，否则它会当成书里的原文去引用。
+    assert.match(text, /user/i);
+    assert.match(text, /highlight/i);
+  });
+
+  it('★ 没有划线 ⇒ 明说没有，并明确禁止编造', async () => {
+    const { tools } = await bootBook();
+    const text = await runTool(tools, 'book_annotations', { bookId: BOOK_ID });
+    assert.match(text, /has not highlighted/i, text);
+    assert.match(text, /Do not invent/i, text);
+    assert.equal(text.includes('## 第'), false, '空态里出现了页码分组');
+  });
+
+  it('notesOnly 在「只有划线、没有笔记」时说清下一步，不是一句「没有」了事', async () => {
+    const { tools, service } = await bootBook();
+    await seed(service, BOOK_ID, [ann()]);
+    const text = await runTool(tools, 'book_annotations', { bookId: BOOK_ID, notesOnly: true });
+    assert.match(text, /written note/i, text);
+    assert.match(text, /without notesOnly/i, text);
+  });
+
+  it('notesOnly 只返回带笔记的那几条', async () => {
+    const { tools, service } = await bootBook();
+    await seed(service, BOOK_ID, [
+      ann({ note: '有笔记这条' }),
+      ann({ start: 20, end: 26, quote: '没有笔记这条' }),
+    ]);
+    const text = await runTool(tools, 'book_annotations', { bookId: BOOK_ID, notesOnly: true });
+    assert.ok(text.includes('有笔记这条'), text);
+    assert.equal(text.includes('没有笔记这条'), false, '把没有笔记的也带上了');
+  });
+
+  it('不带 bookId ⇒ 跨书汇总，每本各带书名/书 id', async () => {
+    const { tools, service } = await bootBook();
+    await seed(service, BOOK_ID, [ann()]);
+    await seed(service, 'l-other', [ann({ page: 9, quote: '另一本书里的一句' })]);
+    const text = await runTool(tools, 'book_annotations');
+    assert.ok(text.includes('《l-tools》') || text.includes(BOOK_ID), text);
+    assert.ok(text.includes('l-other'), text);
+    assert.ok(text.includes('另一本书里的一句'), text);
+  });
+
+  it('★ 截断时写明「共多少条 + 怎么取剩下的」，不静默砍掉', async () => {
+    const { tools, service } = await bootBook();
+    await seed(service, BOOK_ID, [
+      ann({ start: 0, end: 4, quote: '第一条' }),
+      ann({ start: 10, end: 14, quote: '第二条' }),
+      ann({ start: 20, end: 24, quote: '第三条' }),
+    ]);
+    const text = await runTool(tools, 'book_annotations', { bookId: BOOK_ID, limit: 1 });
+    assert.ok(text.includes('第一条'), text);
+    assert.equal(text.includes('第三条'), false);
+    assert.match(text, /只带回了前 1 条/, text);
+    assert.match(text, /共 3 条/, text);
+  });
+
+  it('★ 反向对照：这是只读工具，参数里没有任何写入口', async () => {
+    const { tools } = await bootBook();
+    const properties = tools.get('book_annotations').parameters.properties;
+    assert.deepEqual(Object.keys(properties).sort(), ['bookId', 'limit', 'notesOnly']);
+    for (const forbidden of ['note', 'quote', 'tone', 'action', 'text']) {
+      assert.equal(properties[forbidden], undefined, `出现了写入口：${forbidden}`);
+    }
+  });
+
+  it('非法 bookId 类型 ⇒ 抛错（不是静默当成「全部」）', async () => {
+    const { tools } = await bootBook();
+    await assert.rejects(
+      () => runTool(tools, 'book_annotations', { bookId: 123 }),
+      /bookId/,
     );
   });
 });

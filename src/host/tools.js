@@ -4,6 +4,7 @@
  * Chinese version, manage subscriptions, and refresh.
  */
 import { createRequire } from 'node:module';
+import { annotationsMarkdown } from '../annotation-format.js';
 
 /**
  * 回退路径必须产出标准 object JSON Schema：部分运行环境解析不到
@@ -82,6 +83,7 @@ export const TOOL_NAMES = {
   bookOutline: 'book_outline',
   bookChapter: 'book_chapter',
   bookSearch: 'book_search',
+  bookAnnotations: 'book_annotations',
   bookExportSkill: 'book_export_skill',
 };
 
@@ -442,7 +444,7 @@ export function createToolDefinitions(service) {
           `Books with digests (${books.length}):`,
           ...lines,
           '',
-          'Use book_outline to see the chapter tree, book_chapter to read one chapter (digest by default), book_search to find which chapters cover a topic.',
+          'Use book_outline to see the chapter tree, book_chapter to read one chapter (digest by default), book_search to find which chapters cover a topic, and book_annotations to read the passages the user personally highlighted (that one also works for books with no digests at all).',
         ].join('\n');
       },
     }),
@@ -535,6 +537,58 @@ export function createToolDefinitions(service) {
           '',
           '这些是**解读**里的命中，不是原文。要原话用 book_chapter 取那一章（默认给解读，raw=true 给原文）。',
         ].join('\n');
+      },
+    }),
+    defineTool({
+      name: TOOL_NAMES.bookAnnotations,
+      description: 'Read the passages the USER personally highlighted in a book, together with the notes they wrote. These are the strongest available signal of what this reader cares about: a highlight is their own judgement made while reading, while a digest is text a model wrote about the book. Use this when asked what the user marked as important, what they noted, or to ground an answer in passages they already found worth keeping. Read-only — there is no way to add, edit or delete highlights through this tool.',
+      parameters: {
+        bookId: { type: 'string', description: 'Book id from book_list. Omit to read highlights across every book that has any.' },
+        notesOnly: { type: 'boolean', description: 'true = only highlights that carry a written note. Default false.' },
+        limit: { type: 'number', description: 'Max highlights across all returned books (default 200, cap 500).' },
+      },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => text(value),
+      },
+      execute: async (args) => {
+        const found = await service.listBookAnnotations({
+          bookId: args.bookId,
+          notesOnly: args.notesOnly === true,
+          limit: args.limit,
+        });
+        if (found.books.length === 0) {
+          // ★ 空态必须说清「是没划过」还是「划了但没写笔记」：合成一句的话，
+          //   模型会照着「这本书没划线」去回答，而用户其实划了十几条。
+          if (args.notesOnly === true) {
+            return 'None of the reader\'s highlights carries a written note. Call book_annotations again without notesOnly to get the highlights themselves.';
+          }
+          const scope = args.bookId === undefined ? 'any book' : `book ${args.bookId}`;
+          return `The user has not highlighted anything in ${scope} yet. Do not invent or infer highlights — if the question needs marked passages, say there are none and answer from book_chapter instead.`;
+        }
+
+        const totalNotes = found.books.reduce((sum, book) => sum + book.notes, 0);
+        const lines = [
+          `The user highlighted ${found.totalItems} passages${totalNotes > 0 ? ` (${totalNotes} of them carry a written note)` : ''} across ${found.books.length} book${found.books.length === 1 ? '' : 's'}.`,
+          '',
+        ];
+        for (const book of found.books) {
+          lines.push(annotationsMarkdown({
+            title: book.title,
+            bookId: book.bookId,
+            items: book.items,
+            // ★ 把已知总数交进去：预算截断发生在 service 里，这里手里的数组
+            //   已经变短了，不传 total 就会把「截断」写成「全书就这么多」。
+            total: book.total,
+          }).markdown);
+          lines.push('---', '');
+        }
+        if (found.truncated) {
+          lines.push(`> ⚠ 只带回了前 ${found.shown} 条（共 ${found.totalItems} 条）。要看完剩下的，用 bookId 逐本调一次。`);
+          lines.push('');
+        }
+        lines.push('These are the user\'s own highlights (original wording), not digests. Quote them as what the user marked, and do not claim a page you were not given.');
+        return lines.join('\n');
       },
     }),
     defineTool({

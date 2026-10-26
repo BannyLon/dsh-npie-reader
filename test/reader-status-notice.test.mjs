@@ -543,3 +543,97 @@ describe('★ 反向对照：可见性策略的装置真的能抓到「条件反
     assert.equal(v.fetchFullText, false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 2026-10-25：「这次只翻了一部分」必须说出来
+// ---------------------------------------------------------------------------
+
+/**
+ * ★ 背景（审查发现）
+ * ----------------
+ * 保结构翻译逐段编号回填，模型漏掉的段落**保留英文原文**（这是对的安全底线）。
+ * 宿主其实算出了覆盖率（`coverage`）并一路传到客户端 —— 然后**没有任何地方显示**。
+ * 于是正文中英混排时，用户只会得出「翻译质量真差」，不会知道「只翻了 60%，再点一次就全了」。
+ *
+ * ★ 这一组全部**真渲染**，与上面的进度条同一套装置。
+ */
+async function loadPartialNotice(options) {
+  const mod = await loadFromReader(['PartialTranslationNotice', 'partialTranslationHint'], options);
+  assert.equal(typeof mod.PartialTranslationNotice, 'function', 'PartialTranslationNotice 没导出 —— 装置失效');
+  assert.equal(typeof mod.partialTranslationHint, 'function', 'partialTranslationHint 没导出 —— 装置失效');
+  return mod;
+}
+
+describe('★ 译文只翻了一部分：真渲染', () => {
+  it('只翻了 6/10 ⇒ 渲染一条 role=status，文案带百分比与段数', async () => {
+    const { PartialTranslationNotice } = await loadPartialNotice();
+    const tree = PartialTranslationNotice({ active: 'translation', coverage: { total: 10, done: 6, ratio: 0.6 } });
+    assert.ok(tree, '只翻了一半却什么都没渲染 —— 用户只会以为「翻译质量差」');
+    assert.equal(tree.props.role, 'status', '没有 role=status —— 读屏器不会播报');
+    const text = noticeText(tree);
+    assert.match(text, /60%/, `文案里没有百分比：${text}`);
+    assert.match(text, /6\/10/, '文案里没有「翻了几段 / 共几段」');
+    assert.match(text, /重新生成译文/, '没有告诉用户该怎么办 —— 只说「没翻全」等于把问题丢回给他');
+  });
+
+  it('类名是 npr-translation-partial（否则没有任何样式，只是一行裸字）', async () => {
+    const { PartialTranslationNotice } = await loadPartialNotice();
+    const tree = PartialTranslationNotice({ active: 'translation', coverage: { total: 10, done: 3 } });
+    assert.match(String(tree.props.className ?? ''), /npr-translation-partial/);
+    // ★ 不许复用进度条那个类名：`.npr-translating svg` 上挂着转圈动画，
+    //   用在「已经完成但没做全」的状态上，会让它看起来还在进行。
+    assert.doesNotMatch(String(tree.props.className ?? ''), /npr-translating/);
+  });
+
+  it('★ 全覆盖 ⇒ 不渲染（正文本身就是证据，再挂一条是噪音）', async () => {
+    const { PartialTranslationNotice } = await loadPartialNotice();
+    assert.equal(PartialTranslationNotice({ active: 'translation', coverage: { total: 10, done: 10 } }), null);
+  });
+
+  it('★ 原文 / 改写视图 ⇒ 不渲染（在别的版本里提译文的事纯属干扰）', async () => {
+    const { PartialTranslationNotice } = await loadPartialNotice();
+    const partial = { total: 10, done: 4 };
+    assert.equal(PartialTranslationNotice({ active: 'original', coverage: partial }), null);
+    assert.equal(PartialTranslationNotice({ active: 'rewrite', coverage: partial }), null);
+    assert.equal(PartialTranslationNotice({ coverage: partial }), null, 'active 缺失时也渲染了');
+  });
+
+  it('★ 存量译文没有 coverage ⇒ 不渲染（没有数据就闭嘴，不许拿 0 去吓人）', async () => {
+    const { PartialTranslationNotice } = await loadPartialNotice();
+    assert.equal(PartialTranslationNotice({ active: 'translation' }), null);
+    assert.equal(PartialTranslationNotice({ active: 'translation', coverage: undefined }), null);
+    assert.equal(PartialTranslationNotice({ active: 'translation', coverage: {} }), null);
+    assert.equal(PartialTranslationNotice({ active: 'translation', coverage: { total: 0, done: 0 } }), null);
+  });
+
+  it('★ 一段都没翻成功时，文案要说清「正文仍是原文」并给出动作（不是干巴巴的 0%）', async () => {
+    const { PartialTranslationNotice } = await loadPartialNotice();
+    const text = noticeText(PartialTranslationNotice({ active: 'translation', coverage: { total: 8, done: 0 } }));
+    assert.match(text, /一段都没翻成功/);
+    assert.match(text, /仍是原文/);
+    assert.match(text, /重新生成译文/);
+    assert.doesNotMatch(text, /0%/, '说「0%」而不解释，用户会以为是翻译质量差');
+  });
+});
+
+describe('★ 反向对照：覆盖率装置真的能抓到「全覆盖也报警」', () => {
+  it('把 `done >= total` 改成 `done > total` ⇒ 全覆盖时也会渲染，断言必须能分辨', async () => {
+    const { PartialTranslationNotice } = await loadPartialNotice({
+      plugins: [mutateReaderPage('if (done >= total) return \'\';', 'if (done > total) return \'\';')],
+    });
+    const tree = PartialTranslationNotice({ active: 'translation', coverage: { total: 10, done: 10 } });
+    assert.ok(tree, '条件改坏之后仍然不渲染 —— 那条「全覆盖不渲染」的断言是假绿');
+    assert.match(noticeText(tree), /100%/, '坏实现的文案里应该是 100%');
+  });
+});
+
+describe('接线：PartialTranslationNotice 真的挂上了（★ 存在性断言，不是可达性证明）', () => {
+  it('挂载点接的是 `versions?.translation?.coverage`，不是 `active` 那一版', () => {
+    const source = readFileSync(READER_PAGE, 'utf8');
+    assert.match(
+      source,
+      /<PartialTranslationNotice\s+active=\{active\}\s+coverage=\{versions\?\.translation\?\.coverage\}\s*\/>/,
+      'ReaderPage 里没挂 PartialTranslationNotice（或 coverage 接错了）—— 组件写得再对也不会出现',
+    );
+  });
+});

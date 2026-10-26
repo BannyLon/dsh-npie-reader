@@ -95,6 +95,36 @@ export const READING_DEFAULTS = {
   bookBrightness: 1,
 };
 
+/**
+ * 「阅读外观」面板里**真正渲染出来**的字段。
+ *
+ * ★ 存在的理由（2026-10-25 实测的数据丢失）：那个面板的「恢复默认」原来提交的是
+ *   `{ ...READING_DEFAULTS }` —— 整份默认值。而宿主 `saveSettings` 是
+ *   `Object.assign(settings, validateSettings(patch))`，**整份覆盖**。
+ *   于是用户在「⋯ → 阅读设置」里点一下「恢复默认」，本意只想把字号主题复原，
+ *   实际连带清空了 `bookSources`（书源）、`libraryListIds`（载入哪几份书单）、
+ *   `libraryPath`（外部书单路径）、`aiModel` / `digestModel`（翻译与解读模型）。
+ *   复现脚本实测：点一次之后 `bookSources: []`、`libraryPath: ''` —— 书架当场变空，
+ *   而界面只会显示「保存成功」。
+ *
+ * ★ 为什么按「面板渲染了什么」来划线，而不是按「哪些字段危险」：后者是一份会过期的
+ *   黑名单（`settings-patch.js` 的文件头解释过同一件事）。这里的判据是**用户在这一屏
+ *   能看见的东西** —— 看不见的字段，这个按钮就没有资格去动。
+ */
+export const APPEARANCE_KEYS = Object.freeze([
+  'readingFont', 'customFont', 'fontSize', 'lineHeight', 'textWidth',
+  'readingTheme', 'defaultVersion', 'showImages',
+]);
+
+/**
+ * 「恢复默认」该提交的 patch：只含 {@link APPEARANCE_KEYS}。
+ *
+ * @returns 只含外观字段的默认值对象 —— 与 `READING_DEFAULTS` 同源，不另抄一份取值。
+ */
+export function appearanceDefaults() {
+  return Object.fromEntries(APPEARANCE_KEYS.map((key) => [key, READING_DEFAULTS[key]]));
+}
+
 /** Theme id -> [background, foreground]; `auto` follows the host theme. */
 export const THEMES = {
   auto: null, light: ['#ffffff', '#202124'], paper: ['#f5efdf', '#40382e'], sage: ['#e8eee3', '#29382c'],

@@ -98,7 +98,7 @@ const REMOTE_METHODS = [
 //   否则新工具会静默上线而没人注意。0.20.0 加了五个 `book_*`（读电子书），
 //   0.20.1 才发现这里还停在 9 个 —— 说明当时的全量测试没有真跑完。
 const TOOL_NAMES = [
-  'book_chapter', 'book_export_skill', 'book_list', 'book_outline', 'book_search',
+  'book_annotations', 'book_chapter', 'book_export_skill', 'book_list', 'book_outline', 'book_search',
   'rss_add_subscription', 'rss_digest', 'rss_generate_version', 'rss_list_articles', 'rss_list_channels',
   'rss_read_article', 'rss_refresh', 'rss_remove_subscription', 'rss_search_articles',
 ];
@@ -1865,6 +1865,12 @@ describe('电子书伴读上下文 setBookContext', () => {
       [{ ...good, page: -1 }, /page 必须是非负整数/],
       [{ ...good, page: 1.5 }, /page 必须是非负整数/],
       [{ ...good, pages: '225' }, /pages 必须是非负整数/],
+      [{ ...good, pages: -1 }, /pages 必须是非负整数/],
+      [{ ...good, pages: 1.5 }, /pages 必须是非负整数/],
+      // ★ 上界必须真的落在 `pages` 上：原来第三个判据写成了 `page > 1_000_000`
+      //   （上一行刚校验过 `page`，这里等于什么也没查），于是 `pages` 无上界 ——
+      //   这个值会直接进「第 3/999999999 页」这句提示词里。
+      [{ ...good, pages: 1_000_001 }, /pages 必须是非负整数/],
       [{ ...good, text: null }, /页文本必须是字符串/],
       // ★ 引文类型不对时必须抛错：兜成空串会让模型以为用户**没划选**，
       //   于是去概括整页 —— 而用户看到的只是「按钮点过了，答非所问」。
@@ -1881,6 +1887,8 @@ describe('电子书伴读上下文 setBookContext', () => {
     }
     // 反向对照：0 页与超长正文都合法（0 页 = 刚打开；正文长度由 reading-scope 截断）。
     assert.equal((await service.setBookContext({ ...good, page: 0 })).ok, true);
+    // 反向对照：上界本身（1_000_000）必须放行 —— 否则守卫就成了「多删一个合法值」。
+    assert.equal((await service.setBookContext({ ...good, pages: 1_000_000 })).ok, true);
     assert.equal((await service.setBookContext({ ...good, text: '字'.repeat(50_000) })).hasText, true);
     assert.equal(Object.keys(service.store.data.companionContexts).length, 1);
   });

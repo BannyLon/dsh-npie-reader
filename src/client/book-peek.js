@@ -46,9 +46,10 @@ export function peekOnLeave(distance) {
  * 面板的类名。指针落在它们里面时**不滑出**（见下面的 `insidePanel`）。
  *
  * `npr-book-digest` = 目录 / 解读（同一套外壳，两个入口），`npr-marks` = 划线，
- * `npr-companion` = 伴读。三个都不在 `npr-book-chrome` 里，是 `npr-book-main` 的子元素。
+ * `npr-find` = 书内搜索（0.26.0），`npr-companion` = 伴读。四个都不在
+ * `npr-book-chrome` 里，是 `npr-book-main` 的子元素。
  */
-export const PEEK_PANEL_CLASSES = ['npr-book-digest', 'npr-marks', 'npr-companion'];
+export const PEEK_PANEL_CLASSES = ['npr-book-digest', 'npr-marks', 'npr-find', 'npr-companion'];
 
 /**
  * 指针是不是落在**某个面板**上。

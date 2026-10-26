@@ -126,6 +126,11 @@ describe('insidePanel：指针在不在面板上', () => {
   it('自定义面板类名可替换（PDF / 电子书以后加面板不必改判据）', () => {
     assert.equal(insidePanel(node('my-panel'), ['my-panel']), true);
     assert.equal(insidePanel(node('npr-marks'), ['my-panel']), false);
-    assert.deepEqual([...PEEK_PANEL_CLASSES].sort(), ['npr-book-digest', 'npr-companion', 'npr-marks']);
+    // 0.26.0 加了书内搜索面板 `npr-find`：它同样在 `npr-book-main` 里，
+    // 漏掉它的话沉浸态下胶囊会滑出来盖住搜索框（与目录那次同一个故障）。
+    assert.deepEqual(
+      [...PEEK_PANEL_CLASSES].sort(),
+      ['npr-book-digest', 'npr-companion', 'npr-find', 'npr-marks'],
+    );
   });
 });

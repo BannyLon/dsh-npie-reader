@@ -13,7 +13,8 @@
  *   书页上的高亮层必须 `pointer-events: none`，否则它会挡住拖选 ——
  *   而拖选恰恰是「划下一条」的入口。
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { annotationsMarkdown } from '../annotation-format.js';
 import { ANNOTATION_TONES, NOTE_LIMIT, TONE_ORDER, summariseAnnotations } from './annotations.js';
 import { Icon } from './icons.jsx';
 
@@ -22,7 +23,16 @@ const TABS = [
   { id: 'note', label: '笔记' },
 ];
 
-export function AnnotationPanel({ items, focusId = '', onJump, onUpdate, onRemove, onClose }) {
+/** 导出稿头部那一行的时间。**本地时间**：这是给人看的，不是给机器解析的。 */
+function stampNow() {
+  const now = new Date();
+  const pad = value => String(value).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+}
+
+export function AnnotationPanel({
+  items, focusId = '', title = '', bookId = '', onJump, onUpdate, onRemove, onClose,
+}) {
   const [tab, setTab] = useState('all');
   /** 正在编辑的那一条（`''` = 没在编辑）。 */
   const [editingId, setEditingId] = useState('');
@@ -44,6 +54,42 @@ export function AnnotationPanel({ items, focusId = '', onJump, onUpdate, onRemov
   const visible = useMemo(() => (tab === 'note'
     ? items.filter(item => item.note.trim() !== '')
     : items), [items, tab]);
+
+  /**
+   * 导出的三种状态：`idle` → `done` / `failed` → 1.8 秒后回 `idle`。
+   *
+   * ★ **结果写在按钮上，不额外加一行提示**：这个面板在 306px 栏里，
+   *   顶部每多一行就把下面那叠卡片往下推 —— 0.20.1 已经在导出块上踩过一次
+   *   「多一行把按钮顶出面板」。按钮文字从「导出」变「已复制」不会被忽略，
+   *   因为它正是刚被点的那一处。
+   * ★ 失败**也要说**：Electron 在窗口失焦或权限被撤时会拒写剪贴板。
+   *   静默失败时用户会去别处粘贴，粘出来是上一次的内容 —— 那比报错更糟。
+   */
+  const [copyState, setCopyState] = useState('idle');
+  const copyTimer = useRef(null);
+  useEffect(() => () => {
+    if (copyTimer.current !== null) clearTimeout(copyTimer.current);
+  }, []);
+
+  /**
+   * 导出**全部**划线，不按当前页签筛。
+   *
+   * ★ 为什么不是「导出当前页签」：导出这个动作的语义是「把这本书的笔记带走」。
+   *   人在「笔记」页签上点它，期待的也是整本；只带走 12 条带笔记的，
+   *   下次打开导出稿会以为另外那些被弄丢了 —— 而文件里没有任何痕迹说明为什么。
+   */
+  const exportMarks = useCallback(async () => {
+    if (items.length === 0) return;
+    const out = annotationsMarkdown({ title, bookId, items, stamp: stampNow() });
+    try {
+      await navigator.clipboard.writeText(out.markdown);
+      setCopyState('done');
+    } catch {
+      setCopyState('failed');
+    }
+    if (copyTimer.current !== null) clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopyState('idle'), 1800);
+  }, [items, title, bookId]);
 
   // 打开编辑时把焦点放进输入框：用户点「写笔记」之后下一步一定是打字。
   useEffect(() => {
@@ -101,9 +147,19 @@ export function AnnotationPanel({ items, focusId = '', onJump, onUpdate, onRemov
               : `${stats.total} 条 · ${stats.notes} 条笔记 · 分布在 ${stats.pages} 页`}
           </p>
         </div>
-        <button type="button" className="npr-icon" title="收起划线面板" aria-label="收起划线面板" onClick={onClose}>
-          <Icon name="x" />
-        </button>
+        <div className="npr-marks-head-actions">
+          <button type="button" className="npr-marks-export"
+            disabled={stats.total === 0}
+            title={stats.total === 0
+              ? '还没有划线可导出'
+              : `复制全部 ${stats.total} 条划线为 Markdown（含笔记）`}
+            onClick={() => { void exportMarks(); }}>
+            {copyState === 'done' ? '已复制' : copyState === 'failed' ? '复制失败' : '导出'}
+          </button>
+          <button type="button" className="npr-icon" title="收起划线面板" aria-label="收起划线面板" onClick={onClose}>
+            <Icon name="x" />
+          </button>
+        </div>
       </header>
 
       <div className="npr-marks-tabs" role="tablist" aria-label="划线分类">

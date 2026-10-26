@@ -19,6 +19,7 @@
  *   `splitByHeadings` 会把「一个文件装一整卷」的书按小标题再切开。切之前的文件粒度
  *   与切之后的页号之间由那个模块内部兜底，这里只认它返回的结果。
  */
+import { FIND_LIMIT_MAX, findOccurrences, normalizeNeedle, snippetOf } from '../../book-find.js';
 import { parseEpub } from './epub.js';
 import { parseMobi } from './mobi.js';
 import { parseTxt } from './plain.js';
@@ -111,6 +112,61 @@ export function pagesOf(ebook) {
     page: index + 1,
     lines: Array.isArray(section.lines) ? section.lines : [],
   }));
+}
+
+/**
+ * 全书正文检索（书内搜索）。
+ *
+ * ★ 为什么在宿主做：正文本来就只在这里（EPUB 要解 ZIP、MOBI 要解 LZ77、TXT 要嗅探
+ *   编码），而且解析结果已经落盘缓存。浏览器侧要搜就得把一百多节全取过去 ——
+ *   一次检索变成一百次往返，还会让「读的是哪一份正文」出现两份可能。
+ * ★ 判据来自 `src/book-find.js`（与 `book_search` 同一套），这里只负责**遍历**：
+ *   一节 → 一块 → 逐处命中。空块不参与（渲染端也跳过它们，偏移不会被它们带偏）。
+ * ★ 返回的 `start / end` 是**块内偏移**（不是全书偏移）：高亮要落在那一块的文字上，
+ *   而块是渲染端唯一稳定的定位单位（`data-block`）。
+ * ★ 到上限就停下并置 `truncated`：截断必须说出口，否则「共 300 处」会被读成
+ *   「全书只有 300 处」。
+ */
+export function findInEbook(ebook, query, { limit = FIND_LIMIT_MAX } = {}) {
+  const needle = normalizeNeedle(query);
+  if (needle === '') throw coded('EBOOK_FIND_EMPTY', 'query 不能为空');
+  const cap = Math.max(1, Math.min(Number(limit) || FIND_LIMIT_MAX, FIND_LIMIT_MAX));
+  const sections = Array.isArray(ebook?.sections) ? ebook.sections : [];
+  const hits = [];
+  let blocks = 0;
+  let chars = 0;
+  let truncated = false;
+  for (let index = 0; index < sections.length && !truncated; index += 1) {
+    const section = sections[index];
+    const list = Array.isArray(section?.blocks) ? section.blocks : [];
+    for (let block = 0; block < list.length; block += 1) {
+      const text = String(list[block]?.x ?? '');
+      if (text === '') continue;
+      blocks += 1;
+      chars += text.length;
+      for (const hit of findOccurrences(text, needle, { limit: cap - hits.length })) {
+        hits.push({
+          n: index + 1,
+          sectionTitle: String(section?.title ?? ''),
+          block,
+          start: hit.start,
+          end: hit.end,
+          snippet: snippetOf(text, hit.start, hit.end),
+        });
+        if (hits.length >= cap) { truncated = true; break; }
+      }
+      if (truncated) break;
+    }
+  }
+  return {
+    query: String(query ?? ''),
+    total: hits.length,
+    truncated,
+    sections: sections.length,
+    blocks,
+    chars,
+    hits,
+  };
 }
 
 /**

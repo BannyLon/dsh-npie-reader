@@ -35,6 +35,7 @@ import { SettingsPage } from './SettingsPage.jsx';
 import { ViewSwitch } from './ViewSwitch.jsx';
 import { fetchBooks, fetchStates, reloadLibrary, saveBookState } from './library-api.js';
 import { createPageProgress } from './page-progress.js';
+import { SHELF_BATCH, shelfNextCount, shelfRenderCount } from './shelf-window.js';
 
 /** 侧栏的两个分页，顺序即界面顺序：先看自己挑的书，再回书架挑。 */
 const TABS = [['reading', '阅读'], ['shelf', '书架']];
@@ -297,6 +298,16 @@ export function LibraryApp({ reading, onExit, notify, api, SessionProvider, rend
    *   并通过同一个回调把这里也同步回 `false` —— 所以不需要额外清理。
    */
   const [immersive, setImmersive] = useState(false);
+  /**
+   * 书架一次挂多少行（2026-10-25）。
+   *
+   * ★ 真机 2634 本时原来是**一次全画**：两万多个 DOM 节点，首屏要等它们全部建好。
+   *   现在先挂 `SHELF_BATCH` 行，滚到附近再追加。判据在 `shelf-window.js` 里（可真跑）。
+   * ★ 为什么不做「只画可视区」的虚拟滚动：书架行的标题是两行截断、元信息会换行，
+   *   **行高不固定**；用固定行高去算位置，误差会累积成「滚到底看到空白 / 位置自己跳」。
+   *   分批挂载零高度假设，代价只是滚到底时 DOM 会涨到全量 —— 而那时用户确实在看它们。
+   */
+  const [shelfShown, setShelfShown] = useState(SHELF_BATCH);
   const [listWidth, setListWidth] = useState(() => {
     const saved = Number(globalThis.localStorage?.getItem('npr.libListWidth'));
     return Number.isFinite(saved) && saved >= 220 && saved <= 520 ? saved : 320;
@@ -529,6 +540,36 @@ export function LibraryApp({ reading, onExit, notify, api, SessionProvider, rend
       dir,
     });
   }, [books, readingList, shown, onReadingTab, states]);
+
+  /**
+   * 书架列表**分批挂载**（2026-10-25）。
+   *
+   * ★ 筛选条件一变就回到第一批：不回到第一批的话，用户滚到第 2000 行再改搜索词，
+   *   新结果集会被一次性全画出来 —— 也就是说「分批」在最该生效的时刻失效了，
+   *   而且看不出异常（列表本身是对的，只是卡）。
+   *   用 `filters`（`useMemo` 出来的那个对象）当依赖：它的身份只在
+   *   `query / stateFilter / shelfFilter / sort / scope` 真的变化时才变。
+   */
+  useEffect(() => { setShelfShown(SHELF_BATCH); }, [filters]);
+
+  const shelfCount = shelfRenderCount({ total: visible.length, shown: shelfShown });
+  const growShelf = useCallback(() => {
+    setShelfShown((previous) => shelfNextCount({ total: visible.length, shown: previous }));
+  }, [visible.length]);
+
+  /**
+   * ★ 这里**故意没有**「滚到底自动追加」的观察器（2026-10-25 真机反馈后删掉的）。
+   *
+   * 第一版接了一个 `IntersectionObserver`：滚到接近底部就自动 +120，同时把按钮
+   * 当「观察器不可用时的兜底」。真机表现是「滚到底**从来**没出现过『显示更多
+   * （还有 N 本）』，只要往下滚就一直有书」。这不是分批没生效 —— 恰恰是它**生效得
+   * 太彻底**：每滚近一次就自动补一批，按钮刚被推进视口，就立刻被新挂的行推到下面去，
+   * 用户一次也看不见它。于是「分批」在界面上**完全不可见**：既看不出有分批、也不知道
+   * 还剩多少，还没法停下 —— DOM 一路涨到全量，正好把分批省下的东西又还回去了。
+   *
+   * ⇒ 现在只有**一个**入口：列表底部的「显示更多（还有 N 本）」按钮。
+   *   看得见、按得动、按一次加一批、加到顶按钮自己消失。
+   */
 
   /**
    * 「来源 ▸ 分类」下拉的选项（结构见 `bookScopes`：按来源分组、组内按分类）。
@@ -776,7 +817,7 @@ export function LibraryApp({ reading, onExit, notify, api, SessionProvider, rend
               不是 `stateOf(...)` 那个每次都是新对象的状态 —— 后者会让 `memo` 的
               浅比较永远不等（P1-5）。四个回调必须来自 `useCallback`（引用恒定），
               理由同上。`onReadingPage` 决定「读完」那一行能不能点开（见 `bookRowView`）。 */}
-          {visible.map((book) => {
+          {visible.slice(0, shelfCount).map((book) => {
             const state = stateOf(states, book.id);
             /**
              * 来源徽章的三件属性**必须都是原始值**（字符串）。
@@ -798,6 +839,13 @@ export function LibraryApp({ reading, onExit, notify, api, SessionProvider, rend
                 onOpen={openBook} onToggle={toggleAdded} onDrop={dropBook} onRestart={restartBook} />
             );
           })}
+          {/* ★ 这个按钮是「第 121 本之后」**唯一**的入口，不是便利也不是兜底：
+              自动加载已经删掉了（理由见上面那段注释），少了它就真的看不到后面的书。 */}
+          {shelfCount < visible.length && (
+            <button type="button" className="npr-more" onClick={growShelf}>
+              显示更多（还有 {visible.length - shelfCount} 本）
+            </button>
+          )}
         </div>
       </aside>
       <div className="npr-resize" role="separator" aria-orientation="vertical" onPointerDown={startDrag}

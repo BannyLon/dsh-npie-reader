@@ -47,7 +47,7 @@ function createUserMessage(input) {
 }
 import { articleContext, articleImages } from './article-context.js';
 import { htmlToText, restoreLinks, sanitizeHtml } from './sanitize.js';
-import { applyTranslations, buildTranslatePrompt, collectSegments, parseTranslateReply, translationCoverage } from './structure-translate.js';
+import { applyTranslations, buildTranslatePrompt, collectSegments, mergeTranslations, parseTranslateReply, planTranslationChunks, translationCoverage } from './structure-translate.js';
 import { parseAiModel, resolveAiModelInfo } from '../ai-model.js';
 
 const TRANSLATE_PROMPT = `你是一位专业的中文科技翻译。把用户提供的文章完整翻译成简体中文:
@@ -676,16 +676,79 @@ export async function generateStructuredTranslation(ctx, article, options = {}) 
   if (segments.length === 0) {
     throw new Error('dsh-npie-reader: 这篇文章没有可翻译的正文（可能只剩标题或图片）');
   }
-  // 选项整体透传，理由同 `generateTranslation`（重试相关的开关都在里面）。
-  const raw = await complete(ctx, STRUCTURE_TRANSLATE_PROMPT, buildTranslatePrompt(segments), options);
-  const translations = parseTranslateReply(raw);
+
+  /*
+   * ★★ 分批，而不是整篇一次性发出去（2026-10-25）。
+   *
+   *   改之前这条路径**一个字符都不砍**：正文入库上限是 200,000 字符，于是
+   *   一篇 17.5 万字符的长文会生成 175,278 字符的清单（≈7.3 万 token）——
+   *   实测就是这个数。后果有三层，而且一层比一层难发现：
+   *     ① 超过模型单次上下文 ⇒ 直接报错，用户只看到「生成失败」；
+   *     ② 没超限但输出太长 ⇒ 模型**漏条目**，漏掉的保留英文原文 ⇒ 中英混排；
+   *     ③ 按字数计费 ⇒ 同一篇文章的钱是改写路径（恒 32,000 字符）的五倍。
+   *
+   *   分批之后每批都在一万 token 上下，上面三条一起消失；代价是调用次数变多，
+   *   但每批的失败可以**单独重试**，不再「一条断掉整篇重来」。
+   */
+  const chunks = planTranslationChunks(segments, options.chunking ?? {});
+  const translations = new Map();
+  let lastError = null;
+
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index];
+    /*
+     * ★ 调用方取消了就**一条都不再发**：`complete()` 里虽然也会被 `signal` 掐断，
+     *   但那时 `ctx.llm.stream()` 已经被调用过一次 —— 对「取消之后一个字都不再发」
+     *   这条纪律来说，那已经是一次多余的请求（而且它会真的发出去再被掐）。
+     */
+    if (options.signal?.aborted) throw new Error('dsh-npie-reader: generation aborted');
+    const allowed = new Set(chunk.segments.map((segment) => segment.id));
+    let raw;
+    try {
+      // 选项整体透传，理由同 `generateTranslation`（重试相关的开关都在里面）。
+      raw = await complete(
+        ctx,
+        STRUCTURE_TRANSLATE_PROMPT,
+        buildTranslatePrompt(chunk.segments, { context: chunk.context }),
+        options,
+      );
+    } catch (error) {
+      lastError = error;
+      /*
+       * ★ 第一批就失败 ⇒ **立刻抛**，不要硬着头皮把剩下十几批跑完。
+       *   第一批失败几乎一定是「模型名写错 / 没配 key / 余额不足」这类**全局性**原因，
+       *   继续跑只是把同一条错误重复 N 次（每次都真的发出请求、真的计费）。
+       */
+      if (translations.size === 0) throw error;
+      options.onChunk?.({ index, total: chunks.length, error, added: 0 });
+      continue;
+    }
+    const parsed = parseTranslateReply(raw);
+    // ★ 只收**属于本批**的编号：上文段落被模型擅自翻译时，它会复用上一批的编号，
+    //   不设这道过滤就会把「已经翻对的」那一条覆盖掉（详见 mergeTranslations）。
+    const added = mergeTranslations(translations, parsed, allowed);
+    options.onChunk?.({ index, total: chunks.length, error: null, added });
+  }
+
+  const coverage = translationCoverage(segments, translations);
+  /*
+   * ★ 一条都没翻出来就**抛错**，不许返回一份「全是英文的译文」当成功。
+   *   那种产物在界面上和「翻译完成」长得一模一样，用户只会以为模型不行；
+   *   抛错至少能让界面说「这次没成功，再试一次」。
+   */
+  if (coverage.done === 0) {
+    throw lastError ?? new Error('dsh-npie-reader: 模型一条都没翻出来');
+  }
+
   const translated = applyTranslations(html, segments, translations);
   return {
     title: titleFromHtml(translated, article.title),
     html: translated,
     markdown: htmlToText(translated),
     // 覆盖率如实带出去：模型只回了一半时，界面该说「部分翻译」而不是「已生成」。
-    coverage: translationCoverage(segments, translations),
+    coverage,
+    // 分几批翻的 —— 出问题时（「怎么这么慢 / 怎么这么贵」）这是第一个要看数。
+    chunks: chunks.length,
     source: 'local',
     generatedAt: new Date().toISOString(),
   };

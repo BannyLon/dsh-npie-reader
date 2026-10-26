@@ -176,6 +176,12 @@ const PANEL_CSS = `
 .npr-translating button:hover{background:var(--npr-bg);color:var(--npr-fg)}
 @keyframes npr-spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion: reduce){.npr-translating svg{animation:none}}
+/* 「这次只翻了一部分」。与上面那条进度条**分开**：那条是「正在进行」，
+   这条是「已经完成了，但没做全」—— 混用同一种样式会让「进行中」和
+   「做了一半」看起来一样。没有动画：它不是一个正在进行的状态。
+   文字用 --npr-fg 而不是品牌色：品牌色在浅色底上当正文对比度不够（本项目记过这条）。 */
+.npr-translation-partial{display:flex;align-items:flex-start;gap:8px;margin-top:14px;padding:9px 12px;border:.5px solid color-mix(in srgb, var(--npr-accent) 45%, var(--npr-border));border-radius:9px;background:color-mix(in srgb, var(--npr-accent) 8%, var(--npr-bg));color:var(--npr-fg);font-size:12px;line-height:1.6}
+.npr-translation-partial svg{flex:none;margin-top:2px;color:var(--npr-accent-strong)}
 .npr-welcome{width:min(100%,440px);margin:clamp(48px,14vh,160px) auto 48px;padding:0 28px;text-align:left}
 .npr-welcome-brand{font-size:10px;font-weight:600;letter-spacing:.2em;color:var(--npr-faint);margin-bottom:28px}
 .npr-welcome h2{font-family:var(--npr-font-family);font-size:clamp(25px,3vw,34px);font-weight:400;letter-spacing:.02em;line-height:1.5;margin:0 0 12px;color:var(--npr-fg)}
@@ -343,6 +349,66 @@ export function RegeneratingNotice({ kind, hasBody = false }) {
     <div className="npr-translating" role="status">
       <Icon name="refresh-cw" size={14} />
       <span>正在重新生成{VERSION_LABELS[kind]}…生成期间显示的是当前版本，完成后会自动切过去（通常要几分钟）</span>
+    </div>
+  );
+}
+
+/**
+ * 「这次只翻了一部分」的文案（2026-10-25）。
+ *
+ * ★ 为什么必须有它
+ * ----------------
+ * 保结构翻译是**逐段编号回填**的：模型漏掉的那几段，`applyTranslations` 会
+ * **保留英文原文**（这是对的安全底线 —— 宁可没翻，也不能把译文塞错位置）。
+ * 于是用户看到的是一篇**中英混排**的文章。
+ *
+ * 而宿主其实**算出来了**「这次翻了多少段」（`coverage`），一路传到客户端 ——
+ * 然后没有任何地方显示它（2026-10-25 审查发现：`src/client` 里 `coverage` 零命中）。
+ * 结果是：用户看到中英混排，只会得出「这翻译质量真差」，
+ * **不会知道「其实只翻了 60%，再点一次可能就全了」**。
+ *
+ * ★ 判据
+ * ------
+ * - 只在**正在看译文**时说（在原文 / 改写视图里提这件事纯属干扰）；
+ * - `coverage` 缺失（2026-10-14 之前的存量译文没有这个字段）⇒ 不说 ——
+ *   没有数据就闭嘴，不要拿 0 去吓人；
+ * - 全覆盖 ⇒ 不说（说「全部翻完了」是噪音，正文本身就是证据）。
+ *
+ * @param {{active?: string, coverage?: {total?: number, done?: number}}} [props]
+ * @returns {string} 空串 = 不显示
+ */
+export function partialTranslationHint({ active, coverage } = {}) {
+  if (active !== 'translation') return '';
+  const total = Number(coverage?.total);
+  const done = Number(coverage?.done);
+  if (!Number.isFinite(total) || total <= 0) return '';
+  if (!Number.isFinite(done) || done < 0) return '';
+  if (done >= total) return '';
+  const percent = Math.round((done / total) * 100);
+  const missing = total - done;
+  if (done === 0) {
+    return `这次一段都没翻成功（共 ${total} 段），正文仍是原文 —— 点「重新生成译文」再试一次。`;
+  }
+  return `这次只翻了 ${percent}%（${done}/${total} 段）。模型漏掉的 ${missing} 段保留了原文 —— 点「重新生成译文」再试一次通常就补上了。`;
+}
+
+/**
+ * 上面那条文案的渲染壳。
+ *
+ * ★ 抽成组件而不是写进 JSX 的条件里：条件写进 JSX 之后，「什么情况下不该出现」
+ *   就只能靠读源码字符串下结论 —— 而字符串断言答不了「这段代码跑不跑得到」。
+ *   抽出来之后它和 `RegeneratingNotice` 一样可以被**真渲染**（见
+ *   `test/reader-status-notice.test.mjs`）。
+ *
+ * @param {{active?: string, coverage?: object}} props
+ */
+export function PartialTranslationNotice({ active, coverage } = {}) {
+  const hint = partialTranslationHint({ active, coverage });
+  if (hint === '') return null;
+  return (
+    <div className="npr-translation-partial" role="status">
+      <Icon name="info" size={14} />
+      <span>{hint}</span>
     </div>
   );
 }
@@ -1301,6 +1367,10 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                 {/* 手动「重新生成」的进度条。正文还在（显示的是旧版本），所以
                     npr-missing 那条不会渲染 —— 没有这条的话生成期间界面毫无动静。 */}
                 <RegeneratingNotice kind={selected?.generating} hasBody={Boolean(bodyHtml)} />
+                {/* ★ 译文只翻了一部分时必须说出来。模型漏掉的段落会保留英文原文
+                    （安全底线），于是正文是中英混排 —— 不解释一句，用户只会得出
+                    「翻译质量真差」，不会知道「再点一次可能就全了」。 */}
+                <PartialTranslationNotice active={active} coverage={versions?.translation?.coverage} />
                 {bodyHtml
                   ? <div ref={proseRef} className="npr-prose" onMouseUp={captureSelection} onKeyUp={captureSelection} dangerouslySetInnerHTML={{ __html: bodyHtml }} />
                   : (

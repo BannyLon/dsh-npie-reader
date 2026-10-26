@@ -353,6 +353,43 @@ describe('ocr.json：一页一条，空文本不落盘', () => {
     const after = await store.sizeOf('l-ocr_1');
     assert.ok(after > before, `写了正文之后占用应该变大：${before} → ${after}`);
   });
+
+  /**
+   * ★ 并发写：`putOcrPage` 是「读整份 → 改一页 → 整份写回」。
+   *
+   * 这条判据是**确定性**的，不靠运气：`Promise.all` 里 5 个调用会在同一个 tick 里
+   * 各自 `await ensureDir` → 各自 `await readJson`，**五个都读到空文件**，然后各写
+   * 各的那一页 ⇒ 文件里只剩最后写的那一页。修之前**必现**，不是偶发。
+   *
+   * 用户侧的触发方式很普通：连点两页「识别这一页」；或者整本 OCR 在跑、用户又手动
+   * 点了一页。丢掉的那页不会有任何报错 —— 客户端命中缓存就直接用，翻回去是空白。
+   */
+  it('★ 并发识别 5 页：一页都不许丢（读-改-写必须串行）', async () => {
+    const bookId = 'l-ocr_race';
+    const pages = [1, 2, 3, 4, 5];
+    await Promise.all(pages.map((page) => store.putOcrPage(bookId, page, { text: `第${page}页`, ms: 600 })));
+
+    const all = await store.readOcr(bookId);
+    assert.deepEqual(Object.keys(all).map(Number).sort((a, b) => a - b), pages,
+      `并发写入丢了页：只剩 ${JSON.stringify(Object.keys(all))}`);
+    for (const page of pages) assert.equal(await store.readOcrPage(bookId, page), `第${page}页`);
+  });
+
+  it('★ 反向对照：绕过队列的「读-改-写」必须丢页（证明上面那条有牙）', async () => {
+    // 手写一份修之前的实现：直接读、改、写，不排队。
+    const bookId = 'l-ocr_race_mutant';
+    const { writeFile } = await import('node:fs/promises');
+    const writeDirect = async (page) => {
+      await store.ensureDir(bookId);
+      const all = await store.readOcr(bookId);
+      all[page] = { text: `第${page}页`, at: Date.now(), ms: 600 };
+      await writeFile(store.ocrFileOf(bookId), JSON.stringify(all), 'utf8');
+    };
+    await Promise.all([1, 2, 3, 4, 5].map(writeDirect));
+    const all = await store.readOcr(bookId);
+    assert.equal(Object.keys(all).length, 1,
+      `反向对照失效：不排队竟然没丢页（${JSON.stringify(Object.keys(all))}）`);
+  });
 });
 
 /**

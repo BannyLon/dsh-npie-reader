@@ -1,4 +1,4 @@
-import { FONTS, TEXT_WIDTHS, THEMES, READING_DEFAULTS } from '../reading-settings.js';
+import { FONTS, TEXT_WIDTHS, THEMES, appearanceDefaults } from '../reading-settings.js';
 import { Icon } from './icons.jsx';
 
 const THEME_OPTIONS = [
@@ -65,7 +65,11 @@ export function ReadingControls({ settings, onChange, variant = 'compact' }) {
             : <input type="checkbox" aria-label="文章图片" checked={settings.showImages !== false} onChange={(event) => set({ showImages: event.target.checked })} />}
         </div>
       </div>
-      <button type="button" className="npr-reading-reset" onClick={() => set({ ...READING_DEFAULTS })}>恢复默认</button>
+      {/* ★ 「恢复默认」只提交**这一屏看得见的字段**（`appearanceDefaults()`）。
+          原先是 `set({ ...READING_DEFAULTS })` —— 那是整份默认值，而宿主是整份覆盖，
+          于是点一下「恢复默认」会顺手清空书源、外部书单路径、翻译/解读模型。
+          详见 `src/reading-settings.js` 里 `APPEARANCE_KEYS` 的注释。 */}
+      <button type="button" className="npr-reading-reset" onClick={() => set(appearanceDefaults())}>恢复默认</button>
     </>
   );
 }

@@ -47,6 +47,25 @@ export async function fetchBooks() {
   return await jsonRequest('/books');
 }
 
+/**
+ * 缓存占用（设置页「存储」卡）。
+ *
+ * ★ 返回的是**三类分开**的体积（解读缓存 / 网盘块缓存 / 备份文件）+ 上限，
+ *   不是一个总数：用户要知道该清哪个。
+ */
+export async function fetchCacheUsage() {
+  return await jsonRequest('/cache');
+}
+
+/**
+ * 清理可重算的缓存（备份文件 + 抽出的正文 / OCR）。
+ *
+ * ★ 已生成的解读**不会**被删 —— 那是花模型调用换来的。所以这个按钮可以放心点。
+ */
+export async function cleanCache() {
+  return await jsonRequest('/cache/clean', { method: 'POST' });
+}
+
 /** 全部阅读进度。 */
 export async function fetchStates() {
   const body = await jsonRequest('/state');
@@ -167,6 +186,23 @@ export async function fetchEbookIndex(bookId, { timeoutMs = 120_000 } = {}) {
  */
 export async function fetchEbookSection(bookId, n, { timeoutMs = 30_000 } = {}) {
   return await jsonRequest(`/book/${encodeURIComponent(bookId)}/ebook/section/${Number(n)}`, {}, { timeoutMs });
+}
+
+/**
+ * 书内搜索：在**全书正文**里找一处词，回 `{ query, total, truncated, sections, blocks,
+ * chars, hits: [{ n, sectionTitle, block, start, end, snippet }] }`。
+ *
+ * ★ `start / end` 是**块内偏移**（不是节内偏移）：高亮落在那一块文字上，而块
+ *   （`data-block`）是渲染端唯一稳定的定位单位。
+ * ★ 判据（trim + 小写 + 子串，不分词）在宿主侧的 `src/book-find.js` 里，与
+ *   `book_search` 工具共用 —— 见那个文件顶部为什么必须共用。
+ * ★ 输入即搜，所以超时按「一次本机 HTTP + 一次可能的解析缓存命中」给：首次打开
+ *   一本要解压的书时，解析本身可能几十秒（与 `fetchEbookIndex` 同因），之后的检索
+ *   是毫秒级。共用同一个上限比让用户看到两次不同的超时文案更清楚。
+ */
+export async function fetchEbookFind(bookId, query, { timeoutMs = 120_000 } = {}) {
+  const q = encodeURIComponent(String(query ?? ''));
+  return await jsonRequest(`/book/${encodeURIComponent(bookId)}/ebook/find?q=${q}`, {}, { timeoutMs });
 }
 
 /**

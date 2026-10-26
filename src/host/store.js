@@ -8,6 +8,7 @@ import { constants } from 'node:fs';
 import { access, chmod, copyFile, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { guardFs } from './disk-errors.js';
 
 /** `$DSH_HOME` 环境变量名，与宿主 dsh-home-paths 一致。 */
 const DSH_HOME_ENV = 'DSH_HOME';
@@ -296,12 +297,16 @@ export class RssStore {
     }
     this.saving = this.saving.catch(() => {}).then(async () => {
       try {
-        await mkdir(dirname(this.path), { recursive: true });
-        const temp = `${this.path}.${process.pid}.tmp`;
-        await writeFile(temp, JSON.stringify(this.data), { encoding: 'utf8', mode: 0o600 });
-        await rename(temp, this.path);
+        // ★ 磁盘满 / 没权限时抛的是 `ENOSPC: no space left on device, write`。
+        //   过一遍 `guardFs` 之后，日志和（经路由层转发到界面的）文案都是人话。
+        await guardFs(async () => {
+          await mkdir(dirname(this.path), { recursive: true });
+          const temp = `${this.path}.${process.pid}.tmp`;
+          await writeFile(temp, JSON.stringify(this.data), { encoding: 'utf8', mode: 0o600 });
+          await rename(temp, this.path);
+        }, '阅读进度和设置');
       } catch (error) {
-        this.logger?.warn?.('dsh-npie-reader: failed to save data: %s', String(error));
+        this.logger?.warn?.('dsh-npie-reader: 保存数据失败：%s', error?.message ?? String(error));
         throw error;
       }
     });

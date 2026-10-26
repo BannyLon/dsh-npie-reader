@@ -26,11 +26,13 @@
  *    拖动区减掉。键盘快捷键走 window 级监听。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FIND_LIMIT_MAX } from '../book-find.js';
 import { formatBytes, isEbookExtension, stateOf } from '../library.js';
 import { AnnotationPanel } from './AnnotationPanel.jsx';
 import { BookCompanion } from './BookCompanion.jsx';
 import { BookDigestPanel } from './BookDigestPanel.jsx';
 import { BookEbookToc } from './BookEbookToc.jsx';
+import { BookFindPanel } from './BookFindPanel.jsx';
 import { DigestCard } from './DigestCard.jsx';
 import {
   annotationsOnPage, coveringAnnotation, normalizeAnnotations,
@@ -38,12 +40,12 @@ import {
 import { quoteBarLeft, quoteBarPlacement, selectionQuote } from './book-text.js';
 import { insidePanel, peekNext, peekOnLeave } from './book-peek.js';
 import {
-  anchorOfSelection, blockSpans, marksForBlock, splitByMarks,
+  anchorOfSelection, blockSpans, marksForBlock, splitByOverlays,
 } from './ebook-marks.js';
 import { outlineEntries, runningHead } from './ebook-outline.js';
 import { Icon } from './icons.jsx';
 import {
-  fetchAnnotations, fetchEbookIndex, fetchEbookSection, postAnnotation,
+  fetchAnnotations, fetchEbookFind, fetchEbookIndex, fetchEbookSection, postAnnotation,
   postDigestEbook, saveBookState,
 } from './library-api.js';
 import { fabStack } from './book-view.js';
@@ -89,7 +91,7 @@ const PREFETCH = 1;
  *   （见 `ebook-marks.js`）。删掉它等于把划线功能整个废掉，而且不会报错 ——
  *   只会表现为「拖选了却划不出线」。
  */
-function renderBlocks(blocks, marksByIndex) {
+function renderBlocks(blocks, marksByIndex, findsByBlock) {
   const out = [];
   /** 正在收集的连续 `li`；遇到非列表块就整组封成一个 `<ul>`。 */
   let items = [];
@@ -100,19 +102,28 @@ function renderBlocks(blocks, marksByIndex) {
     items = [];
   };
   /**
-   * 一段文字 → 带高亮的碎片。
+   * 一段文字 → 带高亮（划线 + 书内搜索命中）的碎片。
    *
-   * ★ 没有划线时**原样返回字符串**：包一层 `<span>` 在视觉上没区别，但会让
+   * ★ 两层都没有时**原样返回字符串**：包一层 `<span>` 在视觉上没区别，但会让
    *   整页多出几百个节点、还会影响 `word-break` 的断行机会。
+   * ★ 两层都有时**并成一次切割**（`splitByOverlays`），不嵌套 `<mark>` ——
+   *   理由写在那边的函数头上：嵌套会让断行与 `line-clamp` 跟着变。
    */
   const fill = (index, text) => {
     const marks = marksByIndex?.get(index);
-    if (!marks || marks.length === 0) return text;
-    return splitByMarks(text, marks).map((slice) => {
+    const finds = findsByBlock?.get(index);
+    const hasMarks = Array.isArray(marks) && marks.length > 0;
+    const hasFinds = Array.isArray(finds) && finds.length > 0;
+    if (!hasMarks && !hasFinds) return text;
+    return splitByOverlays(text, hasMarks ? marks : [], hasFinds ? finds : []).map((slice) => {
       const piece = text.slice(slice.from, slice.to);
-      if (slice.tone === null) return <span key={`t${slice.from}`}>{piece}</span>;
+      if (slice.tone === null && slice.find !== true) {
+        return <span key={`t${slice.from}`}>{piece}</span>;
+      }
       return (
-        <mark key={`m${slice.from}`} className="npr-ebook-mark" data-tone={slice.tone}>
+        <mark key={`m${slice.from}`} className={`npr-ebook-mark${slice.find === true ? ' npr-ebook-find' : ''}`}
+          data-tone={slice.tone === null ? undefined : slice.tone}
+          data-current={slice.find === true ? (slice.current === true ? 'true' : 'false') : undefined}>
           {piece}
         </mark>
       );
@@ -174,6 +185,18 @@ export function BookEbook({
   const [digestOpen, setDigestOpen] = useState(false);
   const [marksOpen, setMarksOpen] = useState(false);
   const [companion, setCompanion] = useState(false);
+  /**
+   * 书内搜索（0.26.0）：`{ status, error, truncated, scans }` + 命中列表 + 当前第几处。
+   *
+   * ★ `findActive === -1` 是**合法且默认**的状态 —— 「搜到了但还没跳」。此时这一节上
+   *   所有命中都已经高亮（浅色），只是没有哪一处是「当前」（深色）。把它当成
+   *   `0` 会在用户还没按回车时就把页面跳到第一处，打到一半的词都会带着页面乱翻。
+   */
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [findState, setFindState] = useState({ status: 'idle', error: '', truncated: false });
+  const [findHits, setFindHits] = useState([]);
+  const [findActive, setFindActive] = useState(-1);
   const [immersive, setImmersive] = useState(false);
   /** 沉浸态：指针靠近面板顶边时胶囊滑出（见 `book-peek.js` —— 光靠 `:hover` 不行，
       顶部那条热区是窗口拖动条，页面收不到鼠标事件）。 */
@@ -264,6 +287,12 @@ export function BookEbook({
     setSectionError('');
     cache.current.clear();
     reportedRef.current = 0;
+    // 换书 = 上一本的命中一处都不该留在界面上（节号与偏移都指向另一本书）。
+    setFindOpen(false);
+    setFindQuery('');
+    setFindHits([]);
+    setFindActive(-1);
+    setFindState({ status: 'idle', error: '', truncated: false });
     (async () => {
       try {
         const body = await fetchEbookIndex(book.id);
@@ -516,9 +545,9 @@ export function BookEbook({
   }, []);
 
   /**
-   * 收起所有侧栏（目录 / 解读 / 划线）。
+   * 收起所有侧栏（目录 / 解读 / 划线 / 书内搜索）。
    *
-   * ★ 三选一，不是一列并排：正文只有一栏宽度，两个面板一起开会把纸面挤到
+   * ★ 四选一，不是一列并排：正文只有一栏宽度，两个面板一起开会把纸面挤到
    *   三百多像素 —— 那时正文每行不到 12 个字，读不下去。
    */
   const closePanels = useCallback(() => {
@@ -526,10 +555,11 @@ export function BookEbook({
     setDigestOpen(false);
     setMarksOpen(false);
     setMarkFocusId('');
+    setFindOpen(false);
     closeCard();
   }, [closeCard]);
 
-  /** 开 / 关划线面板。与目录、解读、伴读互斥（中间永远只留一栏）。 */
+  /** 开 / 关划线面板。与目录、解读、搜索、伴读互斥（中间永远只留一栏）。 */
   const toggleMarks = useCallback(() => {
     setMarkFocusId('');
     if (marksOpen) {
@@ -538,10 +568,80 @@ export function BookEbook({
     }
     setTocOpen(false);
     setDigestOpen(false);
+    setFindOpen(false);
     closeCard();
     setCompanion(false);
     setMarksOpen(true);
   }, [marksOpen, closeCard]);
+
+  /**
+   * 书内搜索：**输入即搜**，220ms 去抖。
+   *
+   * ★ 为什么在宿主侧搜（而不是把每一节取回来在浏览器里找）：正文本来就只在宿主
+   *   那里解析过一次并落盘缓存，取一百多节回来既慢又会让「读的是哪一份正文」
+   *   出现两份可能。判据在 `src/book-find.js`（与 `book_search` 同一套）。
+   * ★ 去抖 220ms：这个数落在「打字停顿」与「不觉得卡」之间。输入法组字期间
+   *   每敲一下都发一次请求，用户拿到的是一串互相覆盖的结果。
+   * ★ 取消用 `cancelled` 而不是 AbortController：请求本身很短（本机 HTTP），
+   *   被丢弃的那一次结果不会写进界面就够了；真 abort 只会多一条错误分支。
+   * ★ 搜完**不自动跳**（`findActive` 保持 -1）：见上面那段 state 注释 ——
+   *   边打字边翻页是最难受的一种交互。
+   */
+  useEffect(() => {
+    if (!findOpen || status !== 'ready') return undefined;
+    const needle = findQuery.trim();
+    if (needle === '') {
+      setFindHits([]);
+      setFindActive(-1);
+      setFindState({ status: 'idle', error: '', truncated: false });
+      return undefined;
+    }
+    let cancelled = false;
+    setFindState({ status: 'searching', error: '', truncated: false });
+    const timer = setTimeout(async () => {
+      try {
+        const body = await fetchEbookFind(book.id, needle);
+        if (cancelled) return;
+        const list = (Array.isArray(body.hits) ? body.hits : []).map((hit, index) => ({
+          key: `s${hit.n}-b${hit.block}-${hit.start}-${index}`,
+          index,
+          n: Number(hit.n),
+          block: Number(hit.block),
+          start: Number(hit.start),
+          end: Number(hit.end),
+          sectionTitle: String(hit.sectionTitle ?? ''),
+          snippet: String(hit.snippet ?? ''),
+        }));
+        setFindHits(list);
+        setFindActive(-1);
+        setFindState({ status: 'done', error: '', truncated: body.truncated === true });
+      } catch (error) {
+        if (cancelled) return;
+        setFindHits([]);
+        setFindActive(-1);
+        setFindState({ status: 'error', error: error?.message ?? '检索失败', truncated: false });
+      }
+    }, 220);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [findOpen, findQuery, book.id, status]);
+
+  /**
+   * 当前这一节里**每一块**的命中（块内偏移）。
+   *
+   * ★ `current` 由 `findActive` 决定；`findActive === -1` 时全部是 `false` ——
+   *   这时整节命中都已经可见，只是没有「当前」那一个。
+   */
+  const findsByBlock = useMemo(() => {
+    const map = new Map();
+    if (!findOpen) return map;
+    for (const hit of findHits) {
+      if (hit.n !== page) continue;
+      const list = map.get(hit.block) ?? [];
+      list.push({ start: hit.start, end: hit.end, current: hit.index === findActive });
+      map.set(hit.block, list);
+    }
+    return map;
+  }, [findOpen, findHits, page, findActive]);
 
   const go = useCallback((next) => {
     const target = clampSection(next, total);
@@ -551,6 +651,65 @@ export function BookEbook({
       return target;
     });
   }, [total]);
+
+  /** 跳到第 `index` 处命中：换节（如需）+ 把它标成「当前」。 */
+  const jumpToFind = useCallback((index) => {
+    const hit = findHits[index];
+    if (hit === undefined) return;
+    setFindActive(index);
+    if (hit.n !== page) go(hit.n);
+  }, [findHits, page, go]);
+
+  /**
+   * 上一处 / 下一处，**首尾相接**。
+   *
+   * ★ 不夹在两端：用户按到第 47 处之后还想再按一下（期望回到第 1 处），夹住会
+   *   让按键「突然没反应」。反之 `findActive === -1` 时「下一处」正好落到第一处。
+   */
+  const stepFind = useCallback((delta) => {
+    if (findHits.length === 0) return;
+    const base = findActive < 0 ? (delta > 0 ? -1 : 0) : findActive;
+    const next = (base + delta + findHits.length) % findHits.length;
+    jumpToFind(next);
+  }, [findHits, findActive, jumpToFind]);
+
+  /** 点「搜索」：与其它侧栏互斥地打开；再点一次收起。 */
+  const toggleFind = useCallback(() => {
+    if (findOpen) { setFindOpen(false); return; }
+    setTocOpen(false);
+    setDigestOpen(false);
+    setMarksOpen(false);
+    setMarkFocusId('');
+    setCompanion(false);
+    closeCard();
+    setFindOpen(true);
+  }, [findOpen, closeCard]);
+
+  /**
+   * 把「当前这一处」滚到视野中间。
+   *
+   * ★ 用 `getBoundingClientRect` 的差算 `scrollTop`，不用 `scrollIntoView()`：
+   *   后者会把**所有**可滚祖先一起滚（包括宿主的页面容器），读一本电子书顺手
+   *   把整个面板滚走了。
+   * ★ 依赖里带 `section`：换节时正文是异步取回来的，取回来之前 `querySelector`
+   *   找不到任何一个 `data-block` —— 那时滚不了，等它到位再滚。
+   */
+  useEffect(() => {
+    if (!findOpen) return;
+    const active = findHits[findActive];
+    if (active === undefined || active.n !== page) return;
+    if (section === null || section.n !== page) return;
+    const article = articleRef.current;
+    const stage = stageRef.current;
+    if (article === null || stage === null) return;
+    const block = article.querySelector(`[data-block="${active.block}"]`);
+    if (block === null) return;
+    const target = block.querySelector('.npr-ebook-find[data-current="true"]') ?? block;
+    const box = target.getBoundingClientRect();
+    const frame = stage.getBoundingClientRect();
+    const delta = box.top - frame.top - stage.clientHeight / 2 + box.height / 2;
+    stage.scrollTop = Math.max(0, stage.scrollTop + delta);
+  }, [findOpen, findActive, findHits, page, section]);
 
   const toggleImmersive = useCallback(() => {
     setImmersive((value) => {
@@ -626,6 +785,19 @@ export function BookEbook({
   useEffect(() => {
     if (status !== 'ready') return undefined;
     const onKey = (event) => {
+      /**
+       * ⌘F / ⌃F = 书内搜索（0.26.0）。
+       *
+       * ★ 抢在「有修饰键就 return」之前：那一条是为了不让 ⌘← 之类的系统快捷键
+       *   翻页，而 ⌘F 本身就该由阅读器接管 —— 浏览器自带的查找只能找**当前这一节**
+       *   （正文是按节渲染的），拿它当「书内搜索」是一句谎话。
+       */
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey
+        && (event.key === 'f' || event.key === 'F')) {
+        event.preventDefault();
+        toggleFind();
+        return;
+      }
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target;
       if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"]') !== null) return;
@@ -640,7 +812,10 @@ export function BookEbook({
         return;
       }
       if (event.key === 'Escape') {
+        // ★ 输入法组字中的 Esc 是「取消这次组字」，不是「关面板」。
+        if (event.isComposing === true) return;
         if (paletteOpen) { setPaletteOpen(false); return; }
+        if (findOpen) { setFindOpen(false); return; }
         if (tocOpen || digestOpen || marksOpen) { closePanels(); return; }
         if (immersive) { setImmersive(false); return; }
         if (fabOpen) setFabOpen(false);
@@ -651,7 +826,7 @@ export function BookEbook({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [status, page, go, paletteOpen, tocOpen, digestOpen, marksOpen, immersive, fabOpen, closePanels, toggleImmersive, cycleTheme]);
+  }, [status, page, go, paletteOpen, findOpen, tocOpen, digestOpen, marksOpen, immersive, fabOpen, closePanels, toggleFind, toggleImmersive, cycleTheme]);
 
   // ---- 抽取 + 分段（电子书一步到位）--------------------------------------
   /**
@@ -808,7 +983,7 @@ export function BookEbook({
   }
 
   return (
-    <div ref={bookRef} className={`npr-book npr-ebook${immersive ? ' is-immersive' : ''}${immersive && peek ? ' is-peek' : ''}${immersive && (tocOpen || marksOpen || digestOpen) ? ' has-side' : ''}`}
+    <div ref={bookRef} className={`npr-book npr-ebook${immersive ? ' is-immersive' : ''}${immersive && peek ? ' is-peek' : ''}${immersive && (tocOpen || marksOpen || digestOpen || findOpen) ? ' has-side' : ''}`}
       style={rootStyle} data-theme={look.theme}
       onPointerMove={onPeekPointerMove} onPointerLeave={onPeekPointerLeave}>
       <div className="npr-book-toolbar" data-window-drag />
@@ -849,6 +1024,12 @@ export function BookEbook({
             <Icon name="highlighter" size={14} />
             <span>{annotations.length > 0 ? `划线 ${annotations.length}` : '划线'}</span>
           </button>
+          <button type="button" className={`npr-book-pill-item${findOpen ? ' is-on' : ''}`}
+            title="书内搜索（⌘F）：在整本正文里找，回车 / ↓ 上下条跳转" aria-pressed={findOpen}
+            onClick={toggleFind}>
+            <Icon name="search" size={14} />
+            <span>搜索</span>
+          </button>
           <button type="button" className={`npr-book-pill-item${tocOpen ? ' is-on' : ''}`}
             title={total > 0 ? `目录（${total} 页）` : '目录'} aria-pressed={tocOpen}
             onClick={() => {
@@ -856,6 +1037,7 @@ export function BookEbook({
               setDigestOpen(false);
               setMarksOpen(false);
               setMarkFocusId('');
+              setFindOpen(false);
               setCompanion(false);
               closeCard();
               setTocOpen(true);
@@ -924,6 +1106,8 @@ export function BookEbook({
         {marksOpen && (
           <AnnotationPanel
             items={annotations}
+            title={book.title}
+            bookId={book.id}
             focusId={markFocusId}
             onJump={(target) => go(target)}
             onUpdate={(id, patch) => { void updateMark(id, patch); }}
@@ -976,6 +1160,29 @@ export function BookEbook({
           />
         )}
 
+        {findOpen && (
+          <BookFindPanel
+            query={findQuery}
+            onQuery={setFindQuery}
+            status={findState.status}
+            error={findState.error}
+            hits={findHits.map(hit => ({
+              key: hit.key,
+              where: `第 ${hit.n} 页`,
+              sub: hit.sectionTitle,
+              snippet: hit.snippet,
+            }))}
+            activeIndex={findActive}
+            unit="section"
+            notes={findState.truncated
+              ? [`命中到 ${FIND_LIMIT_MAX} 处就停下了 —— 后面还有没有，这次没查完`]
+              : []}
+            onPick={jumpToFind}
+            onStep={stepFind}
+            onClose={() => setFindOpen(false)}
+          />
+        )}
+
         <div className="npr-book-view">
           <div ref={stageRef} className="npr-book-stage npr-ebook-stage">
             {/*
@@ -1025,7 +1232,7 @@ export function BookEbook({
                  ★ `ref={articleRef}`：划词的选区范围、偏移换算都以它为界（见
                  `ebook-marks.js`），也是气泡的定位基准（`position: relative`）。 */
               <article key={page} ref={articleRef} className="npr-ebook-sheet">
-                {renderBlocks(section.blocks, marksByIndex)}
+                {renderBlocks(section.blocks, marksByIndex, findsByBlock)}
                 {/* 划词气泡。★ 放在 `article` 里面而不是外面：正文是可滚动的，
                     放外面就得自己算滚动偏移 —— 滚两屏之后气泡会留在原地。 */}
                 {quote !== null && quotePlacement !== null && (

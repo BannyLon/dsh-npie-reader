@@ -30,6 +30,7 @@
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile, appendFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { isBookId } from '../library.js';
+import { guardFs } from './disk-errors.js';
 
 /** 一本书的解读产物在磁盘上占多少算「过大」—— 只用来在日志里提醒，不做清理。 */
 const WARN_BYTES = 200 * 1024 * 1024;
@@ -62,11 +63,19 @@ export const TASK_STATE = Object.freeze({
   FAILED: 'failed',
 });
 
-/** 原子写：先写 tmp 再 rename。中途崩了不会留下半个 JSON。 */
+/**
+ * 原子写：先写 tmp 再 rename。中途崩了不会留下半个 JSON。
+ *
+ * ★ 失败要过 `guardFs`：磁盘满 / 没权限时，`ENOSPC: no space left on device, write`
+ *   会原样流到界面上（路由层直接转发 `error.message`）。翻成人话之后，用户才知道
+ *   该去清磁盘而不是反复点「重新解读」。
+ */
 async function writeJsonAtomic(path, value) {
   const tmp = `${path}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(value, null, 2), 'utf8');
-  await rename(tmp, path);
+  await guardFs(async () => {
+    await writeFile(tmp, JSON.stringify(value, null, 2), 'utf8');
+    await rename(tmp, path);
+  }, '解读数据');
 }
 
 async function readJson(path) {
@@ -126,7 +135,7 @@ export function createDigestStore({ rootDir, log = () => {} } = {}) {
     if (!Array.isArray(pages) || pages.length === 0) return;
     const dir = await ensureDir(bookId);
     const lines = pages.map(page => JSON.stringify(page)).join('\n');
-    await appendFile(join(dir, 'pages.jsonl'), `${lines}\n`, 'utf8');
+    await guardFs(() => appendFile(join(dir, 'pages.jsonl'), `${lines}\n`, 'utf8'), '抽出的正文');
   }
 
   /**
@@ -143,7 +152,10 @@ export function createDigestStore({ rootDir, log = () => {} } = {}) {
       .filter(page => Number.isInteger(page?.page) && Array.isArray(page?.lines))
       .map(page => JSON.stringify({ page: page.page, lines: page.lines }))
       .join('\n');
-    await writeFile(join(dir, 'pages.jsonl'), lines === '' ? '' : `${lines}\n`, 'utf8');
+    await guardFs(
+      () => writeFile(join(dir, 'pages.jsonl'), lines === '' ? '' : `${lines}\n`, 'utf8'),
+      '抽出的正文',
+    );
   }
 
   /** 读回已抽的全部页（断点续跑 / 抽完之后算章节）。坏行跳过，不让一行毁掉整本。 */
@@ -183,7 +195,7 @@ export function createDigestStore({ rootDir, log = () => {} } = {}) {
         lines.push(pageLines.join('\n'));
       }
       const name = `ch${String(chapter.n).padStart(2, '0')}.txt`;
-      await writeFile(join(dir, 'text', name), lines.join('\n\n'), 'utf8');
+      await guardFs(() => writeFile(join(dir, 'text', name), lines.join('\n\n'), 'utf8'), '抽出的正文');
       written.push({ n: chapter.n, name, chars: lines.join('').length });
     }
     return written;
@@ -358,7 +370,7 @@ export function createDigestStore({ rootDir, log = () => {} } = {}) {
       }
       const target = join(dir, relative);
       await mkdir(dirname(target), { recursive: true });
-      await writeFile(target, content, 'utf8');
+      await guardFs(() => writeFile(target, content, 'utf8'), '导出的技能包');
       bytes += Buffer.byteLength(content, 'utf8');
     }
     return { dir, bytes };
@@ -422,6 +434,27 @@ export function createDigestStore({ rootDir, log = () => {} } = {}) {
     return join(dirOf(bookId), 'ocr.json');
   }
 
+  /**
+   * 每本书一条 OCR 写队列 —— 与 `annotation-store.js` 的 `serialize()` 同一套写法。
+   *
+   * ★ 为什么必须有：`putOcrPage` 是「读整份 → 改一页 → 整份写回」。两个 `POST /ocr`
+   *   并发时（用户连点两页；或者将来整本 OCR 在跑、用户又手动点了一页），
+   *   后写的一方基于**旧快照**整份覆盖 ⇒ 先写那一页的结果凭空消失。
+   *   而客户端 `fetchOcrPage` 命中缓存就直接用 ⇒ 用户翻回那一页看到的是空白，
+   *   只能再识别一次，且**没有任何报错**。
+   *   HTTP 层没有事务，只能在这里排队。划线那一侧早就这么做了（注释里写着同一句话），
+   *   OCR 这条路径当时漏了。
+   *
+   * ★ 队列本身不该把失败传染给下一个操作，也不该让 Map 无限长 —— 与那边一致。
+   */
+  const ocrChains = new Map();
+  function serializeOcr(bookId, task) {
+    const previous = ocrChains.get(bookId) ?? Promise.resolve();
+    const next = previous.then(task, task);
+    ocrChains.set(bookId, next.catch(() => {}));
+    return next;
+  }
+
   async function readOcr(bookId) {
     /**
      * ★ 这里**故意**与 `readMeta` / `readOutline` 不同：那两个是「事实」，坏了必须
@@ -463,26 +496,29 @@ export function createDigestStore({ rootDir, log = () => {} } = {}) {
    *   永久钉死 —— 而它可能只是这一版模型没认出来，换个 DPI 重试就好了。
    *   不写的话，下次点「识别这一页」会真的重试。
    */
-  async function putOcrPage(bookId, page, { text, ms = 0, at = Date.now() }) {
+  async function putOcrPage(bookId, page, { text, ms = 0, at = Date.now() } = {}) {
+    // 参数校验放在队列**外面**：它不碰盘，坏入参该立刻抛，不该排在别的写后面。
     if (!Number.isInteger(page) || page < 1) throw new TypeError('digest-store: page 必须是正整数');
     if (typeof text !== 'string') throw new TypeError('digest-store: OCR 文本必须是字符串');
     if (text.trim() === '') return { written: false, pages: 0 };
-    await ensureDir(bookId);
-    const all = await readOcr(bookId);
-    all[page] = { text, at, ms };
-    const pages = Object.keys(all).map(Number);
-    if (pages.length > OCR_PAGE_LIMIT) {
-      const keep = pages
-        .map((n) => ({ n, at: all[n].at }))
-        .sort((a, b) => b.at - a.at)
-        .slice(0, OCR_PAGE_LIMIT);
-      const next = {};
-      for (const { n } of keep) next[n] = all[n];
-      await writeJsonAtomic(ocrFileOf(bookId), next);
-      return { written: true, pages: OCR_PAGE_LIMIT };
-    }
-    await writeJsonAtomic(ocrFileOf(bookId), all);
-    return { written: true, pages: pages.length };
+    return serializeOcr(bookId, async () => {
+      await ensureDir(bookId);
+      const all = await readOcr(bookId);
+      all[page] = { text, at, ms };
+      const pages = Object.keys(all).map(Number);
+      if (pages.length > OCR_PAGE_LIMIT) {
+        const keep = pages
+          .map((n) => ({ n, at: all[n].at }))
+          .sort((a, b) => b.at - a.at)
+          .slice(0, OCR_PAGE_LIMIT);
+        const next = {};
+        for (const { n } of keep) next[n] = all[n];
+        await writeJsonAtomic(ocrFileOf(bookId), next);
+        return { written: true, pages: OCR_PAGE_LIMIT };
+      }
+      await writeJsonAtomic(ocrFileOf(bookId), all);
+      return { written: true, pages: pages.length };
+    });
   }
 
   return {

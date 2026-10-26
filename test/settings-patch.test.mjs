@@ -18,9 +18,13 @@
  *   所以这里直接用真的 `validateSettings`，不另写一份「像宿主那样」的校验。
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { LIVE_WRITTEN_SETTINGS, pageOwnedPatch } from '../src/client/settings-patch.js';
-import { READING_DEFAULTS, validateSettings } from '../src/reading-settings.js';
+import { APPEARANCE_KEYS, READING_DEFAULTS, appearanceDefaults, validateSettings } from '../src/reading-settings.js';
+import { stripComments } from '../scripts/strip-comments.mjs';
 
 /** 宿主的写盘语义（与 `service.js` 的 `saveSettings` 同形）。 */
 function hostSave(store, patch) {
@@ -99,5 +103,81 @@ describe('pageOwnedPatch：不把别人在写的字段提交回去', () => {
     assert.equal(store.libraryListIds.length, 2, '第三步的勾选被保存设置覆盖了');
     assert.equal(store.fontSize, 22, '本页的改动没有生效');
     assert.equal(store.readingTheme, 'paper');
+  });
+});
+
+/**
+ * 「阅读外观」浮层里的「恢复默认」——**同一个缺陷换了个入口**。
+ *
+ * 2026-10-25 实测：`ReadingAppearance.jsx` 的按钮提交 `{ ...READING_DEFAULTS }`，
+ * 而宿主是整份 `Object.assign` ⇒ 点一下「恢复默认」，书源 / 外部书单路径 /
+ * 翻译与解读模型**一起被清空**。复现脚本的输出：`bookSources: []`、`libraryPath: ''`。
+ *
+ * ★ 判据全部**真跑**（走真的 `validateSettings` + 与宿主同形的 `hostSave`）：
+ *   这条缺陷的形状是「一次写入之后哪些字段变了」，字符串断言答不了。
+ */
+describe('appearanceDefaults：「恢复默认」只动外观', () => {
+  const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+  it('只含这一屏渲染的字段，且与面板里的控件一一对应', () => {
+    // 面板（`ReadingControls`）渲染的正是这 8 个；多一个少一个都说明集合漂移了。
+    assert.deepEqual(
+      [...APPEARANCE_KEYS].sort(),
+      ['customFont', 'defaultVersion', 'fontSize', 'lineHeight', 'readingFont', 'readingTheme', 'showImages', 'textWidth'],
+    );
+    const patch = appearanceDefaults();
+    assert.deepEqual(Object.keys(patch).sort(), [...APPEARANCE_KEYS].sort());
+    // 取值与 `READING_DEFAULTS` 同源（不另抄一份默认值）。
+    for (const key of APPEARANCE_KEYS) assert.equal(patch[key], READING_DEFAULTS[key], `${key} 的默认值漂了`);
+  });
+
+  it('不含任何「别人在写」或「不属于外观」的字段', () => {
+    const patch = appearanceDefaults();
+    for (const key of LIVE_WRITTEN_SETTINGS) assert.equal(Object.hasOwn(patch, key), false, `${key} 不该进恢复默认`);
+    for (const key of ['libraryPath', 'aiModel', 'digestModel', 'bookshelf', 'bookTint', 'bookBrightness']) {
+      assert.equal(Object.hasOwn(patch, key), false, `${key} 不属于阅读外观`);
+    }
+  });
+
+  it('★ 真跑：点一次「恢复默认」之后，书源 / 书单路径 / 模型都还在', () => {
+    const store = snapshotWithTwoSources();
+    Object.assign(store, {
+      libraryPath: '/Users/habhy/my-books.json',
+      aiModel: 'deepseek/deepseek-chat',
+      digestModel: 'deepseek/deepseek-chat',
+      fontSize: 22,
+      readingTheme: 'dark',
+    });
+
+    hostSave(store, appearanceDefaults());
+
+    assert.equal(store.bookSources.length, 2, '书源被「恢复默认」清空了');
+    assert.deepEqual(store.libraryListIds.length, 1);
+    assert.equal(store.libraryPath, '/Users/habhy/my-books.json', '外部书单路径被清空了');
+    assert.equal(store.aiModel, 'deepseek/deepseek-chat', '翻译模型被改回默认了');
+    assert.equal(store.digestModel, 'deepseek/deepseek-chat');
+    // 外观本身确实回到默认 —— 否则这条修复就成了「按钮没反应」。
+    assert.equal(store.fontSize, READING_DEFAULTS.fontSize);
+    assert.equal(store.readingTheme, READING_DEFAULTS.readingTheme);
+  });
+
+  it('★ 反向对照：提交整份 READING_DEFAULTS ⇒ 书源与模型必须被清空（修之前的行为）', () => {
+    const store = snapshotWithTwoSources();
+    Object.assign(store, { libraryPath: '/x/books.json', aiModel: 'p/m' });
+
+    hostSave(store, { ...READING_DEFAULTS });
+
+    assert.equal(store.bookSources.length, 0, '反向对照失效：整份默认值竟然没清掉书源');
+    assert.equal(store.libraryPath, '');
+    assert.equal(store.aiModel, '');
+  });
+
+  it('★ 源码守卫：面板不许再直接提交 READING_DEFAULTS', () => {
+    // ★ 必须**先剥注释**再查：解释这条缺陷的注释里就写着 `...READING_DEFAULTS`
+    //   （反面教材），不剥的话守卫会被自己的注释命中 —— 与「拿裸字符串当守卫」
+    //   是同一类失效（见 `book-render.test.mjs` 里 `readCode` 的注释）。
+    const source = stripComments(readFileSync(join(pluginRoot, 'src/client/ReadingAppearance.jsx'), 'utf8'));
+    assert.equal(source.includes('...READING_DEFAULTS'), false, '「恢复默认」又回到整份默认值了');
+    assert.match(source, /onClick=\{\(\) => set\(appearanceDefaults\(\)\)\}/, '「恢复默认」没有走 appearanceDefaults()');
   });
 });

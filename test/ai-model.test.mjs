@@ -455,7 +455,11 @@ describe('接线：所有生成入口都从同一个地方取模型', () => {
     // ★ 旧 Markdown 翻译路径不该还在 service.js 里被调用 —— 两条并存就会出现
     //   「有的文章走新路径、有的走旧路径」，而两边各自看起来都对。
     assert.ok(!/generateTranslation\(/.test(host), 'service.js 里不该再调旧的 generateTranslation');
-    assert.match(host, /\{ model: this\.aiModel\(\) \}/, '生成时没有把设置传下去');
+    // ★ 只钉「把设置里的模型传下去了」，**不钉那一行还有什么别的参数**。
+    //   原来这里写的是 `\{ model: this\.aiModel\(\) \}`（带右花括号），2026-10-25
+    //   给翻译入口加了一个 `onChunk` 就让它变红 —— 而那一行要守的事情一个字没变。
+    //   断言钉得太死，红的时候会逼人去改断言而不是去看代码。
+    assert.match(host, /model: this\.aiModel\(\)/, '生成时没有把设置传下去');
   });
 
   test('设置页有下拉框，且读的是宿主的模型目录', () => {

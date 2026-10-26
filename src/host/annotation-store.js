@@ -31,6 +31,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isBookId } from '../library.js';
+import { guardFs } from './disk-errors.js';
 
 /** 标记颜色。与客户端 `ANNOTATION_TONES` 必须一致（两边都有测试盯着）。 */
 export const TONES = Object.freeze(['yellow', 'green', 'blue', 'pink']);
@@ -80,11 +81,19 @@ export function normalizeAnnotation(input, { now = Date.now(), id } = {}) {
   return { id: madeId, page, start, end, quote, note, tone, createdAt: Number(input.createdAt) || now, updatedAt: now };
 }
 
-/** 原子写：先写 tmp 再 rename（与 digest-store 同款，崩在中途不会留半个 JSON）。 */
+/**
+ * 原子写：先写 tmp 再 rename（与 digest-store 同款，崩在中途不会留半个 JSON）。
+ *
+ * ★ 这里**尤其**要翻人话：划线是用户刚拖选出来的，写失败时他在界面上点的是
+ *   「保存笔记」。如果提示是 `ENOSPC: no space left on device, write`，
+ *   他只会以为插件坏了 —— 而真正要做的是清一点磁盘。
+ */
 async function writeJsonAtomic(path, value) {
   const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2, 6)}.tmp`;
-  await writeFile(tmp, JSON.stringify(value, null, 2), 'utf8');
-  await rename(tmp, path);
+  await guardFs(async () => {
+    await writeFile(tmp, JSON.stringify(value, null, 2), 'utf8');
+    await rename(tmp, path);
+  }, '这条划线和笔记');
 }
 
 /**

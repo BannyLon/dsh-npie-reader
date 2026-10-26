@@ -30,6 +30,36 @@ const build = spawnSync(process.execPath, ['build.mjs'], { cwd: pluginRoot, enco
 const hostBundle = () => readFileSync(join(pluginRoot, 'lib', 'index.js'), 'utf8');
 const clientBundle = () => readFileSync(join(pluginRoot, 'lib', 'client.js'), 'utf8');
 
+/**
+ * 产物里**非第一方**的字节数（依赖被内联时它会立刻暴涨）。
+ *
+ * ★ 为什么这才该是主判据：老口径量的是「产物的绝对字符数」。可本项目的第一方代码
+ *   已经涨到 ~926 KB —— CSS 以文本原样内联、JSX 全在里面、中文注释被 esbuild 转成
+ *   `\uXXXX`（一个字 6 个字符）。于是绝对阈值只能一轮一轮往上抬
+ *   （800K → 860K → 900K → 940K → 960K，五次），**每抬一次它离真正的目标就远一步**：
+ *   那不是维护，是钝化。而这条守卫自己声称要抓的一直是「有没有整个依赖被内联进来」。
+ *   直接量那件事：正常值恒为 0；内联 pdf.mjs ⇒ +512 KB，pdf.worker.mjs ⇒ +1.3 MB，
+ *   react ⇒ +130 KB，三个都远远越过阈值。
+ *
+ * ★ 判据的依据是 esbuild 在**不 minify** 时给每个模块插的那行 `// <path>`。
+ *   本项目刻意不 minify（产物要能在真机上读调用栈），所以那行一定在 ——
+ *   但这是个**前提**，不是事实。哪天有人打开 minify，本判据会静默退化成「恒为 0」，
+ *   所以下面配了一条「前提还在吗」的用例钉住它。
+ */
+function foreignBytes(text) {
+  let foreign = 0;
+  let inForeign = false;
+  for (const line of text.split('\n')) {
+    const mark = /^\/\/ (.+)$/.exec(line);
+    if (mark !== null) {
+      inForeign = /(^|\/)node_modules\//.test(mark[1]);
+      continue;
+    }
+    if (inForeign) foreign += line.length + 1;
+  }
+  return foreign;
+}
+
 describe('构建', () => {
   it('node build.mjs 能过（语法错误只有这一步抓得到）', () => {
     assert.equal(build.status, 0, `构建失败：\n${build.stdout ?? ''}\n${build.stderr ?? ''}`);
@@ -111,33 +141,47 @@ describe('书架（电子书）的接线', () => {
     const text = clientBundle();
     assert.match(text, /import\(\s*pdfjsAsset\(\s*"pdf\.mjs"\s*\)\s*\)/, '动态导入的写法变了（可能被内联了）');
     assert.ok(!text.includes('pdfjsVersion'), 'pdf.js 源码被内联进客户端 bundle 了');
-    // 体积上限：内联 pdf.mjs（512 KB）或 pdf.worker.mjs（1.3 MB）都会立刻撞破它。
-    // ★ 0.20.4 把这个数字从 800_000 抬到 860_000。抬的原因是**口径过时**，不是放宽守卫：
-    //   写这条的时候 bundle 是 ~516 KB，20 个版本之后它已经是 ~790 KB（`refinements.css`
-    //   是以 `text` loader 原样内联的，每一段带说明的 CSS 都算数），于是这条判据在
-    //   **本轮改动之前**就已经踩线（实测 808,950 字符，而本轮新增约 2 KB）。
-    //   守卫真正要抓的是「有没有整个依赖被内联进来」：pdf.mjs 512 KB ⇒ 790 + 512 =
-    //   1.3 MB，pdf.worker.mjs 1.3 MB ⇒ 2.1 MB，两个都远在 860 KB 之上，牙**没有**变钝。
-    // ★ 0.21.0 再抬到 900_000，同样先量后抬：本轮新增是第一方代码 ——
-    //   `annotations.js`（锚点换算 + 判据）+ `AnnotationPanel.jsx` + 一段面板 CSS
-    //   + `BookReader` 里的接线，**没有新增任何依赖**。实测 874,716 字符（+30 KB 量级），
-    //   而 900 KB 距离「内联 pdf.mjs 后的 1.36 MB」仍有 460 KB 余量。
-    //   ⇒ 若哪天它又红了，先量「本轮新增了多少、是依赖还是自己的代码」，别直接推数字。
-    // ★ 0.23.0 抬到 940_000：本轮新增**全是注释与第一方代码**（右下角那颗按钮从
-    //   「绕圆心扇出的 7 个圆片」改成「带文字标签的竖直列」，附带一大段解释为什么
-    //   hover 展开在这个几何里根本不成立）。实测 908,106 字符，比上一档超 8,106。
-    //   增量里最容易被误判的一项是：`refinements.css` 是**以 text loader 原样内联**的，
-    //   CSS 注释一个字都不删（实测全产物里注释占 133 KB，其中非 ASCII 每字转义成
-    //   6 个字符），所以「多写几段中文说明」在这条判据上等于几百行代码。
-    //   真正的牙（内联 pdf.mjs ⇒ 1.36 MB）离 940 KB 还有 480 KB。
-    // ★ 0.24.7 抬到 960_000。实测 940,094 —— **超出 94 个字符**，而本轮的增量是
-    //   本地 OCR 的接线（`BookReader.runOcr` + `BookCompanion` 那一段 + 8 行 CSS），
-    //   全是第一方代码，没有任何新依赖。上一档（0.23.0）记的是 908,106，
-    //   也就是说 0.24.x 这一整串 UI 工作一共花了约 32 KB。
-    //   ⇒ **下一次再红，不要再抬数字**。真正该做的是在 `build.mjs` 里把 CSS 注释
-    //     剥掉再内联：实测全产物里注释占 145,171 个字符（非 ASCII 每字转义成 6 个），
-    //     而注释在运行期一个字节都不需要 —— 剥掉之后这条判据才重新量的是**代码**。
-    assert.ok(text.length < 960_000, `client.js 有 ${(text.length / 1024).toFixed(0)} KB，说明有大块依赖被内联了`);
+    /**
+     * ★ 0.27.0 起，**主判据换成「非第一方字节数」**，绝对体积只当兜底。
+     *
+     *   历史（五次抬数字，全部记录在这里，不删）：800K → 860K → 900K → 940K → 960K。
+     *   每次抬之前都量过「本轮新增是依赖还是自己的代码」，每次结论都是「自己的代码」。
+     *   0.27.0 这一轮实测 968,607，超出 8,607 —— 触发点只是两个新面板段落 + 一个
+     *   格式化模块 + 一段 CSS。这条判据已经**退化成一个「代码量计步器」**，
+     *   而它原本要守的东西（依赖被内联）今天可以由 `foreignBytes` 精确量到 0。
+     *   ⇒ 不再抬那个「刚好卡住」的数字，改成：
+     *     ① 依赖内联 ⇒ `foreignBytes` 立刻暴涨（正常 0，容差只留给 esbuild 的运行时辅助）；
+     *     ② 绝对上限放到 1.4 MB，只为挡住「第一方代码涨到荒谬」这一种情况。
+     *   pdf.mjs 内联后 = 926 KB + 512 KB ≈ 1.44 MB，仍然撞得破 ①。
+     */
+    const foreign = foreignBytes(text);
+    assert.equal(foreign < 4096, true,
+      `产物里有 ${(foreign / 1024).toFixed(0)} KB 非第一方代码 —— 有依赖被内联了`);
+    assert.ok(text.length < 1_400_000,
+      `client.js 有 ${(text.length / 1024).toFixed(0)} KB，第一方代码已经到荒谬的量级`);
+  });
+
+  it('★ 判据前提：esbuild 的模块注释还在（minify 之后 foreignBytes 会变恒 0 的假绿）', () => {
+    // `foreignBytes` 靠 `// src/client/x.jsx` 这种行切模块。打开 minify 后这行没了，
+    // 判据会永远返回 0 —— 看着全绿，其实什么都没量。前提要单独钉住。
+    const text = clientBundle();
+    assert.match(text, /^\/\/ src\/client\//m, '模块注释不见了：foreignBytes 已失效，需要换判据');
+    assert.equal(text.includes('node_modules'), false, '当前产物里不该出现 node_modules');
+  });
+
+  it('★ 反向对照：内部塞一段 node_modules ⇒ foreignBytes 必须报出来', () => {
+    // 判据本身也要被检验，否则「恒为 0」和「判据写对了」长得一样。
+    const fake = [
+      '// src/client/index.jsx',
+      'var a = 1;',
+      '// /project/node_modules/pdfjs-dist/build/pdf.mjs',
+      'var big = "x".repeat(10);',
+      'var bigger = "y".repeat(10);',
+      '// src/client/BookReader.jsx',
+      'var b = 2;',
+    ].join('\n');
+    assert.ok(foreignBytes(fake) > 0, '反向对照失效：内联的依赖没被算进去');
+    assert.equal(foreignBytes('// src/client/index.jsx\nvar a = 1;'), 0);
   });
 
   it('★ 反向对照：书架的样式类真的定义在产物里（不是只有引用）', () => {

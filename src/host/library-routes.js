@@ -42,10 +42,11 @@
 
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
+import { FIND_QUERY_MAX } from '../book-find.js';
 import { BOOKS_PAGE_LIMIT, LIBRARY_API_PREFIX, PDFJS_VENDOR_PREFIX, isBookId, isReadable } from '../library.js';
 import { contentRange, formatRange, mimeForExtension, parseRange, unsatisfiedContentRange } from '../range.js';
 import { segmentBook } from './segment.js';
-import { digestOutline, pagesOf, sectionIndex } from './ebook/index.js';
+import { digestOutline, findInEbook, pagesOf, sectionIndex } from './ebook/index.js';
 import { OCR_MAX_IMAGE_BYTES, decodeImagePayload, sniffImageExt } from './ocr.js';
 import { isTrustedLocalRequest } from './trust.js';
 
@@ -108,6 +109,17 @@ function forbidden(res) {
  */
 function readErrorStatus(error) {
   const code = error?.code ?? '';
+  /**
+   * ★ 磁盘类要给**自己的**状态码（2026-10-25）：
+   *   - `DISK_FULL` ⇒ **507 Insufficient Storage**：请求本身没错、服务器也没崩，
+   *     缺的是磁盘空间 —— 用户能做的是清磁盘，不是重试；
+   *   - `DISK_DENIED` / `DISK_READONLY` ⇒ **403**：这是权限问题；
+   *   - 其余磁盘故障（IO 报错、路径过长）⇒ **500**：那是环境坏了，不是用户的请求有问题。
+   *   以前这些全落到 400「请求有问题」，用户照着 400 去改请求，怎么改都没用。
+   */
+  if (code === 'DISK_FULL' || code === 'DISK_TOO_MANY_FILES') return 507;
+  if (code === 'DISK_DENIED' || code === 'DISK_READONLY') return 403;
+  if (code === 'DISK_IO' || code === 'DISK_BAD_PATH') return 500;
   if (code === 'LOCAL_OUTSIDE_ROOT' || code === 'NO_LOCAL_ROOT') return 403;
   if (code === 'LOCAL_MISSING') return 404;
   // 网盘凭证类 ⇒ **401**（未授权），不是 400（请求有问题）：
@@ -130,6 +142,9 @@ function readErrorStatus(error) {
  */
 function ebookErrorStatus(error) {
   const code = error?.code ?? '';
+  // 磁盘类与 `readErrorStatus` 同一套：解读产物 / 抽出的正文写不下去时走这条。
+  if (code === 'DISK_FULL' || code === 'DISK_TOO_MANY_FILES') return 507;
+  if (code === 'DISK_IO' || code === 'DISK_BAD_PATH') return 500;
   if (code === 'BOOK_DRM' || code === 'MOBI_HUFFDIC' || code === 'MOBI_COMPRESSION'
     || code === 'ZIP_METHOD' || code === 'ZIP64' || code === 'EBOOK_FORMAT') return 415;
   if (code === 'LOCAL_OUTSIDE_ROOT' || code === 'NO_LOCAL_ROOT') return 403;
@@ -215,6 +230,8 @@ export function makeLibraryRoutes(handlers) {
     annotationStore,
     ocrRunner,
     ebookOf,
+    cacheUsage,
+    cleanCache,
   } = handlers;
 
   /**
@@ -531,6 +548,33 @@ export function makeLibraryRoutes(handlers) {
         await reload();
         return bookList(res);
       }
+      // ---- 缓存占用 / 清理（2026-10-25）------------------------------------
+      //
+      // ★ 为什么要有 GET：上限如果看不见，它就不是「上限」而是「某天东西自己没了」。
+      //   设置页要显示「已用 5.3 MB / 上限 512 MB」，用户才知道要不要清。
+      // ★ 为什么清理单独一条 POST 而不是 GET：它会删文件，GET 必须是只读的。
+      if (rest === '/cache') {
+        if (method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+        if (typeof cacheUsage !== 'function') {
+          return sendJson(res, 501, { ok: false, error: '缓存统计没有接上' });
+        }
+        try {
+          return sendJson(res, 200, { ok: true, ...(await cacheUsage()) });
+        } catch (error) {
+          return sendJson(res, readErrorStatus(error), { ok: false, error: error.message, code: error.code ?? '' });
+        }
+      }
+      if (rest === '/cache/clean') {
+        if (method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+        if (typeof cleanCache !== 'function') {
+          return sendJson(res, 501, { ok: false, error: '清理功能没有接上' });
+        }
+        try {
+          return sendJson(res, 200, { ok: true, ...(await cleanCache()) });
+        } catch (error) {
+          return sendJson(res, readErrorStatus(error), { ok: false, error: error.message, code: error.code ?? '' });
+        }
+      }
       if (rest === '/state') {
         if (method === 'GET') return sendJson(res, 200, { ok: true, states: getStates() });
         if (method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
@@ -687,14 +731,32 @@ export function makeLibraryRoutes(handlers) {
       //   两套解析器迟早对不上（同一个文件在阅读器里和在解读里节数不同）。
       const ebookMatch = /^\/book\/([A-Za-z0-9_-]{1,64})\/ebook$/.exec(rest);
       const ebookSectionMatch = /^\/book\/([A-Za-z0-9_-]{1,64})\/ebook\/section\/([1-9]\d{0,4})$/.exec(rest);
-      if (ebookMatch !== null || ebookSectionMatch !== null) {
+      /**
+       * 书内搜索（0.26.0）。
+       *
+       * ★ 走 GET + `?q=`：它**不写盘**、可重入，和「取一节正文」是同一类请求。
+       *   写成 POST 只会让「同一次检索」在客户端多一份需要维护的 body。
+       * ★ 查询串长度在这里**明确拒绝**，不 `slice`：静默截断会把「搜一长句」变成
+       *   「搜前半句」，用户拿到一堆看不懂的命中还以为是检索质量差。
+       */
+      const ebookFindMatch = /^\/book\/([A-Za-z0-9_-]{1,64})\/ebook\/find$/.exec(rest);
+      if (ebookMatch !== null || ebookSectionMatch !== null || ebookFindMatch !== null) {
         if (!ebookReady) return sendJson(res, 501, { ok: false, error: '电子书解析没有接上（缺少 ebookOf）' });
         if (method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
-        const bookId = (ebookMatch ?? ebookSectionMatch)[1];
+        const bookId = (ebookMatch ?? ebookSectionMatch ?? ebookFindMatch)[1];
         try {
           const book = await bookById(bookId);
           if (book === undefined) return sendJson(res, 404, { ok: false, error: '没有这本书' });
           const ebook = await ebookOf(book);
+          if (ebookFindMatch !== null) {
+            const raw = String(queryOf(req).get('q') ?? '');
+            if (raw.trim() === '') return sendJson(res, 400, { ok: false, error: 'q 不能为空' });
+            if (raw.trim().length > FIND_QUERY_MAX) {
+              return sendJson(res, 400, { ok: false, error: `搜索词最多 ${FIND_QUERY_MAX} 个字` });
+            }
+            const limit = Number(queryOf(req).get('limit'));
+            return sendJson(res, 200, { ok: true, ...findInEbook(ebook, raw, { limit }) });
+          }
           if (ebookSectionMatch === null) {
             return sendJson(res, 200, {
               ok: true,

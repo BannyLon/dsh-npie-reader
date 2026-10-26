@@ -277,7 +277,14 @@ export function SkillExport({ bookId, digested = 0, modelValue = '', onNotify, r
      *   屏幕阅读器、`open` 属性都是现成的，自己写要补一堆。
      */
     <details className="npr-skill" ref={detailsRef}>
-      <summary className="npr-skill-head"
+      {/*
+       * ★ 这里原来还挂着一个 `npr-skill-head` 类名 —— 它**没有任何 CSS 规则**
+       *   （summary 的样式全由 `.npr-skill > summary` 提供），于是 `check-classes`
+       *   从 0.20.1 起每次都报「用到但未定义」并 exit 1，一红红了三十几个版本。
+       *   一道**永远红**的门禁等于没有门禁：真出现新漏洞时没人会去看它。
+       *   冗余属性直接删掉，而不是塞进白名单 —— 白名单是给「有意保留的语义钩子」的。
+       */}
+      <summary
         title="把已解读的章节拼成 SKILL.md（索引）+ 每章一个文件 + 术语表，让 agent 按需读某一章">
         <span className="npr-skill-icon"><Icon name="layers-3" size={13} /></span>
         {/*

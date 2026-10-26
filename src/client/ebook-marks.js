@@ -134,6 +134,70 @@ export function marksForBlock(items, span, length) {
 }
 
 /**
+ * 一段文字按**划线 + 搜索命中**两层一起切成碎片。
+ *
+ * ★ 为什么不能先按划线切、再在碎片里按命中切：命中可能**横跨两片划线的边界**
+ *   （用户先划了半句，再划后半句，然后搜一个跨过中间那个点的词）。两层各切一次，
+ *   跨界的命中就会只剩半截高亮 —— 看起来像「搜到了但标错位置」。
+ *   所以两层的边界**并成同一次切割**，每个碎片同时带着「属于哪条划线」和
+ *   「是不是命中」两个属性。
+ * ★ 一个碎片同时命中划线和高亮时**不嵌套 `<mark>`**：行内盒子多一层，
+ *   断行机会与 `-webkit-line-clamp` 都会跟着变，而且嵌套的 `mix-blend-mode`
+ *   在深色纸上会叠出第三种颜色。这里给同一个元素挂两个类，颜色由 CSS 裁决。
+ * ★ `current`（当前这一处）只对**命中**有意义：同一片段上若同时有普通命中和当前
+ *   命中（重叠的两次搜索不可能出现，但数据坏了会），取当前那一个。
+ *
+ * @param marks `[{ id, tone, start, end }]`（块内偏移）
+ * @param finds `[{ start, end, current }]`（块内偏移，来自书内搜索）
+ */
+export function splitByOverlays(text, marks, finds) {
+  const source = String(text ?? '');
+  const clamp = (value) => Math.max(0, Math.min(source.length, Number(value)));
+  const marksList = (Array.isArray(marks) ? marks : [])
+    .map(mark => ({
+      id: String(mark?.id ?? ''),
+      tone: String(mark?.tone ?? ''),
+      start: clamp(mark?.start),
+      end: clamp(mark?.end),
+    }))
+    .filter(mark => Number.isInteger(mark.start) && Number.isInteger(mark.end) && mark.end > mark.start);
+  const findsList = (Array.isArray(finds) ? finds : [])
+    .map(find => ({
+      start: clamp(find?.start),
+      end: clamp(find?.end),
+      current: find?.current === true,
+    }))
+    .filter(find => Number.isInteger(find.start) && Number.isInteger(find.end) && find.end > find.start);
+  if (marksList.length === 0 && findsList.length === 0) {
+    return [{ from: 0, to: source.length, tone: null, id: '', find: false, current: false }];
+  }
+  const points = new Set([0, source.length]);
+  for (const item of marksList) { points.add(item.start); points.add(item.end); }
+  for (const item of findsList) { points.add(item.start); points.add(item.end); }
+  const sorted = [...points].sort((a, b) => a - b);
+  const out = [];
+  for (let i = 0; i < sorted.length - 1; i += 1) {
+    const from = sorted[i];
+    const to = sorted[i + 1];
+    if (to <= from) continue;
+    const mark = marksList.find(item => item.start <= from && item.end >= to) ?? null;
+    const hits = findsList.filter(item => item.start <= from && item.end >= to);
+    const find = hits.length > 0;
+    const current = hits.some(item => item.current);
+    const tone = mark === null ? null : mark.tone;
+    const id = mark === null ? '' : mark.id;
+    const last = out[out.length - 1];
+    if (last !== undefined && last.tone === tone && last.id === id
+      && last.find === find && last.current === current) {
+      last.to = to;
+      continue;
+    }
+    out.push({ from, to, tone, id, find, current });
+  }
+  return out;
+}
+
+/**
  * 一段文字按划线切成碎片：`[{ from, to, tone, id }]`。
  *
  * ★ 相邻同色碎片要合并：一次划线经常横跨两段（被 `<mark>` 切过之后尤其明显），

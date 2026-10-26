@@ -64,7 +64,12 @@ for (const anchor of [
 for (const anchor of [
   '.npr-book-main { display: flex;',
   '.npr-book-stage { flex: 1;',
-  '.npr-book-digest { flex: 0 0 306px;',
+  /* ★ 只钉「意图」：目录是**固定宽**的侧栏（`flex: 0 0 <宽>`），不钉那个宽是多少。
+     原来这里写着 `306px`，0.25.x 把宽度换成 `var(--npr-book-side-w)` 之后，
+     这一行 `includes` 直接抛错 ⇒ **整个脚本在模块加载期就死了**，
+     从那次改动起 `npm run verify:book-layout` 一条几何都没量过。
+     （同一个坑 `test/book-layout.test.mjs` 也踩过，已一并改成钉前缀。） */
+  '.npr-book-digest { flex: 0 0 ',
   '.npr-book-companion { flex: 0 0 348px;',
   '.npr-digest-card { position: absolute;',
   '.npr-book-main { flex-direction: column; }',
@@ -115,7 +120,7 @@ const HOST = `:root, body {
  *   对照，那只是又写了一遍我以为的样子。反向对照必须只改 CSS。
  */
 const skillBlock = ({ open = false } = {}) => `<details class="npr-skill"${open ? ' open' : ''}>
-        <summary class="npr-skill-head">
+        <summary>
           <span class="npr-skill-icon"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08"></path></svg></span>
           <span class="npr-skill-text"><span class="npr-skill-title">导出成技能包</span><span class="npr-skill-sub">索引 + 每章一份 + 术语表，agent 按需读</span></span>
           <span class="npr-skill-badge">已导出</span>

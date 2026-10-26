@@ -29,10 +29,12 @@
  *   键盘快捷键走 window 级监听，不需要容器可聚焦。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FIND_LIMIT_MAX, findOccurrences, normalizeNeedle, pageIndexText, snippetOf } from '../book-find.js';
 import { formatBytes, progressPercent, stateOf } from '../library.js';
 import { BookCompanion } from './BookCompanion.jsx';
 import { AnnotationPanel } from './AnnotationPanel.jsx';
 import { BookDigestPanel } from './BookDigestPanel.jsx';
+import { BookFindPanel } from './BookFindPanel.jsx';
 import { DigestCard } from './DigestCard.jsx';
 import { Icon } from './icons.jsx';
 import { forgetBook, loadPdfjs, openCachedBook } from './pdfjs.js';
@@ -341,6 +343,81 @@ export function BookReader({
   const [marksOpen, setMarksOpen] = useState(false);
   /** 打开面板时要立刻进入编辑的那一条（「划了线顺便写一句」用）。 */
   const [markFocusId, setMarkFocusId] = useState('');
+
+  /**
+   * 书内搜索（0.26.0）。
+   *
+   * ★ PDF 没有「全书正文」可取 —— 正文是 pdf.js 逐页铺出来的文字层。所以检索的
+   *   第一步是**给每一页建一次索引**：`getTextContent()` → `pageIndexText()`。
+   *   结果按页缓存在 `findTexts` 里（一本 500 页的书首次约几秒，之后改词再搜是毫秒级）。
+   *   缓存**不跨组件**：`LibraryApp` 用 `key={book.id}` 挂本组件，换书就是重挂，
+   *   缓存跟着走 —— 这比往磁盘写一份「正文副本」更诚实（那份副本迟早与书对不上）。
+   * ★ `findActive === -1` 是默认值：搜到了但还没跳。见 `BookEbook` 里同名 state 的说明。
+   * ★ `findRects` 与 `markRects` 同理：数据（页号 + 页内偏移）与像素矩形分开，
+   *   矩形的失效条件是「换页 / 缩放 / 文字层重排」。
+   */
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  /**
+   * `textlessPages` 是 `textless` 的**明细**：只知道「有 187 页没搜」不够，
+   * 要补就得知道是哪 187 页。两者同时留着是因为前者进文案、后者进 OCR。
+   */
+  const [findState, setFindState] = useState({
+    status: 'idle', error: '', done: 0, total: 0, textless: 0, textlessPages: [], truncated: false,
+  });
+  const [findHits, setFindHits] = useState([]);
+  const [findActive, setFindActive] = useState(-1);
+  const [findRects, setFindRects] = useState([]);
+  /** 页 → 检索文本（`''` = 这一页没有文字层，扫描页）。`undefined` = 还没建索引。 */
+  const findTexts = useRef(new Map());
+  /**
+   * 哪些页的文字**是识别出来的**（`findTexts` 里那一份来自 OCR，不是文字层）。
+   *
+   * ★ 必须分开记：OCR 一定有错字，而命中列表里那句摘录是用户判断「是不是我要找的」
+   *   的唯一依据 —— 不标出来，他会以为书上是这么写的。
+   */
+  const findOcrVia = useRef(new Set());
+  /**
+   * 批量识别（补救扫描页）的状态。
+   *
+   * ★ `note` 是**结果说明**（认出几页 / 几页没认出），不是错误：一条都没认出时
+   *   它不是「失败」而是「这些页确实没有字」—— 纯图片页就长这样。
+   */
+  const [findOcr, setFindOcr] = useState({ running: false, done: 0, total: 0, note: '' });
+  const findOcrCancel = useRef(false);
+  /**
+   * 识别完之后**让它 +1**，把检索那个 effect 重新跑一遍。
+   *
+   * ★ 不这么做就得在这里手写一遍「重搜」，而那等于第二条检索链路 ——
+   *   两个循环迟早会在「上限 / 截断 / 进度节流」上分叉。
+   */
+  const [findRerun, setFindRerun] = useState(0);
+  /** 检索令牌：新查询 / 关面板 / 换书都会让它变，旧循环看到不一致就停。 */
+  const findRun = useRef(0);
+  /** 当前生效的检索词（小写）。渲染命中矩形的时候要用，而那时 `findQuery` 可能已经变了。 */
+  const findNeedle = useRef('');
+  /** 上次滚动到的位置（`page:findActive`），同一个位置只滚一次。 */
+  const findScrollKey = useRef('');
+
+  /**
+   * 点「搜索」：与其它侧栏互斥地打开；再点一次收起。
+   *
+   * ★★ **必须定义在键盘 effect 之前**（0.26.0 实测踩到）：`useCallback` 的依赖
+   *   数组是在**渲染期**求值的，而键盘那个 `useEffect` 的依赖里写着 `toggleFind`。
+   *   定义在后面 ⇒ `Cannot access 'toggleFind' before initialization`，一打开
+   *   阅读器就白屏 —— 与文件里「两个回调必须定义在键盘 effect 之前」同一类。
+   * ★ 这里**直接关目录**（`setDigestOpen(false)` + `setExpandedN(0)`）而不是调
+   *   `closeDigest()`：那个回调同样定义在键盘 effect 之后，原因同上。
+   */
+  const toggleFind = useCallback(() => {
+    if (findOpen) { setFindOpen(false); return; }
+    setDigestOpen(false);
+    setExpandedN(0);
+    setMarksOpen(false);
+    setMarkFocusId('');
+    setCompanion(false);
+    setFindOpen(true);
+  }, [findOpen]);
   /**
    * 文字层的版本号：每次一页的文字层**渲染完成**就 +1。
    *
@@ -410,6 +487,24 @@ export function BookReader({
     setMarksOpen(false);
     setMarkFocusId('');
     setMarkRects([]);
+    // 换书 / 重试 = 上一本的索引与命中一处都不能留（页号与偏移都指向另一本书）。
+    findRun.current += 1;
+    findTexts.current.clear();
+    findOcrVia.current.clear();
+    // 换书时把还在跑的批量识别停掉：页码是**按书**的，让它接着跑会把 A 书的
+    // 识别结果写进 B 书的页号上（宿主的 ocr.json 就是按 bookId + page 存的）。
+    findOcrCancel.current = true;
+    setFindOcr({ running: false, done: 0, total: 0, note: '' });
+    findNeedle.current = '';
+    findScrollKey.current = '';
+    setFindOpen(false);
+    setFindQuery('');
+    setFindHits([]);
+    setFindActive(-1);
+    setFindRects([]);
+    setFindState({
+      status: 'idle', error: '', done: 0, total: 0, textless: 0, textlessPages: [], truncated: false,
+    });
 
     (async () => {
       try {
@@ -907,6 +1002,21 @@ export function BookReader({
         return;
       }
       /**
+       * ⌘F / ⌃F = **书内搜索**（0.26.0）。
+       *
+       * ★ 抢在 `readerCommand` 之前，理由与上面那条全屏相同：那个函数第一行是
+       *   「任何修饰键 ⇒ 不认识的键」，⌘F 到那里会被原样放过 —— 按了没反应。
+       * ★ 收回浏览器自带的查找是对的：正文只在当前页的文字层里，原生查找只能找
+       *   这一页。用户按 ⌘F 的意图是「整本书里在哪儿」（见文件头第 1 条），
+       *   让原生查找抢走等于给了一个能力小一号却看不出区别的入口。
+       */
+      if (!event.altKey && (event.metaKey || event.ctrlKey) && !event.shiftKey
+        && (event.key === 'f' || event.key === 'F')) {
+        event.preventDefault();
+        toggleFind();
+        return;
+      }
+      /**
        * ★ Esc 不交给 `readerCommand`：那个函数的契约是「不认识的键就不吞」，
        *   而 Esc 只有在**已经处在沉浸态**时才属于本组件。反过来写成「Esc 一律退出沉浸」，
        *   会让读屏 / 输入法用 Esc 关自己的弹层时顺带把阅读器也切回来。
@@ -914,6 +1024,9 @@ export function BookReader({
        *   而不是「顺手把沉浸也退掉」—— 后者会让书页突然跳回带工具栏的样子。
        */
       if (event.key === 'Escape') {
+        // ★ 输入法组字中的 Esc 是「取消这次组字」，不是「关面板」。
+        if (event.isComposing === true) return;
+        if (findOpen) { setFindOpen(false); return; }
         if (fabOpen) { setFabOpen(false); return; }
         if (immersive) setImmersive(false);
         return;
@@ -942,7 +1055,7 @@ export function BookReader({
     };
     globalThis.addEventListener('keydown', onKeyDown);
     return () => globalThis.removeEventListener('keydown', onKeyDown);
-  }, [status, go, numPages, immersive, fabOpen, toggleImmersive, cycleTint, toggleFullscreen]);
+  }, [status, go, numPages, immersive, fabOpen, findOpen, toggleFind, toggleImmersive, cycleTint, toggleFullscreen]);
 
   // ---- 滚轮：翻页；Ctrl/⌘ + 滚轮：缩放 ------------------------------------
   /**
@@ -1010,6 +1123,245 @@ export function BookReader({
     })();
     return () => { cancelled = true; };
   }, [companion, doc, page, status]);
+
+  // ---- 书内搜索：全书索引 + 当前页命中矩形 ---------------------------------
+  /**
+   * 建索引 + 检索：**按页顺序**跑一遍，边跑边报进度。
+   *
+   * ★ 为什么不能只搜当前页（很多阅读器就是这么做的）：那叫「当前页查找」。
+   *   用户问的是「这本书里在哪儿讲过 X」，答案可能在 300 页之后。
+   * ★ 为什么要缓存整本的页文本：PDF 的正文只存在于 pdf.js 的文字层里，没有
+   *   「一次取回整本」的接口。缓存之后，改一个词再搜是**毫秒级**（只有第一次
+   *   要认真跑 500 次 `getTextContent()`）。
+   * ★ 扫描页（没有文字层）**不静默跳过**：它们计入 `textless`，在面板底部说出来。
+   *   不说的话，「共 3 处」会被读成「全书只有 3 处」—— 而实际上有 200 页根本没搜。
+   * ★ 到 `FIND_LIMIT_MAX` 就停并置 `truncated`：同上，截断必须说出口。
+   * ★ 进度节流 200ms：每页都 setState 会让整棵阅读器（含画布）每秒重渲染几十次，
+   *   翻页和滚动会明显发涩，而用户其实只需要看到「在动」。
+   */
+  useEffect(() => {
+    if (!findOpen || doc === null || status !== 'ready') return undefined;
+    const needle = normalizeNeedle(findQuery);
+    findNeedle.current = needle;
+    if (needle === '') {
+      findRun.current += 1;
+      setFindHits([]);
+      setFindActive(-1);
+      setFindState({
+        status: 'idle', error: '', done: 0, total: 0, textless: 0, textlessPages: [], truncated: false,
+      });
+      return undefined;
+    }
+    const token = findRun.current + 1;
+    findRun.current = token;
+    findScrollKey.current = '';
+    setFindHits([]);
+    setFindActive(-1);
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      const hits = [];
+      /**
+       * 没有文字层的页（扫描页）。
+       *
+       * ★ 收**页码**而不只是计数：面板要按这个名单去补 OCR。只留一个数字的话，
+       *   「另有 187 页没搜」就永远是一句没有出口的说明。
+       */
+      const textlessPages = [];
+      let lastFlush = 0;
+      setFindState({
+        status: 'searching', error: '', done: 0, total: numPages, textless: 0, textlessPages: [], truncated: false,
+      });
+      for (let current = 1; current <= numPages; current += 1) {
+        if (cancelled || findRun.current !== token) return;
+        let text = findTexts.current.get(current);
+        if (text === undefined) {
+          try {
+            const pdfPage = await doc.getPage(current);
+            const content = await pdfPage.getTextContent();
+            text = pageIndexText(content.items);
+          } catch {
+            // 取不到就当这一页没有文字层。它确实不参与检索 —— 但要记账（见上）。
+            text = '';
+          }
+          findTexts.current.set(current, text);
+        }
+        if (text === '') textlessPages.push(current);
+        else {
+          // 这一页的文字是识别来的还是文字层里取的：命中列表要标出来，
+          // 因为 OCR 一定有错字，而摘录是用户判断「是不是我要找的」的唯一依据。
+          const via = findOcrVia.current.has(current) ? 'ocr' : 'text';
+          for (const hit of findOccurrences(text, needle, { limit: FIND_LIMIT_MAX - hits.length })) {
+            hits.push({
+              index: hits.length,
+              page: current,
+              start: hit.start,
+              end: hit.end,
+              via,
+              snippet: snippetOf(text, hit.start, hit.end),
+            });
+            if (hits.length >= FIND_LIMIT_MAX) break;
+          }
+        }
+        const now = Date.now();
+        if (now - lastFlush > 200 || current === numPages || hits.length >= FIND_LIMIT_MAX) {
+          lastFlush = now;
+          setFindHits(hits.slice());
+          setFindState({
+            status: 'searching', error: '', done: current, total: numPages,
+            textless: textlessPages.length, textlessPages: textlessPages.slice(),
+            truncated: hits.length >= FIND_LIMIT_MAX,
+          });
+        }
+        if (hits.length >= FIND_LIMIT_MAX) break;
+      }
+      if (cancelled || findRun.current !== token) return;
+      setFindHits(hits.slice());
+      setFindState({
+        status: 'done', error: '', done: numPages, total: numPages,
+        textless: textlessPages.length, textlessPages: textlessPages.slice(),
+        truncated: hits.length >= FIND_LIMIT_MAX,
+      });
+    }, 220);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [findOpen, findQuery, doc, status, numPages, findRerun]);
+
+  /** 跳到第 `index` 处命中：换页（如需）+ 把它标成「当前」。 */
+  const jumpToFind = useCallback((index) => {
+    const hit = findHits[index];
+    if (hit === undefined) return;
+    setFindActive(index);
+    if (hit.page !== page) go(hit.page);
+  }, [findHits, page, go]);
+
+  /** 上一处 / 下一处，**首尾相接**（理由见 `BookEbook` 的同名回调）。 */
+  const stepFind = useCallback((delta) => {
+    if (findHits.length === 0) return;
+    const base = findActive < 0 ? (delta > 0 ? -1 : 0) : findActive;
+    jumpToFind((base + delta + findHits.length) % findHits.length);
+  }, [findHits, findActive, jumpToFind]);
+
+  /**
+   * 补救扫描页：对那些**没有文字层**的页逐页做本机 OCR，认完重新检索。
+   *
+   * ★ 为什么必须是用户主动点，而不是搜完自动跑：一本 400 页的扫描书要 3–5 分钟
+   *   （实测 0.5–0.8 秒/页）。自动跑意味着「搜一个词，风扇转五分钟」，
+   *   而用户可能只是想确认一个词在不在这本书里。
+   * ★ 为什么复用 `OCR_RENDER_DPI` 与那层白底：与伴读那条 OCR 路径**同一次渲染**。
+   *   两处各写一套参数的话，症状会是「伴读认得出来、搜索认不出来」（或者反过来），
+   *   而两次都用了 OCR，用户完全无法判断为什么。
+   * ★ 单页失败**不中断整批**：纯图片页、分辨率太低、Vision 偶发超时 —— 混在同一批里
+   *   很正常。把它们计入 `failed` 如实报出来，比整批作废有用。
+   * ★ 认出来的结果同时写进 `findTexts`（本次检索立即生效）**和宿主**（`ocr.json`，
+   *   下次打开这本书、伴读那一侧也直接可用）—— 这是同一个动作的两个后果，都该留。
+   * ★ 结束后 `setFindRerun` 让检索 effect 重跑，而不是在这里手写第二遍检索循环：
+   *   两套循环迟早会在「上限 / 截断 / 进度节流」上分叉（见上面 effect 的注释）。
+   */
+  const runFindOcr = useCallback(async () => {
+    if (findOcr.running || doc === null) return;
+    const targets = findState.textlessPages.slice();
+    if (targets.length === 0) return;
+    findOcrCancel.current = false;
+    setFindOcr({ running: true, done: 0, total: targets.length, note: '' });
+    let recovered = 0;
+    let failed = 0;
+    for (let index = 0; index < targets.length; index += 1) {
+      if (findOcrCancel.current) break;
+      const target = targets[index];
+      try {
+        const pdfPage = await doc.getPage(target);
+        const viewport = pdfPage.getViewport({ scale: OCR_RENDER_DPI / 72 });
+        const canvas = globalThis.document?.createElement?.('canvas');
+        if (canvas === null || canvas === undefined) throw new Error('这个环境拿不到画布，识别不了');
+        canvas.width = Math.max(1, Math.round(viewport.width));
+        canvas.height = Math.max(1, Math.round(viewport.height));
+        const context = canvas.getContext('2d');
+        if (context === null) throw new Error('这个环境拿不到 2D 画布，识别不了');
+        context.fillStyle = '#ffffff';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        await pdfPage.render({ canvasContext: context, viewport }).promise;
+        const image = canvas.toDataURL('image/jpeg', 0.85);
+        // 位图用完立刻缩到 0：200 DPI 的一页约 15 MB，几百页攒在 GC 队列里会顶到上限。
+        canvas.width = 0;
+        canvas.height = 0;
+        const result = await ocrBookPage(book.id, target, image);
+        const text = typeof result.text === 'string' ? result.text : '';
+        if (text.trim() === '') { failed += 1; continue; }
+        findTexts.current.set(target, text);
+        findOcrVia.current.add(target);
+        recovered += 1;
+      } catch {
+        failed += 1;
+      }
+      setFindOcr({ running: true, done: index + 1, total: targets.length, note: '' });
+    }
+    const stopped = findOcrCancel.current;
+    findOcrCancel.current = false;
+    // ★ 取消时**不说「认出 N 页」**：那句话会被读成「这一批已经跑完了」，
+    //   而剩下的页根本没试。停下来就只说停下来。
+    const note = stopped
+      ? '已停止识别，剩下的页没有试'
+      : `认出 ${recovered} 页${failed > 0 ? ` · ${failed} 页没认出字` : ''}`;
+    setFindOcr({ running: false, done: 0, total: targets.length, note });
+    if (!stopped && recovered > 0) setFindRerun(value => value + 1);
+  }, [findOcr.running, doc, book.id, findState.textlessPages]);
+
+  /** 停下来：循环在下一页开头看到这个标记就退出（不在 await 中途强杀）。 */
+  const stopFindOcr = useCallback(() => {
+    findOcrCancel.current = true;
+  }, []);
+
+  /**
+   * 这一页的命中 → 像素矩形。
+   *
+   * ★ 偏移**重新在文字层里找一遍**，不用索引里存的那份：索引是 `pageIndexText()`
+   *   拼出来的文本，而文字层是 pdf.js 铺的 span 序列，两者在「游程之间补不补空格」
+   *   这类细节上可能差一两个字符。按**出现顺序**与索引里的命中一一对应（同一页上
+   *   两边数出来的一般一样），差一两个时以文字层为准（能画出来的才叫高亮）。
+   * ★ 文字层为空 ⇒ **清空矩形并返回**，不能保留上一页的：扫描页的文字层永远是空的，
+   *   不清的话上一页的命中色块会留在新页面上（与 `markRects` 那里同一个坑）。
+   */
+  useEffect(() => {
+    if (!findOpen || findNeedle.current === '' || status !== 'ready') {
+      setFindRects(previous => (previous.length === 0 ? previous : []));
+      return;
+    }
+    const layer = textLayerRef.current;
+    if (layer === null) return;
+    const nodes = textNodesOf(layer);
+    if (nodes.length === 0) {
+      setFindRects(previous => (previous.length === 0 ? previous : []));
+      return;
+    }
+    const layerText = nodes.map(node => node.data ?? '').join('');
+    const occurrences = findOccurrences(layerText, findNeedle.current, { limit: 200 });
+    const pageHits = findHits.filter(hit => hit.page === page);
+    const next = [];
+    for (let i = 0; i < occurrences.length; i += 1) {
+      const range = rangeOfAnchor(layer, nodes, occurrences[i].start, occurrences[i].end);
+      if (range === null) continue;
+      const rects = rectsOfRange(range, layer);
+      if (rects.length === 0) continue;
+      const hit = pageHits[i];
+      next.push({
+        key: hit === undefined ? `p${page}-${i}` : `h${hit.index}`,
+        active: hit !== undefined && hit.index === findActive,
+        rects,
+      });
+    }
+    setFindRects(previous => (JSON.stringify(previous) === JSON.stringify(next) ? previous : next));
+    // 当前那一处滚到视野中间（同一位置只滚一次，否则拖滚动条会被拽回去）。
+    const active = next.find(item => item.active);
+    const stage = stageRef.current;
+    if (active === undefined || stage === null) return;
+    const key = `${page}:${findActive}`;
+    if (findScrollKey.current === key) return;
+    findScrollKey.current = key;
+    const rect = active.rects[0];
+    const frame = layer.getBoundingClientRect();
+    const box = stage.getBoundingClientRect();
+    const offset = frame.top - box.top + rect.top;
+    stage.scrollTop = Math.max(0, stage.scrollTop + offset - stage.clientHeight / 2 + rect.height / 2);
+  }, [findOpen, findHits, findActive, page, status, textLayerVersion]);
 
   // ---- 扫描页的本地 OCR ---------------------------------------------------
   /**
@@ -1462,6 +1814,7 @@ export function BookReader({
     setCompanionQuote(quote.text);
     setCompanion(true);
     closeDigest();
+    setFindOpen(false);
     setQuote(null);
   }, [quote, closeDigest]);
 
@@ -1517,7 +1870,22 @@ export function BookReader({
     const layer = textLayerRef.current;
     if (layer === null) return;
     const nodes = textNodesOf(layer);
-    if (nodes.length === 0) return;
+    /**
+     * ★ 文字层是空的 ⇒ **把矩形清掉**，不能 `return`。
+     *
+     * 翻页时文字层先被清空（见上面那段 `textLayerRef.current.textContent = ''`），
+     * 对**有文字的页**这只造成一瞬闪烁 —— 渲完 `textLayerVersion++` 会重算。
+     * 但**扫描页 / 纯图片页的文字层永远是空的** ⇒ 永远不重算 ⇒ 上一页那些
+     * 绝对定位的 `.npr-book-mark` 色块**留在新页面上**，位置还是上一页的。
+     * 而这正是本项目主打的那个场景（扫描版 + 本机 OCR）。
+     *
+     * 原来写的是 `if (nodes.length === 0) return;` —— 那一行让「量不出矩形」与
+     * 「这一页没有文字」变成同一件事，前者该保留旧值（见函数头注释），后者必须清空。
+     */
+    if (nodes.length === 0) {
+      setMarkRects(previous => (previous.length === 0 ? previous : []));
+      return;
+    }
     const next = [];
     for (const item of annotationsOnPage(annotations, page)) {
       const range = rangeOfAnchor(layer, nodes, item.start, item.end);
@@ -1550,6 +1918,7 @@ export function BookReader({
     selection?.removeAllRanges?.();
     if (covering !== null) {
       // 重复划线不是错误：把它高亮出来、让用户直接补笔记，比弹一句红字有用。
+      setFindOpen(false);
       setMarksOpen(true);
       setMarkFocusId(openNote ? covering.id : '');
       notify?.('这一段已经划过了');
@@ -1564,6 +1933,7 @@ export function BookReader({
       if (openNote && result.item !== undefined) {
         closeDigest();
         setCompanion(false);
+        setFindOpen(false);
         setMarksOpen(true);
         setMarkFocusId(result.item.id);
         notify?.('已划线 —— 写一句为什么值得留');
@@ -1606,6 +1976,7 @@ export function BookReader({
     closeDigest();
     setCompanion(false);
     setExpandedN(0);
+    setFindOpen(false);
     setMarksOpen(true);
   }, [marksOpen, closeDigest]);
 
@@ -1680,7 +2051,7 @@ export function BookReader({
   });
 
   return (
-    <div ref={bookRef} className={`npr-book${immersive ? ' is-immersive' : ''}${immersive && peek ? ' is-peek' : ''}${immersive && (digestOpen || marksOpen) ? ' has-side' : ''}`}
+    <div ref={bookRef} className={`npr-book${immersive ? ' is-immersive' : ''}${immersive && peek ? ' is-peek' : ''}${immersive && (digestOpen || marksOpen || findOpen) ? ' has-side' : ''}`}
       data-tint={tint} style={{ '--npr-book-brightness': brightness }}
       onPointerMove={onPeekPointerMove} onPointerLeave={onPeekPointerLeave}>
       {/* ---- 顶部：一条 10px 的拖动条 + 一颗**居中的工具胶囊** ----------------
@@ -1707,7 +2078,7 @@ export function BookReader({
           </button>
           <button type="button" className={`npr-book-pill-item${companion ? ' is-on' : ''}`}
             title="AI 伴读（A）：带着当前这一页追问" aria-pressed={companion}
-            onClick={() => { setCompanion((value) => !value); closeDigest(); setMarksOpen(false); }}>
+            onClick={() => { setCompanion((value) => !value); closeDigest(); setMarksOpen(false); setFindOpen(false); }}>
             <Icon name="wand-sparkles" size={14} />
             <span>伴读</span>
           </button>
@@ -1717,10 +2088,16 @@ export function BookReader({
             <Icon name="highlighter" size={14} />
             <span>{annotations.length > 0 ? `划线 ${annotations.length}` : '划线'}</span>
           </button>
+          <button type="button" className={`npr-book-pill-item${findOpen ? ' is-on' : ''}`}
+            title="书内搜索（⌘F）：在整本正文里找，回车 / ↓ 上下条跳转" aria-pressed={findOpen}
+            onClick={toggleFind}>
+            <Icon name="search" size={14} />
+            <span>搜索</span>
+          </button>
           <button type="button" className={`npr-book-pill-item${digestOpen ? ' is-on' : ''}`}
             title={digestOutline.length > 0 ? '本书目录' : '抽取本书目录（只在本机做，不花钱）'}
             aria-pressed={digestOpen}
-            onClick={() => { if (digestOpen) closeDigest(); else { setDigestOpen(true); setCompanion(false); setMarksOpen(false); } }}>
+            onClick={() => { if (digestOpen) closeDigest(); else { setDigestOpen(true); setCompanion(false); setMarksOpen(false); setFindOpen(false); } }}>
             <Icon name="bookmark" size={14} />
             <span>
               {digestJob?.running === true
@@ -1782,7 +2159,7 @@ export function BookReader({
         {percent !== null && <span>读到 {percent}%</span>}
         {current.state === 'reading' && current.page > 0 && <span>上次读到第 {current.page} 页</span>}
         <span>{mode === FIT_PAGE ? '整页适应窗口' : '适应宽度'} · {Math.round(zoom * 100)}%</span>
-        <span className="npr-book-keys">← → ↑ ↓ 翻页 · I 沉浸 · N 配色</span>
+        <span className="npr-book-keys">← → ↑ ↓ 翻页 · ⌘F 搜索 · I 沉浸 · N 配色</span>
       </div>
 
 
@@ -1800,9 +2177,58 @@ export function BookReader({
           的 @container 块）。
       */}
       <div className="npr-book-main">
+        {findOpen && (
+          <BookFindPanel
+            query={findQuery}
+            onQuery={setFindQuery}
+            status={findState.status}
+            error={findState.error}
+            hits={findHits.map(hit => ({
+              key: `h${hit.index}`,
+              where: `第 ${hit.page} 页`,
+              snippet: hit.snippet,
+              // 只有识别来的命中才带这个标记：文字层里的命中是**书上真有的字**，
+              // 加个标记反而让人以为它可疑。
+              ...(hit.via === 'ocr' ? { via: 'ocr' } : {}),
+            }))}
+            activeIndex={findActive}
+            progress={findState.total > 0 ? { done: findState.done, total: findState.total } : null}
+            unit="page"
+            /**
+             * 扫描页的补救出口。
+             *
+             * ★ 只在**这一轮检索已经跑完**时给（`status === 'done'`）：搜索中途
+             *   `textlessPages` 还在长，那时按下去识别的是「目前看到的那些」，
+             *   跑完一重搜又冒出一批新的 —— 用户会以为按钮没效果。
+             */
+            ocr={findOcr.running
+              ? { running: true, done: findOcr.done, total: findOcr.total, note: '' }
+              : (findState.status === 'done' && findState.textlessPages.length > 0
+                ? {
+                  running: false, done: 0, total: findState.textlessPages.length, note: findOcr.note,
+                }
+                : null)}
+            onOcr={() => { void runFindOcr(); }}
+            onOcrStop={stopFindOcr}
+            notes={[
+              ...(findState.textless > 0
+                ? [`另有 ${findState.textless} 页没有文字层（扫描页），这次没有检索它们`]
+                : []),
+              ...(findHits.some(hit => hit.via === 'ocr')
+                ? ['带「识别」标记的命中来自本机文字识别（可能有错字），跳到那一页时标不出具体位置']
+                : []),
+              ...(findState.truncated ? [`命中到 ${FIND_LIMIT_MAX} 处就停下了 —— 后面还有没有，这次没查完`] : []),
+            ]}
+            onPick={jumpToFind}
+            onStep={stepFind}
+            onClose={() => setFindOpen(false)}
+          />
+        )}
         {marksOpen && (
           <AnnotationPanel
             items={annotations}
+            title={book.title}
+            bookId={book.id}
             focusId={markFocusId}
             onJump={(target) => go(target)}
             onUpdate={(id, patch) => { void updateMark(id, patch); }}
@@ -1886,6 +2312,17 @@ export function BookReader({
                 <div className="npr-book-marks" aria-hidden="true">
                   {markRects.map(mark => mark.rects.map((rect, index) => (
                     <span key={`${mark.id}-${index}`} className="npr-book-mark" data-tone={mark.tone}
+                      style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height }} />
+                  )))}
+                </div>
+              )}
+              {/* 搜索命中层（0.26.0）：**另一层**，不是往划线层里塞。
+                  两层语义不同（搜索是临时的、划线是存下来的），叠在一起时
+                  当前命中必须压在最上面 —— 所以它是 z-index 3，见 CSS。 */}
+              {findRects.length > 0 && (
+                <div className="npr-book-finds" aria-hidden="true">
+                  {findRects.map(item => item.rects.map((rect, index) => (
+                    <span key={`${item.key}-${index}`} className={`npr-book-find${item.active ? ' is-current' : ''}`}
                       style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height }} />
                   )))}
                 </div>

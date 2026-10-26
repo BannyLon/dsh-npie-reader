@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  BLOCK_SEP, blockSpans, marksForBlock, pageText, spanOfElement, splitByMarks,
+  BLOCK_SEP, blockSpans, marksForBlock, pageText, spanOfElement, splitByMarks, splitByOverlays,
 } from '../src/client/ebook-marks.js';
 
 /** 一页的块（`k` 是种类，`x` 是文字），含一个空块与一条列表项。 */
@@ -149,5 +149,81 @@ describe('splitByMarks：文字 → 碎片', () => {
       [{ from: 0, to: 3, tone: null, id: '' }]);
     assert.deepEqual(splitByMarks('', [{ id: 'a', tone: 'yellow', start: 0, end: 3 }]),
       [{ from: 0, to: 0, tone: null, id: '' }]);
+  });
+});
+
+/**
+ * 书内搜索（0.26.0）：**两层一起切**。
+ *
+ * 这个函数的全部价值在一条：命中可能**横跨划线边界**。先按划线切、再在碎片里找命中，
+ * 跨界的命中就只剩半截高亮 —— 症状是「搜到了，但标错位置」，而它不会报任何错。
+ */
+describe('splitByOverlays：划线 + 搜索命中合并成一次切割', () => {
+  const text = 'abcdefgh';
+
+  it('两层都空 ⇒ 整段一片，字一个不少', () => {
+    const parts = splitByOverlays(text, [], []);
+    assert.deepEqual(parts, [{ from: 0, to: 8, tone: null, id: '', find: false, current: false }]);
+  });
+
+  it('只有命中 ⇒ 前 / 命中 / 后 三片，中片 find=true', () => {
+    const parts = splitByOverlays(text, [], [{ start: 2, end: 5, current: true }]);
+    assert.deepEqual(parts.map(p => text.slice(p.from, p.to)), ['ab', 'cde', 'fgh']);
+    assert.deepEqual(parts.map(p => p.find), [false, true, false]);
+    assert.deepEqual(parts.map(p => p.current), [false, true, false]);
+  });
+
+  it('★ 命中横跨两片划线的边界 ⇒ 命中**不断成两截**（两片都带 find）', () => {
+    const marks = [
+      { id: 'a', tone: 'yellow', start: 0, end: 4 },
+      { id: 'b', tone: 'blue', start: 4, end: 8 },
+    ];
+    const parts = splitByOverlays(text, marks, [{ start: 3, end: 5, current: false }]);
+    // [3,4) 与 [4,5) 两片：底色不同（划线不同），但**都算命中**。
+    const hit = parts.filter(p => p.find);
+    assert.equal(hit.length, 2);
+    assert.equal(text.slice(hit[0].from, hit[1].to), 'de');
+    assert.deepEqual(hit.map(p => p.tone), ['yellow', 'blue']);
+  });
+
+  it('划线与命中重叠的碎片：一个碎片同时带 tone 与 find（不嵌套、不重复挂）', () => {
+    const parts = splitByOverlays(text, [{ id: 'a', tone: 'yellow', start: 1, end: 5 }],
+      [{ start: 1, end: 5, current: true }]);
+    assert.equal(parts.length, 3);
+    const both = parts[1];
+    assert.deepEqual([both.tone, both.id, both.find, both.current], ['yellow', 'a', true, true]);
+  });
+
+  it('不丢字、不重叠、全段被覆盖（拼接等于原文）', () => {
+    const marks = [{ id: 'a', tone: 'yellow', start: 0, end: 3 }, { id: 'b', tone: 'blue', start: 5, end: 7 }];
+    const finds = [{ start: 2, end: 6, current: false }, { start: 7, end: 8, current: true }];
+    const parts = splitByOverlays(text, marks, finds);
+    assert.equal(parts.map(p => text.slice(p.from, p.to)).join(''), text);
+    for (let i = 1; i < parts.length; i += 1) assert.equal(parts[i].from, parts[i - 1].to);
+  });
+
+  it('越界 / 倒置 / 零长度的输入被丢掉，不制造负长度碎片', () => {
+    const parts = splitByOverlays(text, [{ id: 'a', tone: 'yellow', start: 6, end: 2 }],
+      [{ start: 5, end: 5 }, { start: 20, end: 30 }]);
+    assert.deepEqual(parts, [{ from: 0, to: 8, tone: null, id: '', find: false, current: false }]);
+  });
+
+  it('空文字 ⇒ 一片空碎片（调用方据此原样显示，不会得到 undefined）', () => {
+    assert.deepEqual(splitByOverlays('', [], [{ start: 0, end: 1 }]),
+      [{ from: 0, to: 0, tone: null, id: '', find: false, current: false }]);
+  });
+
+  it('反向对照：先按划线切、再在碎片里找命中 ⇒ 跨界命中确实只剩半截', () => {
+    const marks = [{ id: 'a', tone: 'yellow', start: 0, end: 4 }, { id: 'b', tone: 'blue', start: 4, end: 8 }];
+    const needle = 'de';
+    const naive = [];
+    for (const piece of splitByMarks(text, marks)) {
+      const local = text.slice(piece.from, piece.to);
+      const at = local.indexOf(needle);
+      if (at >= 0) naive.push(text.slice(piece.from + at, piece.from + at + needle.length));
+    }
+    assert.deepEqual(naive, [], '两段各切一次 ⇒ 「de」跨在边界上，两边都找不到（这正是不复用它当判据的理由）');
+    const merged = splitByOverlays(text, marks, [{ start: 3, end: 5 }]).filter(p => p.find);
+    assert.equal(text.slice(merged[0].from, merged[merged.length - 1].to), needle);
   });
 });

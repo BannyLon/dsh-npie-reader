@@ -49,9 +49,14 @@ const REGEX_PRECEDERS = new Set(['(', ',', '=', ':', '[', '!', '&', '|', '?', '{
  * 剥掉注释，用等长空格替换（保留换行 ⇒ 行号、列号都还对得上）。
  *
  * @param {string} source
+ * @param {{ collapse?: boolean }} [options]
+ *   `collapse: true` ⇒ 注释**不占位**（直接丢弃）。
+ *   ★ 为什么需要它：默认的「等长空格」是为了守住偏移，代价是长度不变；
+ *   而 `test/build.test.mjs` 那条体积闸要量的是「运行期真正需要的字节数」，
+ *   注释在浏览器里一个字符都不执行。用默认模式量体积等于**什么都没量到**。
  * @returns {string}
  */
-export function stripComments(source) {
+export function stripComments(source, { collapse = false } = {}) {
   const out = [];
   const n = source.length;
   let i = 0;
@@ -64,9 +69,16 @@ export function stripComments(source) {
     out.push(ch);
     if (!/\s/.test(ch)) prev = ch;
   };
-  /** 把 `[i, end)` 替换成空格，换行原样保留。 */
+  /** 把 `[i, end)` 替换成空格（或整段丢弃），换行原样保留。 */
   const blankTo = (end) => {
-    for (; i < end; i += 1) out.push(source[i] === '\n' ? '\n' : ' ');
+    for (; i < end; i += 1) {
+      if (collapse) {
+        if (source[i] !== '\n') continue;
+        out.push('\n');
+        continue;
+      }
+      out.push(source[i] === '\n' ? '\n' : ' ');
+    }
   };
 
   while (i < n) {

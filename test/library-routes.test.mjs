@@ -1616,3 +1616,162 @@ describe('本地 OCR 路由', () => {
     assert.equal(ocrCalls.recognize.length, 0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 书内搜索（0.26.0）
+// ---------------------------------------------------------------------------
+
+/**
+ * 这条路由的判据在 `src/book-find.js`（与 `book_search` 同一套），所以这里只验
+ * **路由层**该负责的三件事：参数校验、依赖缺失时的 501、以及命中形状能否原样
+ * 被渲染端消费（`n / block / start / end / snippet`）。
+ */
+describe('GET /book/:id/ebook/find', () => {
+  const EBOOK = {
+    sections: [
+      { title: '第一章 磨坊', blocks: [{ k: 'p', x: '磨坊主妇站在磨坊门口。' }] },
+      { title: '第二章', blocks: [{ k: 'p', x: '水轮坏了。' }] },
+    ],
+  };
+  const findHarness = (overrides = {}) => harness({ ebookOf: async () => EBOOK, ...overrides });
+  const url = (query) => `${API}/book/b2/ebook/find?q=${encodeURIComponent(query)}`;
+
+  it('命中 ⇒ 200，形状是渲染端要的那一份（节号 / 块号 / 块内偏移 / 片段）', async () => {
+    const { api } = findHarness();
+    const res = fakeRes();
+    await api.handler(fakeReq({ url: url('磨坊') }), res);
+    assert.equal(res.status, 200);
+    assert.equal(res.json.ok, true);
+    assert.equal(res.json.total, 2);
+    assert.equal(res.json.hits[0].n, 1);
+    assert.equal(res.json.hits[0].block, 0);
+    const text = EBOOK.sections[0].blocks[0].x;
+    assert.equal(text.slice(res.json.hits[0].start, res.json.hits[0].end), '磨坊');
+    assert.ok(res.json.hits[0].snippet.includes('磨坊'));
+  });
+
+  it('空 q ⇒ 400（不是「回全部命中」）', async () => {
+    const { api } = findHarness();
+    for (const q of ['', '   ']) {
+      const res = fakeRes();
+      await api.handler(fakeReq({ url: url(q) }), res);
+      assert.equal(res.status, 400);
+      assert.match(res.json.error, /q 不能为空/);
+    }
+  });
+
+  it('超长 q ⇒ 400 并说清上限（不静默截断成前半句）', async () => {
+    const { api } = findHarness();
+    const res = fakeRes();
+    await api.handler(fakeReq({ url: url('x'.repeat(200)) }), res);
+    assert.equal(res.status, 400);
+    assert.match(res.json.error, /最多 100 个字/);
+  });
+
+  it('limit 只在合理区间内生效，到顶要明说 truncated', async () => {
+    const { api } = findHarness();
+    const res = fakeRes();
+    await api.handler(fakeReq({ url: `${url('磨坊')}&limit=1` }), res);
+    assert.equal(res.status, 200);
+    assert.equal(res.json.total, 1);
+    assert.equal(res.json.truncated, true);
+  });
+
+  it('书不在书单里 ⇒ 404；缺 ebookOf ⇒ 501（不是把 /books 一起打歪）', async () => {
+    const { api } = findHarness();
+    const missing = fakeRes();
+    await api.handler(fakeReq({ url: `${API}/book/nope/ebook/find?q=x` }), missing);
+    assert.equal(missing.status, 404);
+
+    const { api: bare } = harness();
+    const notWired = fakeRes();
+    await bare.handler(fakeReq({ url: url('磨坊') }), notWired);
+    assert.notEqual(notWired.status, 200);
+    assert.equal(notWired.json.ok, false);
+  });
+
+  it('POST ⇒ 405（检索不写盘，只该有 GET）', async () => {
+    const { api } = findHarness();
+    const res = fakeRes();
+    await api.handler(fakeReq({ url: url('磨坊'), method: 'POST', body: '{}' }), res);
+    assert.equal(res.status, 405);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// /cache 与 /cache/clean（缓存占用 / 清理，2026-10-25）
+// ---------------------------------------------------------------------------
+
+describe('缓存端点', () => {
+  it('没接上 `cacheUsage` ⇒ 501（而不是回一个空对象让界面显示「0 B」）', async () => {
+    const { api } = harness();
+    const res = fakeRes();
+    await api.handler(fakeReq({ url: `${API}/cache` }), res);
+    assert.equal(res.status, 501);
+    assert.equal(res.json.ok, false);
+  });
+
+  it('接了 ⇒ 200，三类体积原样透出（界面靠它们分行显示）', async () => {
+    const usage = {
+      totalText: '94 MB',
+      limitText: '512 MB',
+      digests: { text: '5.3 MB', books: 3 },
+      panCache: { text: '89 MB' },
+      backups: { text: '40 MB', count: 7 },
+    };
+    const { api } = harness({ cacheUsage: async () => usage });
+    const res = fakeRes();
+    await api.handler(fakeReq({ url: `${API}/cache` }), res);
+    assert.equal(res.status, 200);
+    assert.equal(res.json.ok, true);
+    assert.deepEqual(res.json.digests, usage.digests);
+    assert.equal(res.json.panCache.text, '89 MB');
+  });
+
+  it('★ `cacheUsage` 抛 DISK_FULL ⇒ **507**（请求没错，是磁盘满了；400 会让用户去改请求）', async () => {
+    const { api } = harness({
+      cacheUsage: async () => {
+        const error = new Error('磁盘空间不够了：保存数据的时候被系统拒绝了。');
+        error.code = 'DISK_FULL';
+        throw error;
+      },
+    });
+    const res = fakeRes();
+    await api.handler(fakeReq({ url: `${API}/cache` }), res);
+    assert.equal(res.status, 507);
+    assert.match(res.json.error, /磁盘空间不够了/);
+    assert.equal(res.json.code, 'DISK_FULL', 'code 没透出来，客户端只能靠文案判断');
+  });
+
+  it('★ GET /cache/clean ⇒ 405：清理会删文件，GET 必须是只读的', async () => {
+    let cleaned = 0;
+    const { api } = harness({ cleanCache: async () => { cleaned += 1; return {}; } });
+    const res = fakeRes();
+    await api.handler(fakeReq({ url: `${API}/cache/clean` }), res);
+    assert.equal(res.status, 405);
+    assert.equal(cleaned, 0, 'GET 居然真的触发了清理');
+  });
+
+  it('POST /cache/clean ⇒ 200，且返回清理后的占用（界面不用再发一次 GET）', async () => {
+    let cleaned = 0;
+    const { api } = harness({
+      cleanCache: async () => {
+        cleaned += 1;
+        return { freed: 1024, freedText: '1.0 KB', usage: { totalText: '0 B' } };
+      },
+    });
+    const res = fakeRes();
+    await api.handler(fakeReq({ url: `${API}/cache/clean`, method: 'POST' }), res);
+    assert.equal(res.status, 200);
+    assert.equal(cleaned, 1);
+    assert.equal(res.json.freedText, '1.0 KB');
+    assert.equal(res.json.usage.totalText, '0 B');
+  });
+
+  it('缺 `cleanCache` ⇒ 501（按钮点了没反应是最糟的假象）', async () => {
+    const { api } = harness();
+    const res = fakeRes();
+    await api.handler(fakeReq({ url: `${API}/cache/clean`, method: 'POST' }), res);
+    assert.equal(res.status, 501);
+  });
+});

@@ -28,7 +28,7 @@ import { createToolDefinitions } from './tools.js';
 import { hasWindow, parseWindow, toMillis, windowLabel, withinWindow } from './time-window.js';
 import { SEARCH_LIMITS, matchEntry, normalizeNeedle } from './search.js';
 import { articleLanguage } from '../language.js';
-import { createPanReader } from './pan.js';
+import { createPanReader, DEFAULT_CACHE_MAX_BYTES } from './pan.js';
 import { createDigestStore } from './digest-store.js';
 import { createOcrRunner } from './ocr.js';
 import { createEbookStore } from './ebook/store.js';
@@ -44,6 +44,10 @@ import {
   panTokenPath, pluginDataDir,
 } from './store.js';
 import { listFilePath, pruneListsIndex, readListsIndex, removeListFile, writeListFile, writeListsIndex } from './book-lists.js';
+import {
+  CACHE_LIMITS, clearRecomputable, enforceDigestBudget, formatBytes, measureBackups,
+  measureDigestCache, pathBytes, pruneBackups,
+} from './cache-budget.js';
 import { fetchPage } from './page-fetch.js';
 import { checkPublicUrl } from './net-guard.js';
 import {
@@ -360,6 +364,9 @@ export class RssService {
         isGenerating: bookId => this.isGenerating(bookId),
         exportSkill: request => this.exportBookSkill(request),
         skillStatus: request => this.bookSkillStatus(request),
+        // 缓存占用 / 清理（设置页的「存储」卡）。
+        cacheUsage: () => this.cacheUsage(),
+        cleanCache: () => this.cleanCache(),
         vendorRoot: this.pdfjsRoot,
         log: message => ctx.logger.info(message),
       });
@@ -369,9 +376,85 @@ export class RssService {
     });
 
     ctx.logger.info('dsh-npie-reader: service started');
+    // 缓存整理：**后台**做，失败只记日志。它是「房子打扫」，不该挡住插件启动，
+    // 更不该让一个 stat 失败变成「书架打不开」。
+    void this.housekeepCache().catch(error => ctx.logger.warn(`dsh-npie-reader: 缓存整理失败：${error?.message ?? error}`));
     ctx.effect(() => () => {
       void this.store.dispose().catch(error => ctx.logger.warn(String(error)));
     }, 'dsh-npie-reader: flush store on dispose');
+  }
+
+  // ------------------------------------------------------------------
+  // 缓存上限（2026-10-25）
+  // ------------------------------------------------------------------
+
+  /**
+   * 启动 / 收尾时收拾一次缓存：备份文件留最近几份，解读缓存压回上限以内。
+   *
+   * ★ 只做「可重算的部分」（抽出的正文 / pages.jsonl / ocr.json），
+   *   **已生成的解读一个都不删** —— 那是花模型调用换来的。理由写在 `cache-budget.js` 头部。
+   */
+  async housekeepCache() {
+    const log = message => this.ctx.logger.info(message);
+    await pruneBackups({ dataDir: pluginDataDir(), log });
+    const result = await enforceDigestBudget({ digestsDir: this.digestStore.digestsDir, log });
+    if (result.over) {
+      // 超了但清不出空间：说清楚，别让用户以为「上限已经生效」。
+      log(`[缓存] 解读缓存 ${formatBytes(result.total)} 仍超过上限 ${formatBytes(result.limit)}`
+        + '（剩下的都是已生成的解读，不自动删）');
+    }
+    return result;
+  }
+
+  /**
+   * `GET /cache`：设置页那张「存储」卡的数据。
+   *
+   * ★ 三类分开报，而不是只报一个总数：用户要知道「该清哪个」。
+   *   网盘块缓存有自己 1 GiB 的上限 + 整本淘汰，通常不需要人管；备份文件是纯垃圾；
+   *   解读缓存才是需要判断的那一类。
+   */
+  async cacheUsage() {
+    const digestsDir = this.digestStore.digestsDir;
+    const digests = await measureDigestCache({ digestsDir });
+    const panBytes = await pathBytes(panCacheDir());
+    const backups = await measureBackups({ dataDir: pluginDataDir() });
+    const limit = CACHE_LIMITS.digestBytes;
+    const total = digests.total + panBytes + backups.bytes;
+    return {
+      limit,
+      limitText: formatBytes(limit),
+      digests: { bytes: digests.total, text: formatBytes(digests.total), books: digests.books.length },
+      panCache: { bytes: panBytes, text: formatBytes(panBytes), limit: DEFAULT_CACHE_MAX_BYTES },
+      backups: { bytes: backups.bytes, text: formatBytes(backups.bytes), count: backups.count + backups.orphans },
+      total,
+      totalText: formatBytes(total),
+      over: digests.total > limit,
+    };
+  }
+
+  /**
+   * `POST /cache/clean`：用户点了「清理」。
+   *
+   * ★ 只清**可重算的**：备份文件 + 抽出的正文 / pages.jsonl / ocr.json。
+   *   已生成的解读不删 —— 用户点的是「清理缓存」，不是「删掉我花过钱的解读」。
+   *   要删解读得走「重新解读」，那里的文案会明确说会重新生成。
+   * ★ 网盘块缓存也不动：它自己有 1 GiB 上限 + 整本淘汰，删了只会让下次翻页变慢。
+   */
+  async cleanCache() {
+    const log = message => this.ctx.logger.info(message);
+    const digestsDir = this.digestStore.digestsDir;
+    const recomputed = await clearRecomputable({ digestsDir, log });
+    // 用户主动清理时只留 1 份备份：留 5 份是「自动」的克制，不是「手动」的诉求。
+    const backups = await pruneBackups({ dataDir: pluginDataDir(), keep: 1, log });
+    const freed = recomputed.freed + backups.freed;
+    log(`[缓存] 清理完成，共腾出 ${formatBytes(freed)}`);
+    return {
+      freed,
+      freedText: formatBytes(freed),
+      removedBooks: recomputed.removed.length,
+      removedBackups: backups.removed.length,
+      usage: await this.cacheUsage(),
+    };
   }
 
   // ------------------------------------------------------------------
@@ -1411,7 +1494,10 @@ export class RssService {
     if (!isBookId(bookId)) throw new Error('无效的书 id');
     if (typeof title !== 'string' || title.length > 300) throw new Error('书名过长');
     if (!Number.isInteger(page) || page < 0 || page > 1_000_000) throw new Error('page 必须是非负整数');
-    if (!Number.isInteger(pages) || pages < 0 || page > 1_000_000) throw new Error('pages 必须是非负整数');
+    // ★ 第三个判据必须是 `pages`：原来写成了 `page`（上一行刚校验过），于是 `pages`
+    //   根本没有上界 —— 传 1e15 也能落盘，伴读上下文会写「第 3 页（共 1000000000000000 页）」，
+    //   而模型会照这个数字说话。这是一道空闸门，不是笔误之外的东西。
+    if (!Number.isInteger(pages) || pages < 0 || pages > 1_000_000) throw new Error('pages 必须是非负整数');
     if (typeof text !== 'string') throw new Error('页文本必须是字符串');
     /**
      * ★ `quote` 允许缺省（`''`）但**类型不对就抛错**：这是用户划的那一句原文，
@@ -1492,7 +1578,20 @@ export class RssService {
         // ★ 2026-10-14 换成**保结构翻译**（只换文字，标签一个都不动）。
         //   旧路径是「HTML → Markdown → 模型 → Markdown → 渲染」，链接和排版都丢
         //   在这条路上；见 `structure-translate.js` 的文件头与 CHANGELOG。
-        ? await generateStructuredTranslation(this.ctx, article, { model: this.aiModel() })
+        // ★ 2026-10-25 起它内部**分批**：长文不再整篇发一次（那会超上下文 / 漏条 /
+        //   多花五倍的钱），改成每批一万 token 上下、单批失败可单独重试。
+        ? await generateStructuredTranslation(this.ctx, article, {
+          model: this.aiModel(),
+          /*
+           * 只记**一批以上**的进度。单批是绝大多数情况，为它打一条日志纯属噪音；
+           * 而「怎么这么慢」只有分批时才会被问，那时这条日志就是唯一的解释。
+           */
+          onChunk: ({ index, total, error, added }) => {
+            if (total <= 1) return;
+            if (error) this.ctx?.logger?.warn?.('[阅读] 译文第 %d/%d 批失败，这几段保留原文：%s', index + 1, total, String(error?.message ?? error));
+            else this.ctx?.logger?.debug?.('[阅读] 译文第 %d/%d 批完成（+%d 条）', index + 1, total, added);
+          },
+        })
         : await generateRewrite(this.ctx, article, { model: this.aiModel() });
       this.store.putAiVersion(key, kind, generated);
       return generated;
@@ -1728,6 +1827,21 @@ export class RssService {
         digestFinishedAt: new Date().toISOString(),
       },
     });
+
+    /**
+     * 跑完之后压一次缓存上限。
+     *
+     * ★ 放在**整轮结束**而不是每章之后：一次全盘扫描是「书的数量」级别的 stat 调用，
+     *   每章跑一次会让生成本身变慢（一章要几十秒，扫描却要几百毫秒，占比不低）。
+     * ★ `protect` 必须带上这本书：刚生成完就被自己的预算淘汰掉，用户看到的是
+     *   「生成成功但点开是空的」—— 比磁盘满更难查。
+     * ★ 失败只记日志：解读已经存好了，整理缓存不该让这一轮变成「失败」。
+     */
+    await enforceDigestBudget({
+      digestsDir: this.digestStore.digestsDir,
+      protect: new Set([bookId]),
+      log: message => this.ctx.logger.info(message),
+    }).catch(error => this.ctx.logger.warn(`dsh-npie-reader: 整理解读缓存失败：${error?.message ?? error}`));
   }
 
   /**
@@ -1743,10 +1857,20 @@ export class RssService {
     const metas = await this.digestStore.listDigested();
     let books = [];
     try {
-      const payload = await this.libraryPayload();
-      books = Array.isArray(payload?.books) ? payload.books : [];
-    } catch {
-      // 书单读不出来不影响「有哪些解读」：书名退化成 meta 里的快照。
+      /**
+       * ★ 书名只能从 `loadLibrary()` 取 —— 它返回的 `library.books` 才是**书架当前**
+       *   那份列表。这里原本调的是 `libraryPayload()`，而那个方法返回的是
+       *   `{ sources, lists, loadedListIds, external, output, legacy }` —— **没有 `books`**。
+       *   于是 `Array.isArray(payload?.books)` 恒为 false、`byId` 恒空、书名恒等于
+       *   `meta.bookTitle`（抽取那一刻的快照），与上面这段注释承诺的**正好相反**。
+       *   整条链上没有任何一处会报错：`?.` 吞掉 undefined，`??` 给出兜底。
+       */
+      const library = await this.loadLibrary();
+      books = Array.isArray(library?.books) ? library.books : [];
+    } catch (error) {
+      // 书单读不出来不影响「有哪些解读」：书名退化成 meta 里的快照。但要留痕 ——
+      // 静默的 catch 正是上面那个缺陷能潜伏这么久的原因。
+      this.ctx?.logger?.debug?.('dsh-npie-reader: 读书架失败，书名退回 meta 快照：%s', String(error?.message ?? error));
     }
     const byId = new Map(books.map(book => [book.id, book]));
     return metas.map((meta) => {
@@ -1767,6 +1891,68 @@ export class RssService {
         generating: this.digestRuns.has(meta.bookId),
       };
     });
+  }
+
+  /**
+   * 用户自己划的线与笔记（`book_annotations` 工具）。
+   *
+   * ★ 这是**唯一**一处把「用户亲手标记『这句重要』」交给模型的地方。它比任何
+   *   推断出来的相关性都强：划线是人在读的时候做的判断，而解读是模型写的摘要 ——
+   *   前者回答「他关心什么」，后者回答「这本书讲了什么」。
+   * ★ **只读，不提供写**：让模型改用户的划线等于让它替人代笔笔记，而笔记的价值
+   *   恰恰在于「这句是我自己想的」。
+   * ★ 书名从 `loadLibrary()` 取（与 `listBookDigests` 同一条链，那里记着为什么
+   *   不能用 `libraryPayload()`）；读不到就退回 bookId，**不编一个书名**。
+   */
+  async listBookAnnotations({ bookId, notesOnly = false, limit = 200 } = {}) {
+    await this.ready;
+    if (bookId !== undefined && (typeof bookId !== 'string' || bookId === '')) {
+      throw new Error('bookId 必须是字符串');
+    }
+    const cap = Math.min(Math.max(Number(limit) || 200, 1), 500);
+
+    // 有哪些书有划线：用 store 自己的 `counts()`（它已经过 bookId 白名单），
+    // 不在这里另读一遍目录 —— 两套「哪些文件算一本书」的判据迟早会漂移。
+    const counting = await this.annotationStore.counts();
+    const ids = bookId === undefined ? Object.keys(counting).sort() : [bookId];
+
+    let books = [];
+    try {
+      const library = await this.loadLibrary();
+      books = Array.isArray(library?.books) ? library.books : [];
+    } catch (error) {
+      this.ctx?.logger?.debug?.('dsh-npie-reader: 读书架失败，划线书名退回 bookId：%s', String(error?.message ?? error));
+    }
+    const byId = new Map(books.map(book => [book.id, book]));
+
+    const out = [];
+    let budget = cap;
+    let totalItems = 0;
+    for (const id of ids) {
+      const all = await this.annotationStore.list(id).catch(() => []);
+      const picked = notesOnly ? all.filter(item => String(item.note ?? '').trim() !== '') : all;
+      if (picked.length === 0) continue;
+      totalItems += picked.length;
+      // 每一本至少给一条：否则「有 30 本书、预算只剩 20 条」时，排在后面的书
+      // 会因为预算用光而**整本消失**，看起来像没划过线。
+      const take = Math.min(picked.length, Math.max(budget, 1));
+      budget = Math.max(budget - take, 0);
+      out.push({
+        bookId: id,
+        title: byId.get(id)?.title ?? '',
+        items: picked.slice(0, take),
+        total: picked.length,
+        notes: picked.filter(item => String(item.note ?? '').trim() !== '').length,
+        truncated: take < picked.length,
+      });
+    }
+
+    return {
+      books: out,
+      totalItems,
+      shown: out.reduce((sum, book) => sum + book.items.length, 0),
+      truncated: out.reduce((sum, book) => sum + book.items.length, 0) < totalItems,
+    };
   }
 
   /** 一本书的目录 + 每章状态（`book_outline` 工具）。书没抽过目录就抛。 */

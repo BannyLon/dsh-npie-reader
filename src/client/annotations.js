@@ -16,6 +16,7 @@
  * ★ 偏移的基准是**文字层容器的 `textContent`**（含 pdf.js 插入的换行/伪空格），
  *   不是「去掉空白后的正文」。两套基准混用会在跨行选区的终点上差几个字符。
  */
+import { TONE_LABELS, TONE_ORDER as TONE_ORDER_FROM_FORMAT } from '../annotation-format.js';
 
 /**
  * 标记色板。
@@ -23,15 +24,13 @@
  * ★ 顺序即界面上色点的顺序，也是 `N` 之类轮转的依据。
  * ★ 名字是**语义**而不是颜色（`yellow` 不是「黄」而是「重点」）：将来调色值
  *   不该连带改一遍数据文件 —— 已经写进用户磁盘的那几百条划线上写着 `yellow`。
+ * ★ **值从 `annotation-format.js` 取，不在这里再写一遍**：导出的 Markdown 也要
+ *   写这四个标签。两边各写一份时，改了一处、另一处不改不会有任何报错，
+ *   只会让「界面上叫重点、导出稿里叫黄」悄悄地发生。
  */
-export const ANNOTATION_TONES = Object.freeze({
-  yellow: '重点',
-  green: '灵感',
-  blue: '疑问',
-  pink: '喜欢',
-});
+export const ANNOTATION_TONES = TONE_LABELS;
 
-export const TONE_ORDER = Object.freeze(Object.keys(ANNOTATION_TONES));
+export const TONE_ORDER = TONE_ORDER_FROM_FORMAT;
 
 /** 与宿主侧 `annotation-store.js` 的两个上限保持一致（两边都有测试盯着）。 */
 export const NOTE_LIMIT = 4000;

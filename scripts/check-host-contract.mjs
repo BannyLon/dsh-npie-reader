@@ -97,6 +97,10 @@ const OWNED_ATTRS = new Set([
   // 三者都是本插件自己的选择器依据，**不是宿主锚点** —— 登记进 HOST_ANCHORS 会被
   // 下面那条「宿主产物里必须命中」的反向检查判红。
   'data-block', 'data-theme', 'data-depth',
+  // 书内搜索（0.26.0）自己写的一个：
+  //   `data-current` —— 当前这一处命中（`true` / `false`），跳转后给它加个描边。
+  //   仍然只是自有 CSS 的选择器依据，不是宿主锚点。
+  'data-current',
 ]);
 
 

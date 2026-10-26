@@ -156,9 +156,37 @@ export function collectSegments(html) {
  *
  * 格式：一行一条、行首 `[编号]`；**同一段（`group` 相同）的几条连在一起，段与段之间空一行**。
  * 空行是给模型看的上下文提示 —— 它丢了也不影响回填，因为解析只认 `[编号]`。
+ *
+ * @param {Array<{id: number, text: string, group: number}>} segments
+ * @param {object} [options]
+ * @param {Array<{text: string}>} [options.context]
+ *   上一批片段的原文，**只给模型理解上下文，不是要它翻的内容**。
+ *   渲染成不带编号的纯文本，并在前后各写一句「不要翻译它」——
+ *   不给编号是关键：解析只认 `[数字]`，没有编号它就**无从**为上文产出条目。
  */
-export function buildTranslatePrompt(segments) {
+export function buildTranslatePrompt(segments, options = {}) {
   const lines = [];
+  const context = Array.isArray(options.context) ? options.context : [];
+  if (context.length > 0) {
+    /*
+     * ★ 这段话必须写死，而且必须放在**最前面**。
+     *
+     *   实测过的失败形态：只写「以下是上文」时，模型会把它当成待翻清单的一部分，
+     *   于是输出的编号整体错位（它给上文也编了号，后面每一条都往后挪）——
+     *   而错位是**静默**的：`[7]` 的译文会被写进第 7 段的标签里，页面结构不错乱，
+     *   只是每一句都换成了别处的译文，比「没翻译」难发现得多。
+     *   所以这里同时做两件事：① 明确说「不要翻译、不要输出编号」；
+     *   ② 编排层只接受**属于本批**的编号（见 `mergeTranslations` 的 id 过滤）。
+     */
+    lines.push('【上文】下面是**上一批**片段的原文，只供你理解上下文与统一术语。');
+    lines.push('不要翻译它，也不要为它输出任何编号。');
+    for (const item of context) {
+      const text = String(item?.text ?? '').trim();
+      if (text !== '') lines.push(text);
+    }
+    lines.push('【正文】以上是上文。下面才是要翻译的片段，从本批的第一条开始编号。');
+    lines.push('');
+  }
   let lastGroup = -1;
   for (const segment of segments) {
     if (lastGroup !== -1 && segment.group !== lastGroup) lines.push('');
@@ -166,6 +194,151 @@ export function buildTranslatePrompt(segments) {
     lines.push(`[${segment.id}] ${segment.text}`);
   }
   return lines.join('\n');
+}
+
+/**
+ * 一批最多带多少字符的原文。
+ *
+ * ★ 这个数不是拍脑袋，是两条约束的交点：
+ *   ① **上限**：一批 12,000 字符的英文原文 ≈ 3,500 token，译回中文再 ≈ 6,000 token，
+ *      加上系统提示词总共一万出头 —— 64k 上下文的模型也留足余量。
+ *      超过这个量，模型开始**漏条目**（它宁可少翻也不肯把输出写太长），
+ *      而漏掉的那几条会保留原文 ⇒ 用户看到中英混排。
+ *   ② **下限**：太小则调用次数暴涨（200k 字符的极端文章会变成二十几次调用，
+ *      每次都带一遍系统提示词，既慢又贵）。
+ *   12,000 是实测 200k 字符文章 = 17 批、常见 3 万字文章 = 3 批的规模，两头都合适。
+ */
+export const TRANSLATE_CHUNK_CHARS = 12000;
+
+/** 一批最多几条。防止「一万个短句」把输出顶爆（字符预算管不住条数）。 */
+export const TRANSLATE_CHUNK_SEGMENTS = 120;
+
+/** 单批的硬上限倍数：宁可切得难看，也不许一个块无限长。 */
+const CHUNK_HARD_FACTOR = 2;
+
+/** 每批带上文几条（默认 3 条，够模型接住代词与术语）。 */
+export const TRANSLATE_CONTEXT_SEGMENTS = 3;
+
+/**
+ * 上文最多带多少字符。
+ *
+ * ★ 这条上限是**必须**的，不是优化。第一版只按「条数」带上文（3 条），
+ *   结果实测一篇 17.5 万字符的长文：每批正文 12,024 字符、上文 12,072 字符 ——
+ *   上文和正文一样长，等于预算凭空翻倍，分批的意义少了一半。
+ *   原因很简单：**一条就可能是整段**（4000 字），按条数限不住字符数。
+ */
+export const TRANSLATE_CONTEXT_CHARS = 1500;
+
+/**
+ * 一批最多切几块 —— 安全阀，不是业务上限。
+ *
+ * 正文入库上限是 200,000 字符（`feeds.js` 的 `MAX_BODY_CHARS`），按 12,000 一批
+ * 最多 17 批。留到 40 是为了「万一有人把上限调大」时不至于悄悄发出上百次调用。
+ */
+export const TRANSLATE_MAX_CHUNKS = 40;
+
+/**
+ * 把片段清单切成若干批。
+ *
+ * 三条规则，按优先级：
+ *   ① **一段话不许从中间断开**（同 `group` 的几条尽量留在同一批）——
+ *      否则模型看到的是半句话，译文要么断头断尾、要么自己脑补；
+ *   ② 到了字符/条数预算就**在段边界**收口；一段话本身超预算时，到硬上限（2 倍）才断；
+ *   ③ 每批带上**上一批的最后几条**作为上下文。
+ *
+ * @param {Array<{id: number, text: string, group: number}>} segments
+ * @param {object} [options]
+ * @param {number} [options.maxChars]
+ * @param {number} [options.maxSegments]
+ * @param {number} [options.contextSegments]
+ * @param {number} [options.maxChunks]
+ * @returns {Array<{segments: Array, context: Array}>}
+ */
+export function planTranslationChunks(segments, options = {}) {
+  const list = Array.isArray(segments) ? segments : [];
+  if (list.length === 0) return [];
+  const maxChars = Number.isFinite(options.maxChars) && options.maxChars > 0 ? options.maxChars : TRANSLATE_CHUNK_CHARS;
+  const maxSegments = Number.isFinite(options.maxSegments) && options.maxSegments > 0 ? options.maxSegments : TRANSLATE_CHUNK_SEGMENTS;
+  const contextSegments = Number.isFinite(options.contextSegments) && options.contextSegments >= 0
+    ? options.contextSegments : TRANSLATE_CONTEXT_SEGMENTS;
+  const contextChars = Number.isFinite(options.contextChars) && options.contextChars >= 0
+    ? options.contextChars : TRANSLATE_CONTEXT_CHARS;
+  const maxChunks = Number.isFinite(options.maxChunks) && options.maxChunks > 0 ? options.maxChunks : TRANSLATE_MAX_CHUNKS;
+
+  /** 每条的固定开销：`[编号] ` 前缀 + 换行。不加上它，字符预算会系统性偏小。 */
+  const overheadOf = (segment) => String(segment.text ?? '').length + 12;
+
+  const chunks = [];
+  let current = [];
+  let size = 0;
+
+  const flush = () => {
+    if (current.length === 0) return;
+    chunks.push(current);
+    current = [];
+    size = 0;
+  };
+
+  for (const segment of list) {
+    const sameGroup = current.length > 0 && current[current.length - 1].group === segment.group;
+    const overBudget = size >= maxChars || current.length >= maxSegments;
+    // ① 到预算了，而且下一条是**新的一段** ⇒ 正好在段边界收口。
+    if (overBudget && !sameGroup) flush();
+    // ② 同一段本身超预算：到硬上限就得断，否则一段话能顶满一整篇。
+    else if (sameGroup && size >= maxChars * CHUNK_HARD_FACTOR) flush();
+    current.push(segment);
+    size += overheadOf(segment);
+  }
+  flush();
+
+  return chunks.map((group, index) => {
+    const previous = index === 0 ? [] : chunks[index - 1];
+    /*
+     * ★ 上文从上一批的**末尾往前**取，条数与字符数**两道**上限同时生效。
+     *   只限条数是不够的：一条可能就是整段（4000 字），3 条能顶一整批的预算。
+     *   超了字符上限时**保留靠后的那些**（离本批最近的上下文才有用）。
+     */
+    const tail = [];
+    let budget = contextChars;
+    if (contextSegments > 0 && previous !== undefined) {
+      for (let i = previous.length - 1; i >= 0 && tail.length < contextSegments; i -= 1) {
+        const text = String(previous[i].text ?? '');
+        if (budget <= 0) break;
+        tail.unshift({ text: text.length > budget ? text.slice(-budget) : text });
+        budget -= Math.min(text.length, budget);
+      }
+    }
+    return {
+      segments: group,
+      // 上文只带 text：编号会诱导模型去翻它，而回填只需要文字。
+      context: tail,
+    };
+  }).slice(0, maxChunks);
+}
+
+/**
+ * 把一批的译文合并进总表。
+ *
+ * ★ **先到先得**，后来的同号译文一律不覆盖。
+ *   理由：上文段落里如果被模型擅自翻译并复用了某个编号，覆盖会把**已经翻对的**
+ *   那一条换成重复内容。先到先得让这种污染只能发生在「本来就还没有」的位置上。
+ *
+ * @param {Map<number, string>} target
+ * @param {Map<number, string>} incoming
+ * @param {Set<number>} [allowed] 只接受这些编号（属于本批的）。省略则不设限。
+ * @returns {number} 本次新增了几条
+ */
+export function mergeTranslations(target, incoming, allowed) {
+  if (!(target instanceof Map) || !(incoming instanceof Map)) return 0;
+  let added = 0;
+  for (const [id, text] of incoming) {
+    if (allowed instanceof Set && !allowed.has(id)) continue;
+    if (target.has(id)) continue;
+    if (typeof text !== 'string' || text.trim() === '') continue;
+    target.set(id, text);
+    added += 1;
+  }
+  return added;
 }
 
 /**
