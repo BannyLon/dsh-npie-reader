@@ -937,8 +937,18 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     }
   };
 
+  /**
+   * 面板打开时回到上次那篇（`npr.view.<频道>`）。
+   *
+   * ★ 以「书」那半边打开时**不恢复**（2026-10-26）：那时 subscribe 页根本没画出来，
+   *   恢复只会在后台打开一篇文章 —— 遇到英文还会顺手生成中文版本并在用户看不见的
+   *   地方把 `active` 切成 `translation`。等用户切回订阅页，看到的是「谁替我译的」。
+   *   这里依赖是空数组 ⇒ 读到的 `mode` 就是**初始模式**，正是要判的那一个。
+   */
   useEffect(() => {
+    if (mode === 'library') return;
     try { const saved = JSON.parse(localStorage.getItem('npr.view.' + channel) || 'null'); if (saved?.key) void openArticle(saved.key, saved.active); } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const refresh = async (target) => {
@@ -1082,8 +1092,28 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
    * ★ 两道闸都要有，缺一条都还会漏：
    *   ① 类名按 `mode === 'feeds'` 才算（见 render 里那行）—— 这一道保证「画不出来」；
    *   ② 这里把状态本身复位 —— 否则回到订阅页时会突然一次「专注」，用户会以为点了什么。
+   *
+   * ★ 同一处还要**取消选中**（2026-10-26 用户报）：读到一半切去书架、再切回来，
+   *   阅读区会直接落在上一篇文章上；那篇是英文时会连带把译文也摆出来 ——
+   *   用户的原话是「这不是我想的」。切模式回来应当是**初始态**：
+   *   右侧是「订阅你关注的作者」那张欢迎页，列表里没有任何一行被选中。
+   *
+   *   `selected` 挂在 ReaderPage 上（不是订阅页那棵子树），所以切走再回来它**还在** ——
+   *   这才是「自动选中第一条」的真身；恢复上次阅读只发生在面板挂载，与此无关。
+   *
+   *   下面的模式守卫用「先复位专注、不是书架就返回」的写法，是为了让复位专注那一行
+   *   保持独立可读（`test/reader-focus-scope.test.mjs` 逐字守着它）。
    */
-  useEffect(() => { if (mode === 'library') setFocused(false); }, [mode]);
+  useEffect(() => {
+    if (mode === 'library') setFocused(false);
+    if (mode !== 'library') return;
+    // 还在路上的正文请求要作废：它回来时会把刚清掉的 selected 又填上。
+    articleRequest.current += 1;
+    setSelected(undefined);
+    setPassage(null);
+    // 伴读是绑在「某一篇文章」上的；选中都没了，它挂在空白的阅读区上只会显示旧上下文。
+    setAskContext(null);
+  }, [mode]);
 
   const activeArticle = selected && !selected.loading ? selected : undefined;
   const versions = activeArticle?.versions;
