@@ -29,7 +29,7 @@
  *   键盘快捷键走 window 级监听，不需要容器可聚焦。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FIND_LIMIT_MAX, findOccurrences, normalizeNeedle, pageIndexText, snippetOf } from '../book-find.js';
+import { FIND_LIMIT_MAX, findOccurrences, normalizeNeedle, pageIndexText, probePages, snippetOf } from '../book-find.js';
 import { formatBytes, progressPercent, stateOf } from '../library.js';
 import { BookCompanion } from './BookCompanion.jsx';
 import { AnnotationPanel } from './AnnotationPanel.jsx';
@@ -39,7 +39,7 @@ import { DigestCard } from './DigestCard.jsx';
 import { Icon } from './icons.jsx';
 import { forgetBook, loadPdfjs, openCachedBook } from './pdfjs.js';
 import {
-  fetchAnnotations, fetchChapterDigest, fetchDigestStatus, fetchOcrPage, ocrBookPage,
+  fetchAnnotations, fetchChapterDigest, fetchDigestStatus, fetchOcrPage, fetchOcrPages, ocrBookPage,
   postAnnotation, postDigestGenerate,
   postDigestPages, postDigestSegment, postDigestStop, resetDigest, saveBookState,
 } from './library-api.js';
@@ -386,18 +386,80 @@ export function BookReader({
   const [findOcr, setFindOcr] = useState({ running: false, done: 0, total: 0, note: '' });
   const findOcrCancel = useRef(false);
   /**
+   * 离开阅读器（回书架 / 换书）时停掉批量识别。
+   *
+   * ★ 不停的话，那个 `for await` 循环会继续渲染一页页 200 DPI 的位图、继续起
+   *   `osascript` —— 而人已经在书架上了，还会以为风扇是别的原因。已经认出来的页
+   *   都会落盘，所以停下**不丢任何东西**：下次点那颗按钮会跳过认过的页。
+   * ★ 只认挂载/卸载（`[]`）：换书那条路在上面那个 effect 里单独停过（页码按书算）。
+   */
+  useEffect(() => () => { findOcrCancel.current = true; }, []);
+  /**
    * 识别完之后**让它 +1**，把检索那个 effect 重新跑一遍。
    *
    * ★ 不这么做就得在这里手写一遍「重搜」，而那等于第二条检索链路 ——
    *   两个循环迟早会在「上限 / 截断 / 进度节流」上分叉。
    */
   const [findRerun, setFindRerun] = useState(0);
+  /**
+   * 「识别整本完了，该重抽一次目录了」的信号（0 = 没有请求过）。
+   *
+   * ★ 为什么要有一个信号、而不是在识别循环结束处直接调 `startDigest`：
+   *   那段循环定义在 `startDigest` **之前**，在渲染期求值依赖数组时会撞上 TDZ
+   *   （本项目已经踩过一次：`toggleFind` before initialization）。这里只递增一个
+   *   计数器，真正的动作由 `startDigest` 后面那个 effect 执行 —— 顺序天然正确。
+   * ★ 为什么用计数器而不是布尔：布尔在「第二次识别整本」时不会变化，effect 不会
+   *   重跑，用户会以为按钮坏了（与目录面板里 `skillSignal` 同一条理由）。
+   */
+  const [ocrResegment, setOcrResegment] = useState(0);
+  /** 已经处理到第几号信号：`startDigest` 的引用变了不能让同一个信号再跑一遍。 */
+  const ocrResegmentDone = useRef(0);
+  /**
+   * 「这本书像不像扫描版」—— 打开面板时**先抽几页看一眼**。
+   *
+   * `idle` 未探测 / `checking` 正在抽 / `text` 至少抽到一页有字 / `scanned` 抽到的页
+   * 全都没有文字层（也没有识别过）。
+   *
+   * ★ 为什么值得多这一步：不探测的话，用户要先输入一个词、等整本索引跑完，
+   *   才在结果里读到「没有找到」—— 而那句话对一个 111 页全是图的 PDF 毫无意义
+   *   （换任何词都一样）。扫描书的搜索**第一步不是搜，是认字**，所以这件事必须在
+   *   他输入之前就摆在面板上。
+   * ★ `scanned` 只是**触发器**：它让索引提前跑（`needle === ''` 也跑），
+   *   而「整本确实没有文字层」这句结论由索引给出（`textless === 总页数`）。
+   *   抽样错了顶多多跑一次索引，不会让界面说错话。
+   */
+  const [findScanProbe, setFindScanProbe] = useState('idle');
+  /**
+   * 整本的 OCR 文本（`{ 页码: 文本 }`），按书缓存。
+   *
+   * ★ 为什么必须进索引：识别的结果已经落在宿主的 `ocr.json` 里了，如果索引不读它，
+   *   「识别这 111 页再搜一次」就只对**当次会话**有效 —— 关掉书再打开，111 页又
+   *   变回「没有文字层」，用户得再等 90 秒，且界面上没有任何东西解释为什么。
+   * ★ 缓存一个 Promise 而不是结果：探测与索引两条路可能同时要它，各自发一次
+   *   请求就是两次读盘。`null` = 没取过（也用作失效标记）。
+   */
+  const findOcrIndex = useRef(null);
   /** 检索令牌：新查询 / 关面板 / 换书都会让它变，旧循环看到不一致就停。 */
   const findRun = useRef(0);
   /** 当前生效的检索词（小写）。渲染命中矩形的时候要用，而那时 `findQuery` 可能已经变了。 */
   const findNeedle = useRef('');
   /** 上次滚动到的位置（`page:findActive`），同一个位置只滚一次。 */
   const findScrollKey = useRef('');
+
+  /**
+   * 整本 OCR 文本，取一次就够（失败当空，不抛）。
+   *
+   * ★ 失败**必须当空**而不是抛：路由没接上（旧版宿主回 404/501）、这本书从没识别过、
+   *   盘上文件坏了 —— 三种情况的正确表现都是「这些页仍然没有文字层」，而不是
+   *   「搜索坏了」。用户对后者没有任何可做的动作。
+   * ★ 写成 `useCallback` 是为了让它进检索 effect 的依赖数组而不每次都触发重跑。
+   */
+  const loadFindOcrIndex = useCallback(async () => {
+    if (findOcrIndex.current !== null) return await findOcrIndex.current;
+    const pending = fetchOcrPages(book.id).catch(() => ({}));
+    findOcrIndex.current = pending;
+    return await pending;
+  }, [book.id]);
 
   /**
    * 点「搜索」：与其它侧栏互斥地打开；再点一次收起。
@@ -491,6 +553,9 @@ export function BookReader({
     findRun.current += 1;
     findTexts.current.clear();
     findOcrVia.current.clear();
+    // 识别结果的缓存也按书失效：换书之后那份 `{ 页码: 文本 }` 指向的是另一本书。
+    findOcrIndex.current = null;
+    setFindScanProbe('idle');
     // 换书时把还在跑的批量识别停掉：页码是**按书**的，让它接着跑会把 A 书的
     // 识别结果写进 B 书的页号上（宿主的 ocr.json 就是按 bookId + page 存的）。
     findOcrCancel.current = true;
@@ -1124,6 +1189,49 @@ export function BookReader({
     return () => { cancelled = true; };
   }, [companion, doc, page, status]);
 
+  // ---- 书内搜索：这本书是不是扫描版（打开面板先看一眼）--------------------
+  /**
+   * 抽 6 页看看有没有文字层。全都空 ⇒ 判定「像扫描版」，让索引提前跑一遍。
+   *
+   * ★ 为什么不等用户输入：扫描书的搜索**第一步不是搜，是认字**。用户打开搜索面板、
+   *   输入一个词、等整本索引跑完，最后读到「没有找到」—— 这句话对他毫无用处，
+   *   换任何词都是同一句。这一步把「要先认字」摆在他输入之前。
+   * ★ 为什么只抽 6 页：网盘书每页都是一次 Range 请求，整本索引在**打开面板**时
+   *   跑是负担不起的（500 页 = 500 次往返）。抽样的结论只用来**决定要不要提前跑
+   *   索引**，不是关于全书的断言 —— 真正的结论由索引给出（`textless === 总页数`）。
+   * ★ 抽到的页顺手写进 `findTexts`：马上要跑的索引就不用再取一遍文字层。
+   * ★ 识别过的页也算「有字」：一本已经认过字的扫描书不该再被判成「要认字」。
+   */
+  useEffect(() => {
+    if (!findOpen || doc === null || status !== 'ready' || numPages <= 0) return undefined;
+    let cancelled = false;
+    setFindScanProbe('checking');
+    (async () => {
+      const ocrIndex = await loadFindOcrIndex();
+      let sawText = false;
+      for (const current of probePages(numPages)) {
+        if (cancelled) return;
+        let text = findTexts.current.get(current);
+        if (text === undefined) {
+          try {
+            const pdfPage = await doc.getPage(current);
+            const content = await pdfPage.getTextContent();
+            text = pageIndexText(content.items);
+          } catch {
+            text = '';
+          }
+          findTexts.current.set(current, text);
+        }
+        if (text.trim() !== '') { sawText = true; break; }
+        const remembered = ocrIndex[current];
+        if (typeof remembered === 'string' && remembered.trim() !== '') { sawText = true; break; }
+      }
+      if (cancelled) return;
+      setFindScanProbe(sawText ? 'text' : 'scanned');
+    })();
+    return () => { cancelled = true; };
+  }, [findOpen, doc, status, numPages, loadFindOcrIndex]);
+
   // ---- 书内搜索：全书索引 + 当前页命中矩形 ---------------------------------
   /**
    * 建索引 + 检索：**按页顺序**跑一遍，边跑边报进度。
@@ -1143,7 +1251,15 @@ export function BookReader({
     if (!findOpen || doc === null || status !== 'ready') return undefined;
     const needle = normalizeNeedle(findQuery);
     findNeedle.current = needle;
-    if (needle === '') {
+    /**
+     * ★ `needle === ''` 但**探测判定这本书像扫描版**时，仍然要把索引跑一遍 ——
+     *   这是「一打开搜索面板就告诉你这本要认字」的唯一实现方式：索引顺手给出
+     *   `textlessPages`（到底哪些页要认），面板据此摆出「识别整本 N 页」。
+     *   没有这条，用户就得先输入一个词、等索引跑完，才读到「没有找到」——
+     *   而那句话对一本全是图的 PDF 是个**错的建议**（换任何词都一样）。
+     */
+    const indexOnly = needle === '' && findScanProbe === 'scanned';
+    if (needle === '' && !indexOnly) {
       findRun.current += 1;
       setFindHits([]);
       setFindActive(-1);
@@ -1167,6 +1283,15 @@ export function BookReader({
        *   「另有 187 页没搜」就永远是一句没有出口的说明。
        */
       const textlessPages = [];
+      /**
+       * 已经识别过的页（宿主的 `ocr.json`），一次读回。
+       *
+       * ★ 没有它，「识别这 111 页再搜一次」只在**当次会话**有效：关掉书再打开，
+       *   111 页又变回「没有文字层」，用户得重认一遍，且没人解释为什么。
+       * ★ 取不到就当没有（`{}`）：这层缓存坏了不能让搜索失败 —— 最差的结果
+       *   也只是「这一次没搜到扫描页」，与 0.26.0 的行为一致。
+       */
+      const ocrIndex = await loadFindOcrIndex();
       let lastFlush = 0;
       setFindState({
         status: 'searching', error: '', done: 0, total: numPages, textless: 0, textlessPages: [], truncated: false,
@@ -1184,6 +1309,15 @@ export function BookReader({
             text = '';
           }
           findTexts.current.set(current, text);
+        }
+        if (text === '') {
+          // 文字层是空的 ⇒ 看这一页以前有没有被识别过（可能就是上一轮补的）。
+          const remembered = ocrIndex[current];
+          if (typeof remembered === 'string' && remembered.trim() !== '') {
+            text = remembered;
+            findTexts.current.set(current, text);
+            findOcrVia.current.add(current);
+          }
         }
         if (text === '') textlessPages.push(current);
         else {
@@ -1223,7 +1357,7 @@ export function BookReader({
       });
     }, 220);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [findOpen, findQuery, doc, status, numPages, findRerun]);
+  }, [findOpen, findQuery, doc, status, numPages, findRerun, findScanProbe, loadFindOcrIndex]);
 
   /** 跳到第 `index` 处命中：换页（如需）+ 把它标成「当前」。 */
   const jumpToFind = useCallback((index) => {
@@ -1253,8 +1387,12 @@ export function BookReader({
    *   很正常。把它们计入 `failed` 如实报出来，比整批作废有用。
    * ★ 认出来的结果同时写进 `findTexts`（本次检索立即生效）**和宿主**（`ocr.json`，
    *   下次打开这本书、伴读那一侧也直接可用）—— 这是同一个动作的两个后果，都该留。
-   * ★ 结束后 `setFindRerun` 让检索 effect 重跑，而不是在这里手写第二遍检索循环：
-   *   两套循环迟早会在「上限 / 截断 / 进度节流」上分叉（见上面 effect 的注释）。
+   * ★ 每认出一页**就地补进命中列表**（不整批跑完才见效）：111 页要 70–90 秒，
+   *   让用户在前 10 页就看到「已经找到 2 处」是这个按钮唯一能撑住等待的东西。
+   *   跑完之后仍然 `setFindRerun` 让检索 effect 重跑一遍 —— 那才是权威结果
+   *   （页码顺序、截断、上限都由同一条链路算），这里的追加只是**临时可见性**。
+   * ★ 结束后 `setFindRerun` 而不是手写第二遍检索循环：两套循环迟早会在
+   *   「上限 / 截断 / 进度节流」上分叉（见上面 effect 的注释）。
    */
   const runFindOcr = useCallback(async () => {
     if (findOcr.running || doc === null) return;
@@ -1268,42 +1406,92 @@ export function BookReader({
       if (findOcrCancel.current) break;
       const target = targets[index];
       try {
-        const pdfPage = await doc.getPage(target);
-        const viewport = pdfPage.getViewport({ scale: OCR_RENDER_DPI / 72 });
-        const canvas = globalThis.document?.createElement?.('canvas');
-        if (canvas === null || canvas === undefined) throw new Error('这个环境拿不到画布，识别不了');
-        canvas.width = Math.max(1, Math.round(viewport.width));
-        canvas.height = Math.max(1, Math.round(viewport.height));
-        const context = canvas.getContext('2d');
-        if (context === null) throw new Error('这个环境拿不到 2D 画布，识别不了');
-        context.fillStyle = '#ffffff';
-        context.fillRect(0, 0, canvas.width, canvas.height);
-        await pdfPage.render({ canvasContext: context, viewport }).promise;
-        const image = canvas.toDataURL('image/jpeg', 0.85);
-        // 位图用完立刻缩到 0：200 DPI 的一页约 15 MB，几百页攒在 GC 队列里会顶到上限。
-        canvas.width = 0;
-        canvas.height = 0;
-        const result = await ocrBookPage(book.id, target, image);
-        const text = typeof result.text === 'string' ? result.text : '';
-        if (text.trim() === '') { failed += 1; continue; }
-        findTexts.current.set(target, text);
-        findOcrVia.current.add(target);
-        recovered += 1;
+        // 这一页已经认过了（上一轮跑到一半就停了、或者别的路径认过）：跳过，不重复花钱花时间。
+        let text = findTexts.current.get(target) ?? '';
+        if (text.trim() === '') {
+          const pdfPage = await doc.getPage(target);
+          const viewport = pdfPage.getViewport({ scale: OCR_RENDER_DPI / 72 });
+          const canvas = globalThis.document?.createElement?.('canvas');
+          if (canvas === null || canvas === undefined) throw new Error('这个环境拿不到画布，识别不了');
+          canvas.width = Math.max(1, Math.round(viewport.width));
+          canvas.height = Math.max(1, Math.round(viewport.height));
+          const context = canvas.getContext('2d');
+          if (context === null) throw new Error('这个环境拿不到 2D 画布，识别不了');
+          context.fillStyle = '#ffffff';
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          await pdfPage.render({ canvasContext: context, viewport }).promise;
+          const image = canvas.toDataURL('image/jpeg', 0.85);
+          // 位图用完立刻缩到 0：200 DPI 的一页约 15 MB，几百页攒在 GC 队列里会顶到上限。
+          canvas.width = 0;
+          canvas.height = 0;
+          const result = await ocrBookPage(book.id, target, image);
+          text = typeof result.text === 'string' ? result.text : '';
+        }
+        if (text.trim() === '') {
+          failed += 1;
+        } else {
+          findTexts.current.set(target, text);
+          findOcrVia.current.add(target);
+          recovered += 1;
+          const needle = findNeedle.current;
+          if (needle !== '') {
+            const found = findOccurrences(text, needle);
+            if (found.length > 0) {
+              setFindHits((previous) => {
+                const next = previous.slice();
+                for (const hit of found) {
+                  if (next.length >= FIND_LIMIT_MAX) break;
+                  next.push({
+                    index: next.length,
+                    page: target,
+                    start: hit.start,
+                    end: hit.end,
+                    via: 'ocr',
+                    snippet: snippetOf(text, hit.start, hit.end),
+                  });
+                }
+                return next;
+              });
+            }
+          }
+        }
       } catch {
         failed += 1;
       }
+      // ★ 进度更新在 `try` 外面：失败的页也要让 `done` 前进，否则一页失败之后
+      //   进度条会停在原地，看起来像「卡住了」，而它其实正在认下一页。
       setFindOcr({ running: true, done: index + 1, total: targets.length, note: '' });
     }
     const stopped = findOcrCancel.current;
     findOcrCancel.current = false;
+    // 新认出来的页进了宿主的 ocr.json ⇒ 那份「整本 OCR」的内存快照过时了。
+    findOcrIndex.current = null;
     // ★ 取消时**不说「认出 N 页」**：那句话会被读成「这一批已经跑完了」，
     //   而剩下的页根本没试。停下来就只说停下来。
     const note = stopped
-      ? '已停止识别，剩下的页没有试'
+      ? `已停止识别，剩下的页没有试（已认出的 ${recovered} 页已保存）`
       : `认出 ${recovered} 页${failed > 0 ? ` · ${failed} 页没认出字` : ''}`;
     setFindOcr({ running: false, done: 0, total: targets.length, note });
-    if (!stopped && recovered > 0) setFindRerun(value => value + 1);
-  }, [findOcr.running, doc, book.id, findState.textlessPages]);
+    // 停止也要重搜：已经认出来的那几十页必须立刻能搜到，否则「停止」等于「白认」。
+    if (recovered > 0) setFindRerun(value => value + 1);
+    /**
+     * ★ 认完一整本扫描书 ⇒ **顺手重抽一次目录**（0.28.0）。
+     *
+     *   识别文本 0.28.0 起会进分段，所以「认完」之后这本书第一次有了可分的正文。
+     *   不自动做的话，用户看到的是一句「认出 111 页」，然后目录面板还是
+     *   「这本书是扫描版」—— 中间那一步（去目录面板点「抽取目录」）没人告诉他。
+     *   这一步**不花钱**（纯本地 CPU），与「抽取目录」同一件事，所以不需要确认。
+     *
+     * ★ 三个前提缺一不可：
+     *   `!stopped` —— 中途停下的那一批只覆盖一部分页，拿它分章会切出一份
+     *     缺章少页的目录，而界面会把它当成这本书的真实结构。
+     *   `recovered > 0` —— 一页都没认出来时重抽只是把同样的空页再算一遍。
+     *   `findScanProbe === 'scanned'` —— 只在「整本没有文字层」的书上做。
+     *     本来就是文字层的书（部分扫描）已经有目录了，重抽会把已生成的解读
+     *     全部标回「未解读」（`segmentAndSave` 的章节状态从 pending 重建）。
+     */
+    if (!stopped && recovered > 0 && findScanProbe === 'scanned') setOcrResegment(value => value + 1);
+  }, [findOcr.running, doc, book.id, findState.textlessPages, findScanProbe]);
 
   /** 停下来：循环在下一页开头看到这个标记就退出（不在 await 中途强杀）。 */
   const stopFindOcr = useCallback(() => {
@@ -1644,6 +1832,22 @@ export function BookReader({
       digestAbort.current = null;
     }
   }, [doc, status, numPages, book.id, notify]);
+
+  /**
+   * 识别整本之后的重抽（信号见 `ocrResegment` 的声明处）。
+   *
+   * ★ 复用 `startDigest` 而不是另写一条「只分段」的路：抽取游标、扫描版标记、
+   *   书架那一行的状态、失败话术全在那一个函数里。另写一条的话，两个入口在
+   *   「cursor 走没走」「scanned 标记清不清」上迟早会不一致，而症状是
+   *   「书架还标着扫描版，但目录已经有了」这种没人能解释的状态。
+   * ★ 只跑一次同一个信号：`startDigest` 的引用会随 `doc` / `notify` 变换而变，
+   *   只看信号的 effect 会在引用变化时重跑 —— 用 `done` 记住已经处理到几号。
+   */
+  useEffect(() => {
+    if (ocrResegment === 0 || ocrResegmentDone.current === ocrResegment) return;
+    ocrResegmentDone.current = ocrResegment;
+    void startDigest();
+  }, [ocrResegment, startDigest]);
 
   /** 「重新抽取」：书换过文件、或上次抽坏了。先删这本书的产物再走一遍。 */
   const rebuildDigest = useCallback(async () => {
@@ -2195,6 +2399,18 @@ export function BookReader({
             progress={findState.total > 0 ? { done: findState.done, total: findState.total } : null}
             unit="page"
             /**
+             * 整本都没有文字层（扫描书）。
+             *
+             * ★ 判据是「这**一轮**索引扫完，且没有文字层的页数 = 总页数」——不是探测。
+             *   探测只决定「要不要提前跑索引」，它对全书的说法不作数（见探测那个 effect）。
+             * ★ 这一条会改**两处文案**：0 命中时的那句话（换词没有用）与按钮的名字
+             *   （「识别整本」而不是「识别这 N 页」）。两句都不是修辞：一本全扫描的书
+             *   里，用户最容易做的事就是换个词重搜 —— 而那永远不会命中。
+             */
+            scanned={findState.status === 'done' && findState.total > 0 && findState.textless === findState.total}
+            /** 索引是自己跑的（用户还没输入）⇒ 面板不显示「共 0 处 / 没有命中」。 */
+            indexOnly={findState.status === 'done' && normalizeNeedle(findQuery) === ''}
+            /**
              * 扫描页的补救出口。
              *
              * ★ 只在**这一轮检索已经跑完**时给（`status === 'done'`）：搜索中途
@@ -2211,7 +2427,9 @@ export function BookReader({
             onOcr={() => { void runFindOcr(); }}
             onOcrStop={stopFindOcr}
             notes={[
-              ...(findState.textless > 0
+              // 整本都是扫描页时，这句话由面板的空态说（并且要说「换词没用」）；
+              // 两边都说一遍只会把「共 0 处」挤到看不见的地方。
+              ...(findState.textless > 0 && findState.textless !== findState.total
                 ? [`另有 ${findState.textless} 页没有文字层（扫描页），这次没有检索它们`]
                 : []),
               ...(findHits.some(hit => hit.via === 'ocr')
@@ -2389,8 +2607,13 @@ export function BookReader({
               style={{ '--npr-fab-span': `${Math.abs(stack[0].y)}px` }}>
               {/* 从上到下。**页码在最上面**：它是整组里唯一要手输的一格，放在离按钮最远处，
                   不会在连点翻页时被误触（误触一个数字框，接下来的方向键就跑去改页码了）。 */}
+              {/* ★ Home / End 挂在这一格的 title 上，不写在底部那行提示里：
+                  那一行在宽面板里受「高度 ≤ 30px」的守卫约束
+                  （`check-book-reading-chrome`），多一段文字就会换行、把整条
+                  元信息顶高，书页区跟着缩一截。而「跳到第几页」正是这两个键
+                  语义所在的那一格 —— 用户想问「怎么一下到最后一页」时看的就是这里。 */}
               <label className="npr-book-fab-slot is-page" style={slotStyle(0)}
-                title={`跳到第几页（共 ${numPages || '—'} 页）`}>
+                title={`跳到第几页（共 ${numPages || '—'} 页） · 键盘 Home / End 直接到首页 / 末页`}>
                 <input className="npr-book-page" type="text" inputMode="numeric" aria-label="页码" value={pageDraft}
                   onChange={(event) => setPageDraft(event.target.value.replace(/[^\d]/g, ''))}
                   onBlur={() => go(Number(pageDraft))}

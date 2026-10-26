@@ -20,7 +20,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import {
-  FIND_LIMIT_MAX, FIND_QUERY_MAX, findOccurrences, normalizeNeedle, pageIndexText, snippetOf,
+  FIND_LIMIT_MAX, FIND_QUERY_MAX, findOccurrences, normalizeNeedle, pageIndexText, probePages, snippetOf,
 } from '../src/book-find.js';
 import { findInEbook } from '../src/host/ebook/index.js';
 import { splitByOverlays } from '../src/client/ebook-marks.js';
@@ -325,5 +325,47 @@ describe('阅读器接线（PDF / 电子书各自一份）', () => {
   it('★ 反向对照：把面板从树里摘掉，守卫必须变红', () => {
     const broken = readCode('BookReader.jsx').replace(/<BookFindPanel/g, '<div');
     assert.ok(findWiringViolations(broken, { unit: 'page' }).some(item => item.includes('BookFindPanel')));
+  });
+});
+
+/**
+ * 「这本书有没有文字层」的抽样页（0.27.1）。
+ *
+ * 它只决定**要不要在用户输入之前就把整本索引跑一遍**，所以判据是「覆盖两端 + 不重复」：
+ *  - 只抽前几页 ⇒ 一本「封面是扫描件、正文有字」的书会被误判成全扫描；
+ *  - 只抽中间 ⇒ 短的扫描书（10 页）会漏掉封面与末页；
+ *  - 抽重复的页 ⇒ 6 个名额实际只看 3 页，白花两次 `getTextContent`。
+ */
+describe('probePages：抽样页', () => {
+  it('长书取 6 页，首尾都含在内、且严格递增不重复', () => {
+    const pages = probePages(111);
+    assert.equal(pages.length, 6);
+    assert.equal(pages[0], 1);
+    assert.equal(pages.at(-1), 111);
+    assert.deepEqual([...pages].sort((a, b) => a - b), pages);
+    assert.equal(new Set(pages).size, pages.length);
+  });
+
+  it('1–3 页的短书不重复、不越界', () => {
+    assert.deepEqual(probePages(1), [1]);
+    assert.deepEqual(probePages(2), [1, 2]);
+    for (const total of [1, 2, 3, 4, 5]) {
+      const pages = probePages(total);
+      assert.equal(new Set(pages).size, pages.length, `total=${total} 有重复页`);
+      assert.ok(pages.every(page => page >= 1 && page <= total), `total=${total} 越界`);
+    }
+  });
+
+  it('0 页 / 坏入参不返回页码（空数组，而不是 [1]）', () => {
+    for (const value of [0, -5, undefined, null, 'abc', NaN]) {
+      assert.deepEqual(probePages(value), [], `${String(value)} 应该没有抽样页`);
+    }
+  });
+
+  it('★ 抽样只是触发器：它不负责关于全书的结论', () => {
+    // 只抽 1 页是没有意义的（那一页可能正好是扉页），所以 `count` 的下限是 2 ——
+    // 传 1 会得到首尾两页。这里钉住的是「下限 2」，不是「照抄入参」。
+    assert.deepEqual(probePages(500, 1), [1, 500]);
+    // 真正的结论在 BookReader 里由 `textless === 总页数` 给出：抽样只决定要不要提前跑索引。
   });
 });

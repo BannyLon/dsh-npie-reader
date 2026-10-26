@@ -24,12 +24,12 @@
  *   ⑦ 沉浸态只藏了工具栏，没藏**书架那一列**（用户要的是「左边两列都不显示」）。
  *
  * 判据（每条都配一次反向对照：注入坏规则之后必须变红）：
- *   ⓪ 分工：源文本里顶部恰好 6 个 `npr-book-pill-item`、浮动列恰好 7 个 `npr-book-fab-slot`，
+ *   ⓪ 分工：源文本里顶部恰好 7 个 `npr-book-pill-item`、浮动列恰好 7 个 `npr-book-fab-slot`，
  *      两边互不串味；hover 展开的那条 CSS 已经**不存在**；
  *   ① 顶部只剩一条 10px 拖动条，铺满宽度、透明；
  *   ② 元信息行在正常流里（底边不越过舞台顶边）、只有一行、**不含书名**；
  *   ③ 胶囊在顶部、水平居中、装得下、宽处带文字；
- *   ④ 胶囊恰好 6 项，且不含任何调档类；
+ *   ④ 胶囊恰好 7 项，且不含任何调档类；
  *   ⑤ FAB 贴右下角（14px）、落在面板内、真的浮着、在右半区；
  *   ⑥ 收起态：7 格全 `visibility: hidden` + `opacity: 0` + `pointer-events: none`，
  *      并且**收回到按钮圆心**、缩到 0.6 倍（这是动画起点）；
@@ -234,14 +234,18 @@ const FAB_SRC = bookSrc.slice(FAB_START, FAB_END);
 const countIn = (text, needle) => text.split(needle).length - 1;
 
 /**
- * 顶部胶囊（开关类）应该有 6 项；右下角扇出（调档类）应该有 7 格。
+ * 顶部胶囊（开关类）应该有 7 项；右下角扇出（调档类）应该有 7 格。
  *
  * ★ 0.24.0 曾从 6 变 7（加了「导出」那一格），**0.24.1 又回到 6**：用户否决了
  *   那个位置 ——「把导出放在菜单条毫无意义」。入口搬到目录面板里「生成解读」右边
  *   （那颗 `book-to-skill`）。这条计数正是「分工有没有做反」的判据：胶囊里只留
  *   与「这本书」有关的**视图开关**，产出动作不进这一排。
+ * ★ **0.26.0 起是 7**：书内搜索（⌘F）也是一颗视图开关，它开的是整本书的检索面板，
+ *   和「划线 / 目录」同一档，理应在这一排。当时只改了组件、没改这条计数 ——
+ *   于是这条判据从 0.26.0 起一直是红的（重门禁不在默认那 8 项里，谁也没看见）。
+ *   计数是**契约**：加一颗胶囊就必须同时改这里，否则红着的门禁会被当成噪音。
  */
-const PILL_COUNT = 6;
+const PILL_COUNT = 7;
 const SLOT_COUNT = 7;
 
 /** 去掉注释的 CSS：断言「某类名已清干净」时必须忽略注释（注释里写过的名字不算规则）。 */
@@ -286,6 +290,9 @@ const html = `<!doctype html><meta charset="utf-8">
           </button>
           <button type="button" class="npr-book-pill-item" id="pillMarks" aria-pressed="false" title="划线 / 笔记：4 条">
             <svg width="14" height="14" aria-hidden="true"><path d="M2 11h10" stroke="currentColor"/></svg><span>划线 4</span>
+          </button>
+          <button type="button" class="npr-book-pill-item" id="pillFind" aria-pressed="false" title="书内搜索（⌘F）">
+            <svg width="14" height="14" aria-hidden="true"><circle cx="6" cy="6" r="4" fill="none" stroke="currentColor"/></svg><span>搜索</span>
           </button>
           <button type="button" class="npr-book-pill-item" id="pillDigest" aria-pressed="false" title="本书目录">
             <svg width="14" height="14" aria-hidden="true"><path d="M4 3v9" stroke="currentColor"/></svg><span>目录 29</span>
@@ -912,7 +919,7 @@ try {
   const slotInChrome = countIn(CHROME_SRC, 'npr-book-fab-slot');
   const slotInFab = countIn(FAB_SRC, 'npr-book-fab-slot');
   const pillInFab = countIn(FAB_SRC, 'npr-book-pill-item');
-  check(`⓪ 顶部胶囊恰好 ${PILL_COUNT} 项（标记读完 / 伴读 / 划线 / 目录 / 配色 / 沉浸）`,
+  check(`⓪ 顶部胶囊恰好 ${PILL_COUNT} 项（标记读完 / 伴读 / 划线 / 搜索 / 目录 / 配色 / 沉浸）`,
     pillInChrome === PILL_COUNT,
     `BookReader.jsx 的 .npr-book-chrome 块里 npr-book-pill-item 出现 ${pillInChrome} 次`);
   check(`⓪ 右下角恰好 ${SLOT_COUNT} 格（页码 / 上下页 / 适宽 / 适应窗口 / 放大 / 缩小）`,

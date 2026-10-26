@@ -507,3 +507,90 @@ describe('book_annotations：把用户亲手标的重点交给模型', () => {
     );
   });
 });
+
+/**
+ * 扫描版：两个工具都必须说真话，而不是「像一本正常的书那样回答」。
+ *
+ * ★ 这一组守的是**话术**而不是数据，因为它坏掉的样子是静默的：
+ *   扫描书分不出章节（`mode === 'scanned'`、`chapters: []`），如果照常回
+ *   「这本书没有第 1 章」「已解读 0 · 未解读 0」，模型就会替用户去试
+ *   「换一章」「重新抽一次目录」—— 这两条路在扫描书上**永远走不通**。
+ *   同一个病 0.27.1 在阅读器那侧修过一次（在全是图的书里建议「换个词」）。
+ *
+ * ★ 0.28.0 这条判据的**事实基础变了**：识别文本现在会进分段（`page-text.js`），
+ *   所以「识别完就有章节」是可以兑现的话，而上一版写在这里的「识别出来的文字
+ *   不进分段」变成了假话。下面第 1 条用例断言的就是这个翻转 —— 留着旧断言
+ *   等于让测试替一句假话站岗。
+ */
+async function bootScanned({ ocrKnown = 0 } = {}) {
+  const harness = await bootService({});
+  const { service } = harness;
+  await service.ready;
+  await service.digestStore.writeOutline(BOOK_ID, []);
+  await service.digestStore.writeMeta(BOOK_ID, {
+    bookId: BOOK_ID,
+    bookTitle: '某本扫描书',
+    mode: 'scanned',
+    pageCount: 111,
+    extract: { ocrPages: ocrKnown, ocrKnown },
+    chapters: [],
+  });
+  return harness;
+}
+
+describe('扫描版：不给出走不通的下一步', () => {
+  it('book_outline 说清「扫描版分不出章节」，并给出**能走通**的那一步', async () => {
+    const { tools } = await bootScanned();
+    const out = await runTool(tools, 'book_outline', { bookId: BOOK_ID });
+    assert.match(out, /扫描版/);
+    assert.match(out, /没有文字层/);
+    assert.match(out, /识别整本/);
+    // ★ 0.28.0 的真相：识别完会重抽目录。这句是「用户照做之后真的会有结果」的承诺。
+    assert.match(out, /自动重新分段/);
+    // ★ 反向对照：不再出现「识别出来的文字不进分段」。那句话曾经是真的，
+    //   链路改完之后就是假话 —— 工具里留一句过期的断言，比没有更坏。
+    assert.equal(out.includes('不进分段'), false, '还在说识别不进分段（0.28.0 起会进）');
+    // 反向对照：0 章时不能再输出「已解读 0 · 略过 0 …」，那等于把 0 章
+    // 当成一份正常的章节目录来汇报。
+    assert.equal(out.includes('已解读'), false);
+  });
+
+  it('★ 只认了一部分：说「只识别了 40 / 111 页」，而不是叫人重认整本', async () => {
+    const { tools } = await bootScanned({ ocrKnown: 40 });
+    const out = await runTool(tools, 'book_outline', { bookId: BOOK_ID });
+    assert.match(out, /只识别了 40 \/ 111 页/);
+    // 反向对照：这种情况不能说「还没有识别过的页」—— 那是另一档，会让人从头再来。
+    assert.equal(out.includes('还没有识别过的页'), false);
+  });
+
+  it('book_chapter 不说「没有第 1 章」，也不让人「重新抽取目录」', async () => {
+    const { tools } = await bootScanned();
+    await assert.rejects(
+      () => runTool(tools, 'book_chapter', { bookId: BOOK_ID, n: 1 }),
+      (error) => {
+        assert.match(error.message, /扫描版/);
+        assert.match(error.message, /识别整本/);
+        // ★ 断言的是「不以老话术开头」而不是「不含这几个字」：新话术里刻意写了
+        //   「不是『没有第 1 章』」，用 includes 等于让文案自己把自己判红。
+        assert.equal(error.message.startsWith('这本书没有第'), false);
+        assert.equal(error.message.includes('重新抽取目录'), false);
+        assert.equal(error.message.includes('不进分段'), false);
+        return true;
+      },
+    );
+  });
+
+  it('反向对照：有文字层但没分出章节，仍走「共 0 章」那条老话术', async () => {
+    const { service, tools } = await bootBook();
+    await service.digestStore.writeOutline(BOOK_ID, []);
+    await assert.rejects(
+      () => runTool(tools, 'book_chapter', { bookId: BOOK_ID, n: 1 }),
+      (error) => {
+        assert.match(error.message, /没有第 1 章/);
+        // 不是扫描版就别抢扫描版的台词：后者会让人去识别一本本来就有字的书。
+        assert.equal(error.message.includes('扫描版'), false);
+        return true;
+      },
+    );
+  });
+});

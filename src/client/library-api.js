@@ -429,6 +429,29 @@ export async function fetchOcrPage(bookId, page) {
 }
 
 /**
+ * 读**整本**已经识别过的页：`{ 页码: 文本 }`。
+ *
+ * ★ 这本书的搜索要它：扫描书的索引里，没有文字层的页要拿识别结果去填 ——
+ *   一页一次 `fetchOcrPage` 是「上百次请求 + 上百次读同一份 JSON」。
+ * ★ 只收正整数键、只收字符串值：这份数据来自一个**可能被手改过**的 JSON 文件，
+ *   而它会被直接拼进检索文本。坏形状当没有，不抛 —— 搜索不该因为缓存脏了而失败。
+ */
+export async function fetchOcrPages(bookId) {
+  const body = await jsonRequest(`/ocr/pages?bookId=${encodeURIComponent(bookId)}`);
+  const pages = body?.pages;
+  if (pages === null || typeof pages !== 'object') return {};
+  const out = {};
+  for (const [key, text] of Object.entries(pages)) {
+    const page = Number(key);
+    if (!Number.isInteger(page) || page < 1) continue;
+    if (typeof text !== 'string') continue;
+    if (text.trim() === '') continue;
+    out[page] = text;
+  }
+  return out;
+}
+
+/**
  * 让宿主对**这一页的位图**做本地 OCR。
  *
  * @param {string} bookId

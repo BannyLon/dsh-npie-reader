@@ -46,6 +46,7 @@ import { FIND_QUERY_MAX } from '../book-find.js';
 import { BOOKS_PAGE_LIMIT, LIBRARY_API_PREFIX, PDFJS_VENDOR_PREFIX, isBookId, isReadable } from '../library.js';
 import { contentRange, formatRange, mimeForExtension, parseRange, unsatisfiedContentRange } from '../range.js';
 import { segmentBook } from './segment.js';
+import { overlayOcrPages } from './page-text.js';
 import { digestOutline, findInEbook, pagesOf, sectionIndex } from './ebook/index.js';
 import { OCR_MAX_IMAGE_BYTES, decodeImagePayload, sniffImageExt } from './ocr.js';
 import { isTrustedLocalRequest } from './trust.js';
@@ -498,14 +499,28 @@ export function makeLibraryRoutes(handlers) {
      *   判成**扫描版**，界面上于是写着「这本书是扫描版，没有可抽取的文字」——
      *   说得斩钉截铁且完全不对（它的正文就是我们刚从文件里解出来的）。
      */
+    /**
+     * ★ 扫描页先补上识别文本，**再分段、再切原文**（0.28.0）。
+     *
+     *   在这之前，本机 OCR 的产物只喂了「书内搜索」一条路：用户点「识别整本」等
+     *   70–90 秒，搜索能用了，目录面板却还是「这本书是扫描版」—— 因为分段读的是
+     *   PDF 自己的文字层，而那层是空的。同一个 `ocr.json` 两处各读一遍并不难，
+     *   难的是「哪一页该用哪一份文字」这条判据只能有一个答案（见 `page-text.js`）。
+     *
+     * ★ 叠加发生在**内存里**，不回写 `pages.jsonl`：那个文件是抽取的原始记录
+     *   （`task.cursor` 按它前进），把 OCR 混进去之后，「这段文字是书写的还是认出来的」
+     *   就再也分不开了。`text/chNN.txt` 本来就是派生物，用它承载叠加结果是正确的。
+     */
+    const ocrPages = await digestStore.readOcrPages(bookId).catch(() => ({}));
+    const overlaid = overlayOcrPages(raw, ocrPages);
     const result = segmentBook({
-      pages: raw.map(page => page.lines),
+      pages: overlaid.pages.map(page => page.lines),
       outline,
       pageCount: total,
       assumeText: mode === 'ebook',
     });
     await digestStore.writeOutline(bookId, result.chapters);
-    const written = await digestStore.writeChapterTexts(bookId, raw, result.chapters);
+    const written = await digestStore.writeChapterTexts(bookId, overlaid.pages, result.chapters);
     const charsByN = new Map(written.map(item => [item.n, item.chars]));
     const previous = (await digestStore.readMeta(bookId)) ?? {};
     const meta = {
@@ -513,7 +528,18 @@ export function makeLibraryRoutes(handlers) {
       bookId,
       fingerprint: fingerprint ?? previous.fingerprint,
       pageCount: total,
-      extract: result.stats,
+      /**
+       * 两个不同的数，别混：
+       *   `ocrPages` 正文里**用了**识别文本的页数（≥ 40 字、真的顶上去了）。
+       *   `ocrKnown` 有识别记录的页数（哪怕只认出两个页码）。
+       * 前者说明「这本书有多少页的文字不该逐字引用」，后者回答「用户认了多少页、
+       * 还差多少」—— 用前者回答后者会让人去重认已经认过的页。
+       */
+      extract: {
+        ...result.stats,
+        ocrPages: overlaid.used.length,
+        ocrKnown: Object.keys(ocrPages).length,
+      },
       mode: mode ?? result.mode,
       chapters: result.chapters.map(chapter => ({
         n: chapter.n,
@@ -663,6 +689,23 @@ export function makeLibraryRoutes(handlers) {
         } catch (error) {
           return sendJson(res, 500, { ok: false, error: error.message });
         }
+      }
+
+      // ---- 整本 OCR 文本（`GET /ocr/pages`）---------------------------------
+      //
+      // ★ 为什么不能靠上面那条一页一页取：书内搜索给整本建索引，扫描书动辄上百页
+      //   ⇒ 上百次 HTTP + 上百次「读整份 ocr.json」。这里一次读盘、一次回。
+      // ★ 只回**真的认出来的页**（空文本不占位）：调用方拿它去填「没有文字层」的页，
+      //   `''` 与「这一页没有键」在那里是同一件事，回空串只会让响应胖一倍。
+      if (rest === '/ocr/pages') {
+        if (!ocrReady) {
+          return sendJson(res, 501, { ok: false, error: '本地 OCR 没有接上（缺少 ocrRunner 或 digestStore）' });
+        }
+        if (method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+        const bookId = String(queryOf(req).get('bookId') ?? '');
+        if (!isBookId(bookId)) return sendJson(res, 400, { ok: false, error: '无效的书 id' });
+        const pages = await digestStore.readOcrPages(bookId);
+        return sendJson(res, 200, { ok: true, pages, count: Object.keys(pages).length });
       }
 
       // ---- 划线 / 笔记 ------------------------------------------------------
@@ -938,10 +981,14 @@ export function makeLibraryRoutes(handlers) {
           // 「重新抽取」：书换过文件、或者上次抽到一半把页面抽坏了。
           // ★ 只删这本书自己的目录（`digestStore.remove` 里 bookId 已经过校验），
           //   不碰别的书、也不碰 data.json。
+          // ★ **默认保住识别结果**（0.28.0）：这条路的重心是重做分段，而扫描书的
+          //   分段恰恰依赖 `ocr.json` —— 一起删掉等于「点一下重新抽取，回到扫描版」。
+          //   真要清干净（换过文件、上一本的识别文本会读错页）时用 `?wipe=1`。
           if (method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
           try {
-            await digestStore.remove(bookId);
-            return sendJson(res, 200, { ok: true });
+            const wiped = queryOf(req).get('wipe') === '1';
+            const removed = await digestStore.remove(bookId, { keepOcr: !wiped });
+            return sendJson(res, 200, { ok: true, ...removed });
           } catch (error) {
             return sendJson(res, 400, { ok: false, error: error.message });
           }

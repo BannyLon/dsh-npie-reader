@@ -321,6 +321,27 @@ describe('ocr.json：一页一条，空文本不落盘', () => {
     assert.equal(await store.readOcrPage('l-ocr_never', 1), '');
   });
 
+  /**
+   * 整本读回（0.27.1）。
+   *
+   * 这是「识别过一次，以后就都算数」的落地点：书内搜索给整本建索引时，
+   * 没有文字层的页要拿它去填。**键必须是 number 的合法页号、值必须是纯文本** ——
+   * 它会被直接拼进检索文本，形状错了就是错误的出处被当成本文。
+   */
+  it('readOcrPages：一次读回整本，只含真的认出字的页', async () => {
+    await store.putOcrPage('l-ocr_all', 7, { text: '她和一个男人有来往吗？', ms: 640 });
+    await store.putOcrPage('l-ocr_all', 8, { text: '奥斯曼改建巴黎时用的那种大方石', ms: 660 });
+    const pages = await store.readOcrPages('l-ocr_all');
+    assert.deepEqual(Object.keys(pages).sort((a, b) => Number(a) - Number(b)), ['7', '8']);
+    assert.equal(pages[7], '她和一个男人有来往吗？');
+    assert.equal(typeof pages[8], 'string', '值必须是纯文本，不是 { text, at, ms }');
+  });
+
+  it('readOcrPages：没有识别过 ⇒ 空对象（不是 undefined，也不是抛）', async () => {
+    assert.deepEqual(await store.readOcrPages('l-ocr_never'), {});
+    assert.deepEqual(await store.readOcrPages('l-ocr_broken'), {});
+  });
+
   it('★ 空文本不写 —— 否则「这一页认不出字」会被永久钉死', async () => {
     const result = await store.putOcrPage('l-ocr_1', 62, { text: '   \n  ', ms: 300 });
     assert.deepEqual(result, { written: false, pages: 0 });

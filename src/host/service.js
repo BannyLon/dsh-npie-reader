@@ -1968,6 +1968,15 @@ export class RssService {
       title: meta.bookTitle ?? '',
       mode: meta.mode ?? '',
       pageCount: meta.pageCount ?? null,
+      /**
+       * 正文里有多少页是**本机识别**出来的（不是书自带的文字层）。
+       *
+       * ★ 它让「0 章」这件事分得清：一页都没认过（真的没字）与认了几十页却还不够
+       *   分段（再认就行），用户要做的下一步完全不同。没有这个数，模型只能猜。
+       */
+      ocrPages: Number(meta.extract?.ocrPages) || 0,
+      /** 有识别记录的页数（含「只认出几个字」的页）。回答「还差多少页要认」。 */
+      ocrKnown: Number(meta.extract?.ocrKnown) || 0,
       chapters: outline.map(chapter => {
         const state = statusOf.get(chapter.n);
         return {
@@ -2001,7 +2010,28 @@ export class RssService {
     if (meta === null) throw new Error('这本书还没有抽取目录');
     const outline = (await this.digestStore.readOutline(bookId)) ?? [];
     const chapter = outline.find(item => item.n === n);
-    if (chapter === undefined) throw new Error(`这本书没有第 ${n} 章（共 ${outline.length} 章）`);
+    if (chapter === undefined) {
+      /**
+       * ★ 扫描版的书**不是「没有第 N 章」**：它每页 0 个文字项，分段这一步什么
+       *   都分不出来。把两者说成同一句的后果与 0.27.1 修掉的那条一模一样 ——
+       *   模型会照着「换一章再试」去回答，而这本书换到最后一章也还是空的。
+       * ★ 0.28.0 起识别文本**会进分段**（`page-text.js` 叠加 → `segment.js`），
+       *   所以「识别完会自动重新分段」是能兑现的话。上一版这条消息里写着
+       *   「识别出来的文字不进分段」—— 那句话当时为真，改了链路之后就是假话，
+       *   留着一句假承诺，用户会照着做一遍再回来问为什么还是没有。
+       */
+      if (outline.length === 0 && meta.mode === 'scanned') {
+        const known = Number(meta.extract?.ocrKnown) || 0;
+        const pages = Number(meta.pageCount) || 0;
+        const why = known === 0
+          ? '整本没有文字层，也还没有识别过的页'
+          : pages > 0 && known < pages
+            ? `整本没有文字层，目前只识别了 ${known} / ${pages} 页`
+            : '整本没有文字层，识别出来的字也太少';
+        throw new Error(`《${meta.bookTitle || bookId}》是扫描版（${why}），所以没能分出章节 —— 不是「没有第 ${n} 章」，是这本书现在没有可读的章节。在阅读器里打开这本书，⌘F →「识别整本 N 页」，识别完会**自动重新分段**（识别文本会进分段），之后 chapter 与 search 都能用。`);
+      }
+      throw new Error(`这本书没有第 ${n} 章（共 ${outline.length} 章）`);
+    }
     if (raw) {
       const text = await this.digestStore.readChapterText(bookId, n);
       if (text === null) throw new Error(`第 ${n} 章的原文没有落盘（重新抽取目录可以补上）`);

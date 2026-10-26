@@ -472,8 +472,40 @@ export function createToolDefinitions(service) {
           return `- ${String(chapter.n).padStart(2, '0')} ${chapter.title || '（无标题）'}${pages} | ${label}${model}${error}`;
         });
         const total = outline.chapters.length;
+        const head = `《${outline.title}》 (${outline.bookId}) — ${total} 章 · ${outline.mode || '未知分段'}${outline.pageCount === null ? '' : ` · ${outline.pageCount} 页`}`;
+        /**
+         * ★ 「0 章」不是一种情况，至少两种，下一步完全不同：
+         *   · **扫描版**：整本没有文字层，分段从第一页就什么都读不到。这时说
+         *     「这本书没有章节」是假话 —— 它有章节，是我们看不见。让模型去
+         *     「换一章试试」，它会一章章读到空（0.27.1 修的是同一类错：在全是
+         *     图的书里建议换个词）。
+         *   · 有文字层但分段没命中目录/标题：那是分段没认出来，换不了章也说得通。
+         *
+         * ★ 0.28.0 起识别文本**会进分段**（`page-text.js` 叠加 → `segment.js`）。
+         *   所以扫描版这条话术要跟着改，而且必须分三档 —— 区别在「认了多少页」：
+         *     · `ocrPages === 0`：一页都没认过。下一步是识别整本（认完自动重抽目录）。
+         *     · `0 < ocrPages < pageCount`：认了一部分，还不足以分出章节。下一步是
+         *       接着认剩下的页，而不是「换个词」「换一章」。
+         *     · 认满了仍然 0 章：分段没在识别文本里找到目录/章标题。这一步就走不通了，
+         *       老实说走不通，别让人再刷一遍识别。
+         *   上一版这里写的是「识别出来的文字不进分段」—— 那句话在当时是真的，
+         *   现在是假的；工具里留着一句已经过期的断言，比没有更坏。
+         */
+        if (total === 0) {
+          const known = Number(outline.ocrKnown) || 0;
+          const pageCount = Number(outline.pageCount) || 0;
+          const scanned = outline.mode === 'scanned';
+          const ocrLine = !scanned
+            ? '这本书没能分出章节（分段没有命中目录或标题）。book_chapter 对它没有内容可给；用户划过的原文不受影响，用 book_annotations 读。'
+            : known === 0
+              ? '这本书是**扫描版**（整本没有文字层），也还没有识别过的页，所以一章都分不出来：book_chapter 对它没有内容可给，book_search 也搜不到它。用户那侧在阅读器里按 ⌘F，「搜索」面板会给出「识别整本 N 页」—— 识别完会**自动重新分段**（识别文本会进分段），这本书就能读了。'
+              : pageCount > 0 && known < pageCount
+                ? `这本书是**扫描版**，目前只识别了 ${known} / ${pageCount} 页，还不够分出章节。下一步是把剩下的页认完（阅读器 ⌘F →「识别这 N 页」），不是换一章、也不是换一个词 —— 认完会自动重新分段。`
+                : `这本书是**扫描版**，${known} 页都识别过了，但认出来的字太少（多半是空白页、图片页、插图扉页），分不出章节。book_chapter 对它没有内容可给；要原话用 book_search（能搜到认出来的那些页），要用户划过的句子用 book_annotations。`;
+          return [head, ocrLine, ''].join('\n');
+        }
         return [
-          `《${outline.title}》 (${outline.bookId}) — ${total} 章 · ${outline.mode || '未知分段'}${outline.pageCount === null ? '' : ` · ${outline.pageCount} 页`}`,
+          head,
           `已解读 ${counts.done} · 略过 ${counts.skipped} · 失败 ${counts.failed} · 未解读 ${counts.pending}`,
           '',
           ...lines,

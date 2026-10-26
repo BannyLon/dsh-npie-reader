@@ -42,7 +42,7 @@ const MODE_LABEL = {
   toc: '来自书的目录页（按标题在正文里定位）',
   heading: '按章节标题识别',
   window: '这本书没有可识别的章节，按页分段',
-  scanned: '扫描版：没有文字层',
+  scanned: '扫描版：没有文字层，也没有识别过',
   ebook: '来自这本书自己的章节结构',
 };
 
@@ -52,7 +52,7 @@ const MODE_HINT = {
   toc: '从书前的目录页读出条目标题，再在正文里反查起始页。',
   heading: '页面首行匹配「第 N 章 / Chapter N」这类标记。',
   window: '没有找到章节结构，按固定页数切开 —— 这里的「第 12–28 页」不是章名。',
-  scanned: '整本都是图片，没有可抽取的文字。需要先做 OCR 才能解读。',
+  scanned: '整本都是图片，没有可抽取的文字。先在阅读器里识别（⌘F →「识别整本」），识别文本会进分段。',
   ebook: 'EPUB / MOBI 的目录与正文文件一一对应，「页」就是书里的「节」。',
 };
 
@@ -107,6 +107,15 @@ export function BookDigestPanel({
 
   const chapters = Array.isArray(outline) ? outline : [];
   const mode = meta?.mode ?? '';
+  /**
+   * 扫描版那一段要说出「已经认了几页」。
+   *
+   * ★ 用 `ocrKnown`（有识别记录的页数）而不是 `ocrPages`（正文里用了识别文本的页数）：
+   *   前者回答「还要认多少」，后者回答「多少页的文字不该逐字引用」。
+   *   用后者说进度，会把「认过但只认出两个字」的页算成没认，让人反复重认。
+   */
+  const ocrKnown = Number(meta?.extract?.ocrKnown) || 0;
+  const pageCount = Number(meta?.pageCount) || 0;
   const isPan = book?.source === 'pan';
   const extracting = job?.running === true;
   const busy = extracting || generating;
@@ -197,14 +206,23 @@ export function BookDigestPanel({
           <Icon name="file-check" size={20} />
           <p>这本书是扫描版 —— 整本都是图片，没有可抽取的文字。</p>
           {/*
-            ★ 「网盘书」与「本地书」的下一步**不是同一件事**：网盘上那份改不了，必须
-              下载 → OCR → 作为「本地书源」加回来。以前这里只有一句「给它加一层文字，
-              再重新打开」，网盘书的用户照做会卡在「我到底改的是哪个文件」。
+            ★ 0.28.0：**先给插件自己的那条路**。以前这里只写「下载 → ocrmypdf →
+              作为本地书源加回来」，那是一条要用户离开阅读器、装工具、再导一次书的
+              路；而插件里本来就有本机识别（⌘F 面板），而且识别文本 0.28.0 起
+              进分段 —— 认完这本书直接就有目录了。把远路写在前面，等于把一个
+              已经在手边的答案藏起来。
+            ★ 「认了几页」要说出来：认了 40 / 111 页的人看到「扫描版」会以为识别
+              没生效，从而再点一遍。说出进度，他才知道下一步是「接着认」。
           */}
           <small>
+            {ocrKnown > 0
+              ? `已经识别了 ${ocrKnown}${pageCount > 0 ? ` / ${pageCount}` : ''} 页，还不够分出章节。在阅读器里按 ⌘F →「识别这 N 页」把剩下的认完，认完会自动重新分段。`
+              : '在阅读器里按 ⌘F ——「搜索」面板会给出「识别整本 N 页」，用 macOS 自带的文字识别，不联网、不花钱；认完会自动重新分段，这里就有目录了。'}
+          </small>
+          <small>
             {isPan
-              ? '要用它做解读，得先在本地给它加一层文字（OCR，比如 ocrmypdf）：把这本书下载下来 → OCR → 再把 OCR 后的 PDF 作为「本地书源」加进来。网盘上那份没法原地改。'
-              : '要用它做解读，得先拿 OCR 工具（比如 ocrmypdf）给这个文件加一层文字，再重新打开。'}
+              ? '也可以一劳永逸：把书下载下来 → 用 OCR 工具（比如 ocrmypdf）加一层文字 → 再作为「本地书源」加回来。网盘上那份没法原地改。'
+              : '也可以一劳永逸：用 OCR 工具（比如 ocrmypdf）给这个文件加一层文字，再重新打开。'}
           </small>
         </div>
       )}

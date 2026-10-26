@@ -249,9 +249,40 @@ export function createDigestStore({ rootDir, log = () => {} } = {}) {
     return meta.fingerprint.size !== fingerprint.size || meta.fingerprint.mtimeMs !== fingerprint.mtimeMs;
   }
 
-  /** 整本删掉（换书、或者用户点「重新解读」）。 */
-  async function remove(bookId) {
-    await rm(dirOf(bookId), { recursive: true, force: true });
+  /**
+   * 整本删掉（换书、或者用户点「重新抽取」）。
+   *
+   * ★ `keepOcr` 默认 `false`（全删）：这是 0.27 之前就有的语义，不能悄悄改 ——
+   *   换过文件的书写着上一本文件的识别文本，比没有更糟。
+   * ★ 但「重新抽取」这条路上必须能**保住**识别结果（0.28.0）：
+   *   那一步用户要的是**重做分段**，不是扔掉 70–90 秒的识别。以前 `reset` 是
+   *   `rm -r` 整个目录，`ocr.json` 一起没了 ⇒ 认完整本扫描书、顺手点一下「重新抽取」，
+   *   回到「这本书是扫描版」，而且没有任何提示说明那 90 秒去了哪里。
+   *   谁来保、谁来删由**调用方**决定，这里只提供开关。
+   */
+  async function remove(bookId, { keepOcr = false } = {}) {
+    const dir = dirOf(bookId);
+    if (!keepOcr) {
+      await rm(dir, { recursive: true, force: true });
+      return { keptOcr: false, ocrPages: 0 };
+    }
+    let snapshot = null;
+    try {
+      snapshot = await readFile(ocrFileOf(bookId), 'utf8');
+    } catch {
+      // 没有识别结果（或者读不出来）：那就没什么可保的，照常全删。
+    }
+    await rm(dir, { recursive: true, force: true });
+    if (snapshot === null) return { keptOcr: false, ocrPages: 0 };
+    await mkdir(dir, { recursive: true });
+    await guardFs(() => writeFile(ocrFileOf(bookId), snapshot, 'utf8'), '识别结果');
+    let pages = 0;
+    try {
+      pages = Object.keys(JSON.parse(snapshot)).length;
+    } catch {
+      pages = 0;
+    }
+    return { keptOcr: true, ocrPages: pages };
   }
 
   /**
@@ -490,6 +521,27 @@ export function createDigestStore({ rootDir, log = () => {} } = {}) {
   }
 
   /**
+   * 整本的 OCR 文本：`{ 页码: 文本 }`，**只含真的认出字的页**。
+   *
+   * ★ 为什么要有批量这一版：书内搜索给整本建索引时，扫描页可能上百页。一页一次
+   *   `readOcrPage` 等于把同一份 JSON 读上百遍（每份可达几 MB）。
+   * ★ 它是「识别过就作数」的落地点：没有这个出口，客户端只能拿到**当前页**的
+   *   识别结果 ⇒「识别这 111 页再搜一次」只在当次会话有效，重开这本书又得重认一遍，
+   *   等于那 90 秒白花。识别成果必须能被**下一次搜索**直接用上。
+   * ★ 返回纯文本而不是 `{ text, at, ms }`：调用方只关心「这一页有没有字」，
+   *   元数据在这里只会让调用方多写一层解构（需要 `at` 的是淘汰逻辑，在 `putOcrPage`）。
+   */
+  async function readOcrPages(bookId) {
+    const all = await readOcr(bookId);
+    const out = {};
+    for (const [page, entry] of Object.entries(all)) {
+      const text = typeof entry?.text === 'string' ? entry.text : '';
+      if (text.trim() !== '') out[page] = text;
+    }
+    return out;
+  }
+
+  /**
    * 写入一页的 OCR 文本。
    *
    * ★ 空文本**不写**：OCR 一个字都没认出来时，写进去等于把「这一页没有文字」
@@ -536,6 +588,7 @@ export function createDigestStore({ rootDir, log = () => {} } = {}) {
     ocrFileOf,
     readOcr,
     readOcrPage,
+    readOcrPages,
     putOcrPage,
     writeChapterTexts,
     readChapterText,

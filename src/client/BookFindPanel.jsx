@@ -60,6 +60,10 @@ function ocrEstimate(pages) {
 export function BookFindPanel({
   query, onQuery, status, error = '', hits = [], activeIndex = -1,
   progress = null, notes = [], unit = 'page', onPick, onStep, onClose,
+  /** 整本都没有文字层（扫描书）。判据在调用方：`textless === 总页数`。 */
+  scanned = false,
+  /** 这一轮只是「建索引」跑的（用户还没输入）——不能显示「没有命中」。 */
+  indexOnly = false,
   /** 扫描页的补救（只有 PDF 有）：`{ running, done, total, note }`；`null` = 没有这个出口。 */
   ocr = null, onOcr = null, onOcrStop = null,
 }) {
@@ -76,22 +80,33 @@ export function BookFindPanel({
   const total = hits.length;
   const current = activeIndex >= 0 && activeIndex < total ? activeIndex : -1;
   const done = status === 'done';
+  /** 这一本有多少页：文案要说「整本 111 页」，不能只说「这 111 页」。 */
+  const pages = Number(progress?.total) || 0;
 
   const step = (delta) => {
     if (total === 0) return;
     onStep?.(delta);
   };
 
+  /**
+   * 顶部那行小字。四种状态各说各的：
+   * ★ 「没有命中」只在**真的按这个词搜过**之后才说 —— 扫描书建索引那一轮
+   *   （`indexOnly`）一处都没找，说「没有命中」等于自己编了一个结论。
+   */
+  const headline = (() => {
+    if (status === 'searching') return '正在检索…';
+    if (!done) return '在这个搜索框里输入，整本正文一起找';
+    if (indexOnly) return pages > 0 ? `已扫过整本 ${pages} 页` : '';
+    if (total === 0) return '没有命中';
+    return `共 ${total} 处${current >= 0 ? ` · 第 ${current + 1} 处` : ''}`;
+  })();
+
   return (
     <aside className="npr-find" aria-label="书内搜索">
       <header className="npr-find-head">
         <div>
           <h2>书内搜索</h2>
-          <p>
-            {done
-              ? (total === 0 ? '没有命中' : `共 ${total} 处${current >= 0 ? ` · 第 ${current + 1} 处` : ''}`)
-              : status === 'searching' ? '正在检索…' : '在这个搜索框里输入，整本正文一起找'}
-          </p>
+          <p>{headline}</p>
         </div>
         <button type="button" className="npr-icon" title="收起搜索面板（Esc）" aria-label="收起搜索面板" onClick={onClose}>
           <Icon name="x" />
@@ -134,7 +149,23 @@ export function BookFindPanel({
       {status === 'error' && <p className="npr-find-error" role="alert">{error === '' ? '检索失败' : error}</p>}
 
       <div className="npr-find-list">
-        {status !== 'error' && needle === '' && (
+        {/*
+          空态分三种，**不能合成一句**：
+          ① 还没输入（普通书）—— 讲判据；
+          ② 还没输入（扫描书，索引已经告诉了我们）—— 讲「要先认字」；
+          ③ 输入了但 0 命中 —— 普通书建议换词，扫描书必须**明说换词没用**。
+          合成一句的后果是「扫描书搜不到」被读成「我这个词不对」，于是用户反复换词，
+          而他真正需要做的是点下面那颗按钮。
+        */}
+        {status !== 'error' && needle === '' && scanned && done && (
+          <p className="npr-find-empty is-scan">
+            <strong>这本书没有文字层（扫描版）。</strong>
+            <br />
+            {pages > 0 ? `整本 ${pages} 页都是图片，` : ''}
+            一个字也搜不到 —— 要先认字。下面那颗按钮会把整本认一遍，认完就能搜。
+          </p>
+        )}
+        {status !== 'error' && needle === '' && !(scanned && done) && (
           <p className="npr-find-empty">
             输入一个词就会在整本正文里找，命中的每一处都能跳过去。
             <br />
@@ -144,7 +175,16 @@ export function BookFindPanel({
           </p>
         )}
         {status !== 'error' && needle !== '' && done && total === 0 && (
-          <p className="npr-find-empty">没有找到「{needle}」。换一个更短或更常见的词再试。</p>
+          <p className={`npr-find-empty${scanned ? ' is-scan' : ''}`}>
+            {scanned
+              ? `没有找到「${needle}」—— 不是这个词的问题：这本书整本没有文字层，认字之前搜什么都一样。`
+              // ★ 第三种情况：**部分**扫描。这时「换个词」既不完全是错的（有字的那些页
+              //   确实没有），也不够（真正的原因是那 N 页根本没参与检索）。说清两件事，
+              //   否则用户会一直在有字的那几十页里换词。
+              : (ocr !== null && ocr.running !== true
+                ? `没有找到「${needle}」。这本书能搜的那部分里没有它 —— 另有 ${ocr.total} 页没有文字层，要先认字才能搜。`
+                : `没有找到「${needle}」。换一个更短或更常见的词再试。`)}
+          </p>
         )}
         {hits.map((hit, index) => (
           <button key={hit.key ?? `${hit.where}-${index}`} type="button"
@@ -176,7 +216,7 @@ export function BookFindPanel({
           进度条前最想点的是那个还能点的。
       */}
       {ocr !== null && (
-        <div className="npr-find-ocr">
+        <div className={`npr-find-ocr${scanned ? ' is-primary' : ''}`}>
           {ocr.running ? (
             <>
               <p className="npr-find-progress" role="status">
@@ -190,10 +230,15 @@ export function BookFindPanel({
             <>
               <button type="button" className="npr-find-ocr-btn" onClick={onOcr}
                 title="用 macOS 本机文字识别认出这些页，然后重新搜一遍（不联网、不花钱）">
-                {`识别这 ${ocr.total} 页再搜一次`}
+                {/* ★ 整本都要认时说「整本」：扫描书的这个动作是**改这本书的可用性**，
+                    不是「修补这次搜索的一个缺口」——「这 111 页」听起来像一次小修小补。 */}
+                {scanned ? `识别整本 ${ocr.total} 页，之后就能搜` : `识别这 ${ocr.total} 页再搜一次`}
               </button>
               <p className="npr-find-ocr-hint">
                 {`本机识别，不联网、不花钱，${ocrEstimate(ocr.total)}`}
+                {/* ★ 「会记住」必须说出来：它现在**真的**会（识别结果落盘、下一次索引读回来）。
+                    不说的话，用户会把 90 秒当成一次性消耗，不敢按。 */}
+                {scanned ? ' · 认完会存下来，下次打开这本书直接能搜' : ''}
               </p>
             </>
           )}

@@ -1450,11 +1450,26 @@ describe('本地 OCR 路由', () => {
   const GIF_B64 = Buffer.from('GIF89a..................').toString('base64');
 
   function ocrHarness({ supported = true, recognize, cached = {} } = {}) {
-    const ocrCalls = { read: [], put: [], recognize: [] };
+    const ocrCalls = { read: [], readAll: [], put: [], recognize: [] };
     const digestStore = {
       readOcrPage: async (bookId, page) => {
         ocrCalls.read.push({ bookId, page });
         return cached[`${bookId}:${page}`] ?? '';
+      },
+      /**
+       * 整本读回：夹具里按 `bookId:page` 前缀筛出来，形状与真实 store 一致
+       * （`{ 页码: 纯文本 }`，且**只含真有字的页**）。
+       */
+      readOcrPages: async (bookId) => {
+        ocrCalls.readAll.push({ bookId });
+        const out = {};
+        for (const [key, text] of Object.entries(cached)) {
+          const [owner, page] = key.split(':');
+          if (owner !== bookId) continue;
+          if (String(text).trim() === '') continue;
+          out[Number(page)] = text;
+        }
+        return out;
       },
       putOcrPage: async (bookId, page, payload) => {
         ocrCalls.put.push({ bookId, page, payload });
@@ -1614,6 +1629,48 @@ describe('本地 OCR 路由', () => {
     assert.equal(badPage.status, 400);
 
     assert.equal(ocrCalls.recognize.length, 0);
+  });
+
+  // ---- 整本读回（`GET /ocr/pages`，0.27.1）--------------------------------
+  /**
+   * 书内搜索给整本建索引时要它：扫描书上百页，一页一次 GET 等于上百次请求
+   * **以及上百次读同一份 JSON**。这条路由存在的理由只有这一个。
+   */
+  it('GET /ocr/pages 一次回整本，只含认出字的页', async () => {
+    const { api, ocrCalls } = ocrHarness({
+      cached: { 'b1:7': '她和一个男人有来往吗？', 'b1:8': '   ', 'b2:1': '别的书的正文' },
+    });
+    const res = fakeRes();
+    await api.handler(fakeReq({ url: `${API}/ocr/pages?bookId=b1` }), res);
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, { ok: true, pages: { 7: '她和一个男人有来往吗？' }, count: 1 });
+    // 页号必须是 number 的键（客户端拿它当 Map 的 key 去比页码）
+    assert.deepEqual(Object.keys(res.json.pages), ['7']);
+    // 只读了一次盘，且没有触发任何识别
+    assert.deepEqual(ocrCalls.readAll, [{ bookId: 'b1' }]);
+    assert.equal(ocrCalls.recognize.length, 0);
+    assert.equal(ocrCalls.read.length, 0, '整本读回不该退化成逐页读');
+  });
+
+  it('GET /ocr/pages：书 id 非法 ⇒ 400；没有识别过 ⇒ 空对象', async () => {
+    const { api } = ocrHarness();
+    const bad = fakeRes();
+    await api.handler(fakeReq({ url: `${API}/ocr/pages?bookId=..%2Fetc` }), bad);
+    assert.equal(bad.status, 400);
+    assert.match(bad.json.error, /无效的书 id/);
+
+    const empty = fakeRes();
+    await api.handler(fakeReq({ url: `${API}/ocr/pages?bookId=b1` }), empty);
+    assert.equal(empty.status, 200);
+    assert.deepEqual(empty.json, { ok: true, pages: {}, count: 0 });
+  });
+
+  it('GET /ocr/pages：没有 ocrRunner ⇒ 501（与逐页那条同一个口径）', async () => {
+    const { api } = harness();
+    const res = fakeRes();
+    await api.handler(fakeReq({ url: `${API}/ocr/pages?bookId=b1` }), res);
+    assert.equal(res.status, 501);
+    assert.match(res.json.error, /没有接上/);
   });
 });
 

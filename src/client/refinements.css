@@ -1815,6 +1815,25 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .npr-find-ocr-btn:hover { background: color-mix(in srgb, var(--npr-accent-strong) 16%, transparent); }
+/* 整本都是扫描页：这颗按钮**不是补丁，是前提**（不认字就一个字也搜不到），
+   所以升成实心主按钮、加重底色 —— 与设置页主按钮同一档（`--npr-accent-strong` + 白字）。
+   ★ 不用 `--npr-bg-2` 之类当底色：浅色主题下 base / layer-1 / 2 / 3 是同一个白，
+     改了等于没改（0.20.1 已经踩过一次）。 */
+.npr-find-ocr.is-primary {
+  border-top-style: solid;
+  padding-top: 10px;
+  background: color-mix(in srgb, var(--npr-accent-strong) 7%, transparent);
+}
+.npr-find-ocr.is-primary .npr-find-ocr-btn {
+  height: 30px; border-color: transparent;
+  background: var(--npr-accent-strong); color: #fff; font-weight: 600;
+}
+.npr-find-ocr.is-primary .npr-find-ocr-btn:hover {
+  background: color-mix(in srgb, var(--npr-accent-strong) 86%, #000);
+}
+/* 扫描书的空态要比普通空态**更显眼**：普通空态是「提示」，这一句是「这本书现在的状态」。 */
+.npr-find-empty.is-scan { color: var(--npr-fg); }
+.npr-find-empty.is-scan strong { font-weight: 600; }
 .npr-find-ocr-hint,
 .npr-find-ocr-note { margin: 0; font-size: 10px; line-height: 1.55; color: var(--npr-muted); }
 .npr-find-ocr-note { color: var(--npr-fg); }

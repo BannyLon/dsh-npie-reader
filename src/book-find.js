@@ -152,6 +152,30 @@ export function pageIndexText(items) {
 }
 
 /**
+ * 「这本书到底有没有文字层」的抽样页。
+ *
+ * ★ 为什么要抽样，而不是打开面板就给整本建索引：网盘上的书每翻一页都是一次
+ *   Range 请求，500 页的书打开搜索面板就要等 500 次往返 —— 而**多数书第一页就有字**，
+ *   那 500 次全是白花的。先抽几页，全都没有文字层才继续走索引。
+ * ★ 抽样**两端都要取**：封面、版权页、扉页本来就常常没有文字（或只有一张图），
+ *   只抽前几页会把「封面是扫描件」误判成「整本没有文字层」。所以固定取首尾 + 中间均分。
+ * ★ 这里只是**触发器**，不是判据：真正的结论由整本索引给出（`textless === 总页数`）。
+ *   抽样错了顶多多花一次索引，不会让界面上说错话 —— 这两件事必须分开，
+ *   否则「抽样 6 页都没字」就会变成一句关于全书的断言。
+ */
+export function probePages(total, count = 6) {
+  const n = Math.max(0, Math.floor(Number(total) || 0));
+  if (n === 0) return [];
+  const want = Math.max(2, Math.min(Math.floor(Number(count) || 6), n));
+  const out = [];
+  for (let i = 0; i < want; i += 1) {
+    const page = 1 + Math.round((i * (n - 1)) / (want - 1));
+    if (!out.includes(page)) out.push(page);
+  }
+  return out;
+}
+
+/**
  * 搜一组**已拼好的文本片段**（各片段的字符下标记在 `{ start, end }` 里）。
  *
  * 这里给的是「书内搜索」的通用形状，PDF 与电子书两条路都收成它：

@@ -309,3 +309,51 @@ describe('skillFiles：技能包的体积清单（导出成功后那行统计的
     }
   });
 });
+
+/**
+ * 「重新抽取」要不要留住识别结果（0.28.0）。
+ *
+ * ★ 这条守的是一次**不可逆的静默丢失**：以前 `remove` 是 `rm -r` 整个目录，
+ *   `ocr.json` 一起没了。用户认完 111 页（70–90 秒）、顺手点一下目录面板的
+ *   「重新抽取」（那个按钮的提示写着「书换过文件时用」，很容易被读成「让识别生效」），
+ *   就回到「这本书是扫描版」，而那 90 秒去了哪里没有任何提示。
+ * ★ 但默认值**不能**改：换过文件的书写着上一本文件的识别文本，比没有更糟。
+ *   所以这里是「调用方点名要留才留」。
+ */
+describe('remove：识别结果留不留，由调用方点名', () => {
+  it('默认全删（含 ocr.json）—— 这条不能悄悄改', async () => {
+    const book = 'l-remove-wipe';
+    await store.writeMeta(book, { bookId: book });
+    await store.putOcrPage(book, 1, { text: '识别过的一页' });
+    const result = await store.remove(book);
+    assert.deepEqual(result, { keptOcr: false, ocrPages: 0 });
+    const names = await readdir(join(root, 'digests')).catch(() => []);
+    assert.equal(names.includes(book), false, '默认应当整本删掉');
+  });
+
+  it('★ keepOcr：目录与章节全没，`ocr.json` 与里面的页数都还在', async () => {
+    const book = 'l-remove-keep';
+    await store.writeMeta(book, { bookId: book, mode: 'scanned' });
+    await store.writeOutline(book, []);
+    await store.writePages(book, [{ page: 1, lines: [] }]);
+    await store.putOcrPage(book, 1, { text: '第一页识别出来的字' });
+    await store.putOcrPage(book, 2, { text: '第二页识别出来的字' });
+
+    const result = await store.remove(book, { keepOcr: true });
+    assert.deepEqual(result, { keptOcr: true, ocrPages: 2 });
+
+    const reader = createDigestStore({ rootDir: root });
+    assert.equal(await reader.readMeta(book), null, 'meta 应该没了（分段要重做）');
+    assert.deepEqual(await reader.readPages(book), [], 'pages.jsonl 应该没了');
+    const ocr = await reader.readOcrPages(book);
+    assert.equal(ocr[1], '第一页识别出来的字');
+    assert.equal(ocr[2], '第二页识别出来的字');
+  });
+
+  it('本来就没识别过：keepOcr 也不报错，如实回 keptOcr=false', async () => {
+    const book = 'l-remove-nothing';
+    await store.writeMeta(book, { bookId: book });
+    const result = await store.remove(book, { keepOcr: true });
+    assert.deepEqual(result, { keptOcr: false, ocrPages: 0 });
+  });
+});
