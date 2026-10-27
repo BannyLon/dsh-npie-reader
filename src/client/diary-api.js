@@ -76,6 +76,25 @@ export async function removeDiaryEntry(date, index, scope = 'public') {
   return await jsonRequest(`/day/${encodeURIComponent(date)}/entry/${index}${query}`, { method: 'DELETE' });
 }
 
+/**
+ * 改写某一天的某一条，**只传要改的字段**。
+ *
+ * ★ 界面只拿它做「挂到书」：把 `source` 与 `meta.book / chapter` 补上去。
+ *   **绝不传 `body`** —— 那是整条替换，而「给这一条挂个出处」不该顺手改用户的原话。
+ *   （工具侧 `diary_update` 走的是同一个路由，那边是模型明确要改正文，两回事。）
+ * ★ `scope` 必须跟着走，同 `removeDiaryEntry`：公开与私密是两个文件、各有自己的序号。
+ * ★ 宿主对 `meta` 走 `normalizeMeta` 白名单，所以多传的键会被丢掉而不是写进文件 ——
+ *   这也是为什么这里只挑 `book` / `chapter` 两个键。
+ */
+export async function patchDiaryEntry(date, index, patch, scope = 'public') {
+  const query = scope === 'private' ? '?scope=private' : '';
+  return await jsonRequest(`/day/${encodeURIComponent(date)}/entry/${index}${query}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify(patch),
+  });
+}
+
 /** 标签索引（带次数与最后使用日期）。 */
 export async function fetchDiaryTags() {
   return await jsonRequest('/tags');

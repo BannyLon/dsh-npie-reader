@@ -425,7 +425,10 @@ describe('灵感模块：情绪 / 标签 / 时间轴 / 关联到书', () => {
   it('★ 侧栏是三块检索器（标签 / 时间轴 / 挂在书上）；正文摘要只在**展开那一天**时才读', () => {
     // 用户 2026-10-27：「侧边栏的显示实在是不符合常理」，随后又补了一句
     // 「侧边栏是不是要有时间轴啊，比如点击今天，展开今天记录的时间轴」。
-    assert.match(diary, /fetchDiaryTimeline\(\{ limit: 30 \}\)/);
+    // 分页步长必须是**一个常量**，不能两处各写一个 30：「加载更早」要拿它算
+    // 「再往前多少天」，各写一次就会漂开（改了首屏、翻页还按旧的走）。
+    assert.match(diary, /const TIMELINE_PAGE = 30;/, '时间轴没有分页步长常量');
+    assert.match(diary, /fetchDiaryTimeline\(\{ limit: TIMELINE_PAGE \}\)/, '首屏没按步长取');
     assert.match(diary, /fetchDiaryTags\(\)/);
     for (const label of ['标签', '时间轴', '挂在书上']) {
       // 「标签」这块的标题现在带一个计数徽章（标签几千个时，先看见数量比先看见云有用），
@@ -443,6 +446,83 @@ describe('灵感模块：情绪 / 标签 / 时间轴 / 关联到书', () => {
     assert.doesNotMatch(diary.replace(openBlock[0], ''), /\.preview/,
       '折叠态也在读 entry.preview —— 正文又被抄了一遍');
     assert.match(diary, /entry\.kind !== '读后感'/, '时间轴没有滤掉读后感');
+  });
+
+  it('★ 「挂到书」：把已有的一条关联到某本书的某一章', () => {
+    // 用户 2026-10-27 的原话：「灵感不仅可以单独存放，当某天你读到某本书的某一页时，
+    // 可以**一键把这个灵感关联到该书的目录节点上**」。0.31 只做了**捕获时**的自动关联
+    // （读书按 L 写 meta.book/chapter），而「我昨天随手记的一条，现在想挂到第 3 章」
+    // 一直没有任何入口 —— 那才是「一键」。
+    assert.match(diary, /function openLinkPick\(entry\)/, '没有「挂到书」的入口函数');
+
+    // ★ 只对**公开**条目开：侧栏「挂在书上」是从 `timeline()` 建的，而它默认不带私密。
+    //   给私密条目挂上书，结果是在侧栏里永远看不见 —— 写了但永远看不到，比没有更糟。
+    assert.match(diary, /if \(entry\.scope === 'private'\) return;/, '私密条目也能挂到书上 —— 挂了也看不见');
+    assert.match(diary, /\{!privateSide && \(/, '条目行上的入口没有排除私密');
+    assert.match(diary, /aria-label="挂到书上"/, '条目行上没有那颗按钮');
+
+    // ★ 只写 `source` + `meta`，**不传 body**：宿主侧现在允许局部改写，
+    //   传 body 等于把用户的原话再写一遍 —— 中途被别处改过就会静默覆盖回去。
+    assert.match(diary, /await patchDiaryEntry\(pick\.date, pick\.index, \{ source: label, meta \}/,
+      '没有走局部改写，或者顺手传了 body');
+    assert.doesNotMatch(diary, /patchDiaryEntry\([\s\S]{0,120}?body:/, '「挂到书」顺手改了正文');
+
+    // ★ 没选章时**整个键都不传**：`Number(null) === 0` 且 `0 >= 0`，
+    //   传 null 会在文件里留下 `"chapter":0`，而 0 章是不存在的（章号从 1 起）。
+    assert.match(diary, /const meta = pick\.chapter === null\s*\?\s*\{ book: pick\.bookId \}/,
+      '没选章时仍然把 chapter 传下去了');
+
+    // 目录是**点一下才读**的：网盘书要先把整本拉下来（超时 2 分钟），
+    // 点一下书名就卡两分钟，比「没有章节可选」更糟。
+    assert.match(diary, /async function askLinkOutline\(\)/, '没有「从目录里挑一章」');
+    assert.match(diary, /fetchEbookIndex\(bookId\)\.catch/, '没试电子书的节');
+    assert.match(diary, /fetchDigestStatus\(bookId\)\.catch/, '没试 PDF 的解读大纲');
+    // ★ 异步回来要确认浮层还开着、还是同一本书：中途换书的话，A 的目录会画到 B 身上。
+    assert.match(diary, /current\.bookId === bookId/, '异步回来的目录没有校验是哪本书');
+    // 拉不到目录要**说出来**，不能让用户对着空列表猜。
+    assert.match(diary, /这本书还没有目录（没抽过正文 \/ 没解读过），只能挂到整本。/, '目录为空时没有解释');
+
+    // 拼 `source` 用共享的 `sourceLabel`（与 `parseSource` 同源，避免双书名号）。
+    assert.match(diary, /sourceLabel\(pick\.bookTitle, pick\.chapterTitle\)/, '没有用共享的 sourceLabel');
+    assert.match(diary, /await refresh\(\);/, '挂完没有刷新 —— 侧栏分组要等到下次进页面才更新');
+  });
+
+  it('★ 「加载更早」：时间轴能往前翻，不是只给最近 30 天', () => {
+    // 用户 2026-10-27 的诉求是「支持通过时间轴或标签快速检索」。
+    // 0.39 之前这里只有一句「只看了最近 N 天。」—— 用户看得到还有更早的，
+    // 却没有任何办法把它们调出来。那句话等于宣告「到此为止」。
+    assert.match(diary, /async function loadMoreTimeline\(\)/, '没有翻页函数');
+
+    // ★ 游标用**日期**，不是「已加载 N 天」。后端是 `date < before`，中间隔着
+    //   没写日记的日子也照样对得上；用条数当 offset 会在空档上错位，而且错得安静
+    //   （少一天、多一天都不报错，用户只会觉得「那几天怎么没了」）。
+    assert.match(diary, /const oldest = timeline\.days\[timeline\.days\.length - 1\]\?\.date/,
+      '翻页游标不是「最早那一天的日期」');
+    assert.match(diary, /fetchDiaryTimeline\(\{ limit: TIMELINE_PAGE, before: oldest \}\)/,
+      '翻页没把 before 传下去 —— 等于又从头取了一遍');
+
+    // ★ 追加，不是替换。替换会让用户点一次「加载更早」就把眼前这 30 天换掉。
+    assert.match(diary, /days: \[\.\.\.current\.days, \.\.\.added\]/, '翻页是替换而不是追加');
+
+    // ★ 按 date 去重：重复键会让 React 报 key 冲突，侧栏还会多出一行同一天。
+    assert.match(diary, /const seen = new Set\(current\.days\.map\(\(day\) => day\.date\)\)/,
+      '追加没有去重');
+    assert.match(diary, /\.filter\(\(day\) => !seen\.has\(day\.date\)\)/, '去重没有真的过滤');
+
+    // ★ 只有真拿到了新的天，才继续声称「还有更早」。否则按钮永远停在那里、
+    //   点一次什么也不发生 —— 死按钮比没有按钮更糟。
+    assert.match(diary, /truncated: added\.length > 0 && payload\.truncated === true/,
+      '翻页拿到 0 天仍写着「还有更早」');
+
+    // 界面：按钮存在、带数字、忙碌时禁用并给出可见文案。
+    assert.match(diary, /className="npr-diary-dayload"/, '侧栏没有「加载更早」的入口');
+    assert.match(diary, /disabled=\{timeline\.more \|\| timeline\.busy\}/, '翻页时按钮没有禁用');
+    assert.match(diary, /正在读更早的记录/, '翻页时没有可见的忙碌文案');
+    assert.match(diary, /目前只显示最近 \$\{timeline\.days\.length\} 天/, '按钮没印出已显示多少天');
+
+    // 反向对照：旧的「到此为止」那句话不能单独回来 —— 它现在长在按钮里。
+    assert.doesNotMatch(diary, /<p className="npr-diary-sect-note">只看了最近/,
+      '又退回了「只看了最近 N 天」的死胡同');
   });
 
   it('★ 「挂在书上」把已关联的灵感按来源归拢，点一行**回到那本书**', () => {

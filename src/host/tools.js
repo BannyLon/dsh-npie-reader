@@ -752,7 +752,18 @@ export function createToolDefinitions(service) {
           source: args.source,
           body: args.body,
         });
-        return `已追加到 ${result.date} ${result.time}（这一天第 ${result.index + 1} 条，现在共 ${result.chars} 字）。\n\n文件：${result.path}`;
+        /*
+         * ★ 类型回落必须**说出来**。`assertEntryInput` 对不认识的 kind 静默兜成「灵感」，
+         *   而回执原来只报「已追加」—— 模型于是会转述成「我记成书摘了」，
+         *   文件里却是灵感。那是本项目最忌讳的一类话：**确定的假话**。
+         * ★ 文案要能让模型直接照抄给用户，所以点明「你给的 X 不认识」「按 Y 存了」
+         *   和「复述时别说是 X」三件事，而不是只丢一个 `fallback: true`。
+         */
+        const note = result.kindFellBack
+          ? `\n\n注意：你给的类型「${result.kindAsked}」不认识（只支持 灵感 / 日记 / 读后感），`
+            + `这一条已经按「${result.kind}」存下了。对用户复述时要说清这一点，不要说是「${result.kindAsked}」。`
+          : '';
+        return `已追加到 ${result.date} ${result.time}（这一天第 ${result.index + 1} 条，现在共 ${result.chars} 字）。\n\n文件：${result.path}${note}`;
       },
     }),
     defineTool({

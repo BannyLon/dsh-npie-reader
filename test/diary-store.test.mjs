@@ -171,6 +171,56 @@ describe('removeEntry', () => {
   });
 });
 
+describe('updateEntry', () => {
+  it('★ 只给 source / meta 时**正文原样保留**（PATCH 不是 PUT）', async () => {
+    // 场景：界面要把一条灵感「挂到书上」，只想补一个出处。
+    // 路由文档（`diary-routes.js` 顶部）写的是「body 里给要改的字段」，
+    // 而 store 原来强制要求整条正文 —— 那样界面就必须把用户的原话再传一遍，
+    // 中途别处改过正文的话会被**静默**覆盖回去。
+    const date = '2026-04-05';
+    await store.append({ date, body: '这句话是我写的，不要动它' });
+    const result = await store.updateEntry({
+      date,
+      index: 0,
+      source: '《深度工作》 · 第 3 章',
+      meta: { book: 'p3d152e3094fdcfb4', chapter: 3 },
+    });
+    assert.equal(result.index, 0);
+    const day = await store.read(date);
+    assert.equal(day.entries.length, 1, '局部改写不能变成新增一条');
+    assert.equal(day.entries[0].body, '这句话是我写的，不要动它', '正文被改掉了');
+    assert.equal(day.entries[0].source, '《深度工作》 · 第 3 章');
+    assert.equal(day.entries[0].meta.book, 'p3d152e3094fdcfb4');
+    assert.equal(day.entries[0].meta.chapter, 3);
+    // 时间也不能被顺手改掉：没传就保持原值。
+    assert.match(day.entries[0].time, /^\d{2}:\d{2}$/);
+  });
+
+  it('★ 传了 body 就必须非空 —— 空正文不是「清空」，那条路是删除', async () => {
+    // 反向对照：上一条放宽了「不传 body」，但不能顺手把「传空 body」也放过。
+    const date = '2026-04-06';
+    await store.append({ date, body: '原文' });
+    await assert.rejects(
+      () => store.updateEntry({ date, index: 0, body: '   ' }),
+      (error) => error.code === 'ENTRY_EMPTY',
+    );
+    const day = await store.read(date);
+    assert.equal(day.entries[0].body, '原文', '被拒之后文件不该被动过');
+  });
+
+  it('★ 不传 chapter 就不写 chapter —— 0 章是不存在的', async () => {
+    // `normalizeMeta` 用 `Number(source.chapter)` 判整数，而 `Number(null) === 0`
+    // 且 `0 >= 0` 成立 ⇒ 传 `chapter: null` 会在文件里留下 `"chapter":0`。
+    // 界面侧的做法是**整个键都不传**，这条守住那个约定。
+    const date = '2026-04-07';
+    await store.append({ date, body: '只挂到整本' });
+    await store.updateEntry({ date, index: 0, source: '《某本书》', meta: { book: 'p477da107484f7ad9' } });
+    const day = await store.read(date);
+    assert.equal(day.entries[0].meta.chapter, undefined, '没选章却写进了 chapter');
+    assert.equal(day.entries[0].meta.book, 'p477da107484f7ad9');
+  });
+});
+
 describe('listMonth', () => {
   it('只数本月，给出每天几条', async () => {
     const result = await store.listMonth('2026-10');

@@ -2880,6 +2880,16 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-diary-tagmore { display: block; margin: 0 14px 8px; padding: 0; border: 0; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11.5px; cursor: pointer; text-align: left; }
 .npr-diary-tagmore:hover { color: var(--npr-fg); text-decoration: underline; }
 
+/* 「加载更早」：侧栏时间轴底部的翻页入口。
+   ★ 与 `.npr-diary-tagmore` 同一套视觉（11.5px、muted、无边框、hover 变实色）——
+     两者都是「这一栏还有东西，点开看」，做成两种样子会被读成两种不同的东西。
+   ★ **不复用** `.npr-diary-daymore`：那个是正文列表里的「更早还有 N 条」，
+     带 `↑` 前缀和通栏上边线；搬进 268px 的侧栏会画出一条横贯的线，
+     看起来像把时间轴切成了两个区块。 */
+.npr-root button.npr-diary-dayload { display: block; width: calc(100% - 28px); margin: 2px 14px 8px; padding: 0; border: 0; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11.5px; text-align: left; cursor: pointer; }
+.npr-root button.npr-diary-dayload:hover { color: var(--npr-fg); text-decoration: underline; }
+.npr-root button.npr-diary-dayload:disabled { color: var(--npr-faint); cursor: default; text-decoration: none; }
+
 /* 「更早还有 N 条 · 展开」：一天的记录默认只铺最近 DAY_PREVIEW 条。
    ★ 它是「一条分割线 + 一个按钮」，不是又一条记录 —— 所以没有时间、没有正文间距。
    ★ 必须印数字：没有数字的折叠等于把内容藏起来，用户会以为记录丢了。 */
@@ -2912,6 +2922,27 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 /* 窗口里的正文**不 clamp**：它是「看全文」的最后一步。 */
 .npr-diary-modal-body { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 12px 14px; font-size: 15px; }
 .npr-diary-modal-tags { padding: 0 14px 12px; margin-top: 0; }
+
+/* ── 「挂到书」浮层 ───────────────────────────────────────────────────
+   卡片比「展开全文」窄（420px）：它是一次「挑一个就走」的选择，不是阅读。
+   ★ 两块列表（书 / 章）各自滚动、各自限高：书架几百本时不滚动就点不到底部，
+     而章动辄几十条，不分开滚会让「挂上去」那颗按钮被推出可视区。 */
+.npr-diary-linkcard { width: min(420px, 100%); }
+.npr-diary-link-excerpt { margin: 0 0 10px; color: var(--npr-muted); font-size: 12.5px; line-height: 1.6; }
+/* 只有一条底线，不是盒子 —— 和侧栏「找一本书」同一套语言。 */
+.npr-diary-linkfind { width: 100%; margin: 0 0 8px; padding: 5px 0; border: 0; border-bottom: 1px solid var(--npr-border); background: transparent; color: var(--npr-fg); font: inherit; font-size: 13px; outline: none; }
+.npr-diary-linkfind:focus { border-bottom-color: var(--npr-fg); }
+.npr-diary-linkbooks { display: flex; flex-direction: column; gap: 1px; max-height: 190px; overflow: auto; overscroll-behavior: contain; }
+.npr-diary-linkchapters { display: flex; flex-direction: column; gap: 1px; max-height: 190px; overflow: auto; overscroll-behavior: contain; margin-top: 4px; }
+.npr-root .npr-diary-linkbook { display: block; width: 100%; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12.5px; line-height: 1.5; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npr-root .npr-diary-linkbook:hover { background: var(--npr-hover); }
+/* 选中：淡底 + 左侧一道竖线。**不用实心反白** —— 书和章会同时各选中一项，
+   两块都反白会让人以为「整块是一个按钮」。 */
+.npr-root .npr-diary-linkbook.is-picked { background: color-mix(in srgb, var(--npr-fg) 8%, transparent); box-shadow: inset 2px 0 0 var(--npr-fg); font-weight: 600; }
+.npr-diary-linkchapter { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--npr-border); }
+.npr-diary-linkpicked { margin: 0 0 2px; color: var(--npr-fg); font-size: 12.5px; }
+.npr-diary-linkfoot { display: flex; align-items: center; gap: 8px; justify-content: flex-end; flex-shrink: 0; padding: 9px 12px; border-top: 1px solid var(--npr-border); }
+.npr-diary-linkfoot .npr-diary-sect-note { flex: 1; margin: 0; }
 
 .npr-tagsheet { position: absolute; inset: 0; z-index: 30; display: flex; flex-direction: column; min-height: 0; padding: 14px 0 0; background: var(--npr-bg); }
 .npr-tagsheet-head { display: flex; align-items: center; gap: 8px; padding: 0 14px 10px; }

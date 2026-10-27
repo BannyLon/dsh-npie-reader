@@ -14,7 +14,7 @@ import {
   DIARY_MODULES, ENTRY_KINDS, LEGACY_KINDS, MOODS, REFLECTION_TEMPLATE, appendEntryText, buildDay,
   buildFrontmatter, dateKey, dayCharCount, dayFileName, entryAt, entryBlock, entryHeading,
   isValidDateKey, isValidMonthKey, metaLine, monthGrid, monthKeyOf, moodScore, normalizeMeta,
-  parseDay, parseMetaLine, parseMonthKey, parseSource, parseTags, removeEntryText, shiftMonth, splitFrontmatter,
+  parseDay, parseMetaLine, parseMonthKey, parseSource, parseTags, removeEntryText, shiftMonth, sourceLabel, splitFrontmatter,
   updateEntryText,
   timeKey,
 } from '../src/diary-format.js';
@@ -584,6 +584,52 @@ describe('来源（parseSource）', () => {
     assert.equal(parseSource(null), null);
     assert.equal(parseSource('   '), null);
     assert.equal(parseSource('《》'), null);
+  });
+});
+
+describe('来源（sourceLabel）：把书名 + 章拼回 source', () => {
+  // 「挂到书」写进去的就是这个串。它必须和 `parseSource` 是**互逆**的：
+  // 拼一次再拆回来，得到同一个书名 —— 否则侧栏分组会跟条目头上那行字对不上。
+  it('普通书名：补一对书名号，章用 ` · ` 接在后面', () => {
+    assert.equal(sourceLabel('深度工作', '第 3 章'), '《深度工作》 · 第 3 章');
+  });
+
+  it('没选章就只给书名，不拼一个空的 `· `', () => {
+    assert.equal(sourceLabel('深度工作', ''), '《深度工作》');
+    assert.equal(sourceLabel('深度工作', null), '《深度工作》');
+  });
+
+  it('★ 书名自带书名号时**不再套一层**（否则就是 `《《X》》`）', () => {
+    const title = '《译文名著文库》 076[法]雨果-九三年（叶尊译，上海译文出版社2011）';
+    const source = sourceLabel(title, '第三卷 阿尔马洛');
+    assert.doesNotMatch(source, /^《《/, '又套了一层书名号');
+    // 拆回来书名一致 —— 这一条才是「拼/拆同源」的真正判据。
+    assert.equal(parseSource(source).title, title);
+    assert.equal(parseSource(source).isBook, true);
+  });
+
+  it('★ 往返：拼出来再拆开，label 恰好是「一层书名号」', () => {
+    // ★ 判据用 `label` 而不是 `title`：`parseSource` 会把**最外层**书名号剥掉
+    //   （`《九三年》` → title `九三年`），所以 title 不是恒等的。
+    //   真正要守的是「不多不少一层书名号」—— 多一层就是 `《《X》》`，少一层就丢了引用感。
+    const canonical = (name) => (name.includes('《') ? name : `《${name}》`);
+    for (const [title, chapter] of [
+      ['深度工作', '第 3 章'],
+      ['被讨厌的勇气', ''],
+      ['《九三年》', '第二卷'],
+      ['《译文名著文库》 076[法]雨果-九三年（叶尊译）', '第三卷'],
+    ]) {
+      const parsed = parseSource(sourceLabel(title, chapter));
+      assert.ok(parsed, `${title} 拼出来拆不回来了`);
+      assert.equal(parsed.isBook, true);
+      assert.equal(parsed.label, canonical(title), `${title} 的书名号层数不对`);
+    }
+  });
+
+  it('空书名返回空串（不生成一个 `《》` 去污染分组）', () => {
+    assert.equal(sourceLabel('', '第 1 章'), '');
+    assert.equal(sourceLabel(null, null), '');
+    assert.equal(sourceLabel('   ', '  '), '');
   });
 });
 

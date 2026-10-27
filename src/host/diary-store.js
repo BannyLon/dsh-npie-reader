@@ -233,13 +233,24 @@ export function createDiaryStore(options = {}) {
 
   /**
    * 追加一条到某一天（默认今天）。
-   * @returns `{ date, time, index, chars, path, scope }` —— `index` 是这一条在
-   *   **它自己那一半**里的序号，界面靠它做「删掉刚写的那条」，不用重新解析一遍。
+   * @returns `{ date, time, index, chars, path, scope, kind, kindAsked, kindFellBack }`
+   *   —— `index` 是这一条在**它自己那一半**里的序号，界面靠它做「删掉刚写的那条」；
+   *   `kindFellBack` 表示「调用方给的类型不认识、已按 `kind` 存下」，回执必须说出来。
    */
   async function append(input = {}) {
     const key = input.date ?? dateKey(now());
     if (!isValidDateKey(key)) throw coded('BAD_DATE', `无效的日期：${key}`);
+    const asked = typeof input?.kind === 'string' ? input.kind.trim() : '';
     const entry = assertEntryInput(input);
+    /*
+     * ★ 把「你要的类型」和「实际存下的类型」一起回给调用方。
+     *   `assertEntryInput` 对不认识的 kind 是**静默**兜成「灵感」的（`ENTRY_KINDS` 白名单），
+     *   而工具回执原来不提这件事 —— 模型于是可能对用户说「我记成书摘了」，
+     *   文件里却是灵感。这正是本项目最忌讳的「确定的假话」。
+     * ★ 判据用 `asked !== entry.kind`（**结果**），不在这里再抄一份白名单：
+     *   白名单只有 `assertEntryInput` 一处，抄第二份迟早漂开。
+     */
+    const kindFellBack = asked !== '' && asked !== entry.kind;
     const privateSide = entry.vis === 'private';
     const file = privateSide ? diaryPrivateFilePath(key) : diaryFilePath(key);
     return await enqueue(file, async () => {
@@ -253,7 +264,10 @@ export function createDiaryStore(options = {}) {
       if (privateSide) await writePrivateAtomic(key, nextText, secret);
       else await writeDayAtomic(key, nextText);
       log(`[日记] 追加 ${key} ${entry.time} ${entry.kind}（${entry.body.length} 字${privateSide ? '，私密' : ''}）`);
-      return { date: key, time: entry.time, index: entries.length - 1, chars, path: file, scope: entry.vis };
+      return {
+        date: key, time: entry.time, index: entries.length - 1, chars, path: file, scope: entry.vis,
+        kind: entry.kind, kindAsked: asked, kindFellBack,
+      };
     });
   }
 
@@ -289,10 +303,18 @@ export function createDiaryStore(options = {}) {
   async function updateEntry(input = {}) {
     const key = input.date;
     if (!isValidDateKey(key)) throw coded('BAD_DATE', `无效的日期：${key}`);
-    if (typeof input.body !== 'string' || input.body.trim() === '') {
+    /*
+     * ★ `body` 是**可选**的：不传 = 保留原文（`updateEntryText` 本来就是这么写的）。
+     *   路由文档（`diary-routes.js` 顶部）写的是「body 里给要改的字段」，
+     *   而这里原来强制要求整条正文 —— 等于把 PATCH 做成了 PUT。
+     *   后果很具体：界面只想「补一个出处」，却必须把用户的原话再传一遍；
+     *   万一浮层开着的时候正文在别处被改过，这一传就把改动覆盖回去，而且**不报错**。
+     *   传了就必须非空：空正文不是「清空」，那条路是删除。
+     */
+    if (input.body !== undefined && (typeof input.body !== 'string' || input.body.trim() === '')) {
       throw coded('ENTRY_EMPTY', '改写后的正文是空的。要删掉这一条，请用删除。');
     }
-    if (input.body.length > MAX_ENTRY_CHARS) {
+    if (typeof input.body === 'string' && input.body.length > MAX_ENTRY_CHARS) {
       throw coded('ENTRY_TOO_LARGE', `一条最多 ${MAX_ENTRY_CHARS} 字，这一条 ${input.body.length} 字`);
     }
     const privateSide = input.scope === 'private';

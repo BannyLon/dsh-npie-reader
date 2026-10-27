@@ -133,7 +133,7 @@ describe('diary_append', () => {
     assert.match(out, /引自 《被讨厌的勇气》第 3 章/);
   });
 
-  it('★ 老类型「书摘」不能被**新建**：传它会落成别的类型，而不是复活一个已废弃的类型', async () => {
+  it('★ 老类型「书摘」不能被**新建**，而且回执必须**说出来**', async () => {
     /**
      * ★ 这条用例原本写的是 `kind: '书摘'` 并断言读回来含「书摘」—— 那是 0.30.0 的语义。
      *   0.31.0 把「书摘」降级成 `LEGACY_KINDS`（只解析、不再新建，见 `src/diary-format.js`
@@ -143,15 +143,26 @@ describe('diary_append', () => {
      *   判据取「整个今天都不含书摘」—— 上面两条用例用的是默认类型（灵感），
      *   所以这里出现「书摘」只可能来自这一次 append。
      *
-     * ★ 已知缺口（交接文档 P1）：这个回落是**静默**的 —— `assertEntryInput` 里
-     *   `ENTRY_KINDS.includes(kind) ? kind : '灵感'`，模型传了「书摘」会得到「灵感」，
-     *   而回执里不说。模型于是可能对用户说「我记成书摘了」，而文件里是灵感。
-     *   要修就在 `tools.js` 的 `diary_append` 回执里加一句「你给的类型不认识，已按灵感存」，
-     *   并给那句话配一条用例。这里**不**顺手改，因为它动的是模型可见的措辞。
+     * ★ 0.40 补上：回落**不许静默**。原来 `assertEntryInput` 兜成「灵感」而回执不提，
+     *   模型于是可能对用户说「我记成书摘了」，文件里却是灵感 —— 一句确定的假话。
+     *   现在 `append()` 回 `kindFellBack`，`diary_append` 的回执里点名三件事：
+     *   你给的类型不认识 / 按什么存了 / 复述时别说是原来那个。
      */
-    await runTool(tools, TOOL_NAMES.diaryAppend, { body: '一句金句', kind: '书摘' });
-    const out = await runTool(tools, TOOL_NAMES.diaryToday, {});
-    assert.doesNotMatch(out, /书摘/);
+    const out = await runTool(tools, TOOL_NAMES.diaryAppend, { body: '一句金句', kind: '书摘' });
+    assert.match(out, /「书摘」不认识/, '回执没说你给的类型不认识 —— 模型会以为存成了书摘');
+    assert.match(out, /按「灵感」存下/, '回执没说出实际存成了什么');
+    assert.match(out, /不要说是「书摘」/, '回执没有拦住「复述时照旧说法」这条路');
+    const today = await runTool(tools, TOOL_NAMES.diaryToday, {});
+    assert.doesNotMatch(today, /书摘/);
+  });
+
+  it('★ 反向对照：类型认识时**不许**冒出那句回落提示', async () => {
+    // 否则每一条都带一句「类型不认识」，模型会开始忽略它 —— 提示也就失效了。
+    const out = await runTool(tools, TOOL_NAMES.diaryAppend, { body: '正常一条', kind: '日记' });
+    assert.doesNotMatch(out, /不认识/);
+    // 不传 kind 走默认值，同样不该触发：默认值不是「用户给了个错值」。
+    const fallback = await runTool(tools, TOOL_NAMES.diaryAppend, { body: '默认类型' });
+    assert.doesNotMatch(fallback, /不认识/);
   });
 
   it('空正文被拒（EMPTY_ENTRY）', async () => {

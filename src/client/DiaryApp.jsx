@@ -56,14 +56,14 @@ import { sanitizeHtml } from '../host/sanitize.js';
 import { markdownToHtml } from '../host/markdown.js';
 import {
   DIARY_MODULES, MOODS, REFLECTION_TEMPLATE, dateKey, monthKeyOf, normalizeMood, parseMonthKey,
-  parseSource, parseTags, shiftMonth,
+  parseSource, parseTags, shiftMonth, sourceLabel,
 } from '../diary-format.js';
 import {
   appendDiaryEntry, downloadDiaryBundle, fetchDiaryBook, fetchDiaryDay, fetchDiaryExport,
   fetchDiaryGate, fetchDiaryMonth, fetchDiarySecret, fetchDiaryStats, fetchDiaryTags, fetchDiaryTimeline,
-  lockDiaryGate, removeDiaryEntry, revealDiaryFolder, searchDiary, setupDiaryGate, unlockDiaryGate,
+  lockDiaryGate, patchDiaryEntry, removeDiaryEntry, revealDiaryFolder, searchDiary, setupDiaryGate, unlockDiaryGate,
 } from './diary-api.js';
-import { fetchAnnotations, fetchBooks, fetchStates } from './library-api.js';
+import { fetchAnnotations, fetchBooks, fetchDigestStatus, fetchEbookIndex, fetchStates } from './library-api.js';
 import { DiaryCalendar } from './DiaryCalendar.jsx';
 import { DiaryComposer } from './DiaryComposer.jsx';
 import { ensureStyles } from './ReaderPage.jsx';
@@ -212,6 +212,17 @@ const TAG_SHEET_MAX = 240;
  *   「更早还有 X 条」的显式入口，而不是让人一路滚到底。
  */
 const DAY_PREVIEW = 10;
+
+/**
+ * 侧栏时间轴一次取几天。
+ *
+ * ★ 后端 `timeline({ limit })` 的上限是 `TIMELINE_DAY_LIMIT`（60），默认 30。
+ *   这里显式写 30 而不是靠默认值：它是**翻页的步长**，界面要拿它算「再往前多少天」，
+ *   两端各靠一次默认值迟早会漂开。
+ * ★ 用户 2026-10-27 的诉求是「支持通过时间轴或标签快速检索」——
+ *   只给最近 30 天且没有出口，等于把更早的记录藏起来。
+ */
+const TIMELINE_PAGE = 30;
 
 /**
  * 私密条目「看一次」多久之后自己收回。
@@ -397,7 +408,23 @@ export function DiaryApp({
    *   并给出「现在只显示挂在《X》上的 · 全部」这条出口。
    */
   const [linkKey, setLinkKey] = useState('');
-  const [timeline, setTimeline] = useState({ days: [], truncated: false, busy: false });
+  /**
+   * 「把这一条挂到书上」的选书浮层。`null` = 关着。
+   *
+   * ★ 这是用户原话里唯一没落地的那半句：「灵感不仅可以单独存放，当某天你读到某本书的
+   *   某一页时，可以**一键把这个灵感关联到该书的目录节点上**」。
+   *   0.31 只做了**捕获时**的自动关联（读书按 `L` 写 `meta.book / chapter / page`），
+   *   而「我昨天随手记的一条，现在想挂到第 3 章」没有入口 —— 那才是「一键」。
+   *
+   * ★ 存的是**条目快照**（date / index / scope / 前几十字），不是下标引用：
+   *   浮层开着的时候后台可能刷新、换天、删掉别的一条，用下标去改会改错行。
+   *
+   * ★ 章节目录**不预加载**。`fetchEbookIndex` 对网盘书要先把整本拉下来（超时给到 2 分钟），
+   *   点一下书名就卡住两分钟是比「没有章节」更糟的体验 —— 所以默认是「整本书」，
+   *   用户明确点「从目录里挑一章」才去读目录。
+   */
+  const [linkPick, setLinkPick] = useState(null);
+  const [timeline, setTimeline] = useState({ days: [], truncated: false, busy: false, more: false });
 
   // ---- 读后感工作台 -------------------------------------------------------
   const [books, setBooks] = useState({ items: [], total: 0, truncated: false, busy: false, error: '' });
@@ -557,12 +584,46 @@ export function DiaryApp({
   async function loadTimeline() {
     setTimeline((current) => ({ ...current, busy: true }));
     try {
-      const payload = await fetchDiaryTimeline({ limit: 30 });
-      setTimeline({ days: payload.days ?? [], truncated: payload.truncated === true, busy: false });
+      const payload = await fetchDiaryTimeline({ limit: TIMELINE_PAGE });
+      setTimeline({ days: payload.days ?? [], truncated: payload.truncated === true, busy: false, more: false });
       if (payload.privateError) setError(`有私密日记解不开：${payload.privateError}`);
     } catch (cause) {
       setError(cause.message);
       setTimeline((current) => ({ ...current, busy: false }));
+    }
+  }
+
+  /**
+   * 「加载更早」：从当前**最早那一天**往前再取一页，追加在下面。
+   *
+   * ★ 游标用日期，不用「已加载 N 天」。后端是 `date < before`，中间隔着没写日记的日子
+   *   也照样对得上；用条数当 offset 会在这种空档上错位，而且错得很安静。
+   * ★ 追加按 `date` 去重：重复键会让 React 报 key 冲突，侧栏还会多出一行同一天。
+   *   后端理论上不会跨页重复给同一天，但去重是**幂等**的保险，成本是一张 Set。
+   * ★ 只有「这次真的拿到了新的天」才把 `truncated` 传下去。拿到 0 天却仍写着
+   *   「还有更早」的话，按钮会永远停在那里，点一次什么也不发生 —— 那是死按钮。
+   */
+  async function loadMoreTimeline() {
+    if (timeline.more || timeline.busy) return;
+    const oldest = timeline.days[timeline.days.length - 1]?.date;
+    if (!oldest) return;
+    setTimeline((current) => ({ ...current, more: true }));
+    try {
+      const payload = await fetchDiaryTimeline({ limit: TIMELINE_PAGE, before: oldest });
+      setTimeline((current) => {
+        const seen = new Set(current.days.map((day) => day.date));
+        const added = (payload.days ?? []).filter((day) => !seen.has(day.date));
+        return {
+          days: [...current.days, ...added],
+          truncated: added.length > 0 && payload.truncated === true,
+          busy: false,
+          more: false,
+        };
+      });
+      if (payload.privateError) setError(`有私密日记解不开：${payload.privateError}`);
+    } catch (cause) {
+      setError(cause.message);
+      setTimeline((current) => ({ ...current, more: false }));
     }
   }
 
@@ -842,6 +903,118 @@ export function DiaryApp({
       setError(cause.message);
     } finally {
       setBusyKey('');
+    }
+  }
+
+  /**
+   * 打开「挂到书」浮层。
+   *
+   * ★ 只对**公开**条目开这个入口。侧栏「挂在书上」那一块是从 `timeline()` 建的，
+   *   而 `timeline()` 默认不带私密（`includePrivate` 默认 `false`）。给私密条目挂上书，
+   *   结果是在侧栏里永远看不见 —— 一个「写了但永远看不到」的动作比没有这个动作更糟。
+   * ★ 存的是条目**快照**（日期 / 序号 / 前 60 字），不是下标引用：浮层开着的时候
+   *   后台可能刷新、换天、删掉别的一条，用下标去改会改错行。
+   */
+  function openLinkPick(entry) {
+    if (entry.scope === 'private') return;
+    setLinkPick({
+      key: entryKey(entry),
+      date: entry.date ?? selected,
+      index: entry.index,
+      excerpt: String(entry.body ?? '').replace(/\s+/g, ' ').slice(0, 60),
+      find: '',
+      bookId: '',
+      bookTitle: '',
+      chapter: null,
+      chapterTitle: '',
+      outline: { asked: false, busy: false, items: [], error: '' },
+      busy: false,
+      error: '',
+    });
+  }
+
+  /** 在浮层里选一本书。**只换选择，不去读目录**（理由见 `askLinkOutline`）。 */
+  function pickLinkBook(item) {
+    setLinkPick((current) => current && {
+      ...current,
+      bookId: item.id,
+      bookTitle: item.title,
+      chapter: null,
+      chapterTitle: '',
+      outline: { asked: false, busy: false, items: [], error: '' },
+      error: '',
+    });
+  }
+
+  /**
+   * 「从目录里挑一章」才去读目录。
+   *
+   * ★ 不预加载：`fetchEbookIndex` 对网盘书要先把整本拉下来（超时给到 2 分钟）。
+   *   点一下书名就卡两分钟，比「没有章节可选」更糟 —— 用户会以为界面死了。
+   * ★ 两套目录：电子书是 `sections[]`（节号 1 起），PDF 是解读状态里的
+   *   `outline.chapters[]`。都没抽过就是空 —— 那就只剩「整本书」这一个选择，
+   *   界面上要**说出来**，不能让用户对着空列表猜。
+   */
+  async function askLinkOutline() {
+    const bookId = linkPick?.bookId;
+    if (!bookId || linkPick.outline.busy) return;
+    setLinkPick((current) => current && current.bookId === bookId
+      ? { ...current, outline: { ...current.outline, asked: true, busy: true, error: '' } }
+      : current);
+    let items = [];
+    let error = '';
+    try {
+      const index = await fetchEbookIndex(bookId).catch(() => null);
+      if (Array.isArray(index?.sections) && index.sections.length > 0) {
+        items = index.sections.map((section, at) => ({
+          n: at + 1,
+          title: section.title || `第 ${at + 1} 节`,
+        }));
+      } else {
+        const status = await fetchDigestStatus(bookId).catch(() => null);
+        const chapters = status?.outline?.chapters ?? [];
+        items = chapters.map((chapter, at) => ({
+          n: Number.isInteger(chapter.index) ? chapter.index : at + 1,
+          title: chapter.title || `第 ${at + 1} 章`,
+        }));
+      }
+    } catch (cause) {
+      error = cause.message;
+    }
+    // ★ 回来要确认浮层还开着、而且还是**同一本书**：中途换书或关掉的话，
+    //   把 A 的目录画到 B 身上比不画更糟。
+    setLinkPick((current) => current && current.bookId === bookId
+      ? { ...current, outline: { asked: true, busy: false, items, error } }
+      : current);
+  }
+
+  /**
+   * 把浮层里的选择写回去。
+   *
+   * ★ 写 `source` 与 `meta` **两处**，因为它们回答两个不同的问题：
+   *   `meta.book / chapter` 是「按书反查」的键（侧栏分组），
+   *   `source` 是**给人看的那一行**（「引自 《书名》 · 第 3 章」）。
+   *   只写 meta 的话条目头上什么都不变，用户会以为没生效。
+   * ★ 只传要改的两个字段，**不传 body**：宿主侧现在允许局部改写（`updateEntry` 里
+   *   `body` 可选），所以这一下不会重写用户的原话。
+   * ★ 没选章就不传 `chapter` —— 传 `null` 会被 `Number(null) = 0` 收下，文件里
+   *   多一个 `"chapter":0`，而 0 章是不存在的（章号从 1 起）。
+   */
+  async function applyLink() {
+    const pick = linkPick;
+    if (!pick || pick.busy || pick.bookId === '') return;
+    const label = sourceLabel(pick.bookTitle, pick.chapterTitle);
+    const meta = pick.chapter === null
+      ? { book: pick.bookId }
+      : { book: pick.bookId, chapter: pick.chapter };
+    setLinkPick((current) => current && { ...current, busy: true, error: '' });
+    try {
+      await patchDiaryEntry(pick.date, pick.index, { source: label, meta }, pick.scope ?? 'public');
+      setLinkPick(null);
+      await refresh();
+      notify?.(`已挂到 ${label}`);
+    } catch (cause) {
+      setLinkPick((current) => current && { ...current, busy: false, error: cause.message });
     }
   }
 
@@ -1216,6 +1389,20 @@ export function DiaryApp({
     })
     .filter((item) => item.count > 0);
 
+  /**
+   * 「挂到书」浮层里那串书名，按搜索词就地缩小。
+   *
+   * ★ 用 `books.items`（书架已经加载过的那一份），不另开一个接口：
+   *   浮层里再发一次 `/books` 只会多一次可能失败的请求，而列表本来就在内存里。
+   * ★ 书名可能很长（`《译文名著文库》 076[法]雨果-九三年（叶尊译…`），
+   *   所以 `title` 属性给全文、按钮上交给 CSS 截断 —— 这里不做字符串裁剪，
+   *   否则搜索命中全文、按钮上却看不见命中那一段。
+   */
+  const linkBookList = books.items.filter((item) => {
+    const needle = (linkPick?.find ?? '').trim().toLowerCase();
+    return needle === '' || String(item.title).toLowerCase().includes(needle);
+  });
+
   /*
    * 侧栏「挂在书上 / 挂在文章上」两块，分开放。
    * ★ 为什么分开而不是一个「挂在读过的东西上」：书与文章在**去哪里**这件事上不同 ——
@@ -1496,7 +1683,23 @@ export function DiaryApp({
                     );
                   })}
                 </div>
-                {timeline.truncated && <p className="npr-diary-sect-note">只看了最近 {timeline.days.length} 天。</p>}
+                {/*
+                 * 「加载更早」：0.39 之前这里只有一句「只看了最近 N 天。」——
+                 * 用户看得到「还有更早的」，却没有任何办法把它们调出来。
+                 * ★ 数字必须印在按钮上：只说「加载更早」，用户不知道还差多少；
+                 *   而 `truncated` 只说明「还有」，不说明「还有几天」。
+                 * ★ 禁用态给的是「正在读…」而不是灰掉不动 —— 一次翻页要读 30 个文件，
+                 *   在慢盘上能到几百毫秒，没有文字的话那一下像没点中。
+                 */}
+                {timeline.truncated && (
+                  <button type="button" className="npr-diary-dayload"
+                    disabled={timeline.more || timeline.busy}
+                    onClick={() => void loadMoreTimeline()}>
+                    {timeline.more
+                      ? '正在读更早的记录…'
+                      : `加载更早 · 目前只显示最近 ${timeline.days.length} 天`}
+                  </button>
+                )}
               </section>
 
               {linkedBookRows.length > 0 && (
@@ -1987,6 +2190,17 @@ export function DiaryApp({
                             {privateSide && <span className="npr-diary-lock" title="私密：本地加密存储">私密</span>}
                             {entry.source && <span className="npr-diary-source-tag" title={entry.source}>引自 {entry.source}</span>}
                             <span className="npr-diary-entry-actions">
+                              {/*
+                                * 「挂到书」= 用户原话里那半句「一键把这个灵感关联到该书的目录节点上」。
+                                * ★ 只对**公开**条目开：侧栏「挂在书上」是从 `timeline()` 建的，
+                                *   而它默认不带私密 —— 给私密条目挂上书，侧栏里永远看不见。
+                                */}
+                              {!privateSide && (
+                                <button type="button" className="npr-diary-action"
+                                  title="挂到书上：把这一条关联到某本书的某一章"
+                                  aria-label="挂到书上"
+                                  onClick={() => openLinkPick(entry)}><Icon name="book-open" size={13} /></button>
+                              )}
                               {confirmKey === key ? (
                                 <button type="button" className="npr-diary-action is-danger" disabled={busyKey !== ''}
                                   onClick={() => void removeAt(entry)}>
@@ -2134,6 +2348,85 @@ export function DiaryApp({
         * ★ 窗口里放的是**快照**（`expand` 存的是条目本身），所以后台刷新、换天、
         *   删掉别的一条都不会让它指错条目。
         */}
+      {/*
+        * 「挂到书」浮层。和「展开全文」一样挂在 `.npr-diary-workarea` 上，
+        * 不挂在正文流里 —— 挂流里遮罩只盖住右列，左边导航还亮着。
+        * ★ 章节**默认是「整本书」**，要读目录得再点一次（`askLinkOutline`）：
+        *   网盘书的目录要把整本拉下来，点一下书名就卡两分钟是更糟的体验。
+        */}
+      {linkPick && (
+        <div className="npr-diary-modal" role="dialog" aria-modal="true" aria-label="挂到书上"
+          onClick={() => { if (!linkPick.busy) setLinkPick(null); }}>
+          <div className="npr-diary-modal-card npr-diary-linkcard" onClick={(event) => event.stopPropagation()}>
+            <header className="npr-diary-modal-head">
+              <div className="npr-diary-modal-meta"><strong>挂到书上</strong></div>
+              <button type="button" className="npr-diary-modal-close" onClick={() => setLinkPick(null)}
+                aria-label="关闭" autoFocus><Icon name="x" size={14} /></button>
+            </header>
+            <div className="npr-diary-modal-body">
+              <p className="npr-diary-link-excerpt">{linkPick.excerpt}…</p>
+              <input className="npr-diary-linkfind" type="search" value={linkPick.find}
+                placeholder="找一本书…" aria-label="找一本书"
+                onChange={(event) => setLinkPick((current) => current && { ...current, find: event.target.value })} />
+              <div className="npr-diary-linkbooks">
+                {linkBookList.map((item) => (
+                  <button key={item.id} type="button"
+                    className={`npr-diary-linkbook${linkPick.bookId === item.id ? ' is-picked' : ''}`}
+                    title={item.title}
+                    onClick={() => pickLinkBook(item)}>{item.title}</button>
+                ))}
+                {linkBookList.length === 0 && (
+                  <p className="npr-diary-sect-note">书架上没有匹配的书。</p>
+                )}
+              </div>
+              {linkPick.bookId !== '' && (
+                <div className="npr-diary-linkchapter">
+                  <p className="npr-diary-linkpicked">
+                    {linkPick.chapter === null ? '整本书（不分章）' : `第 ${linkPick.chapter} 章 · ${linkPick.chapterTitle}`}
+                  </p>
+                  {!linkPick.outline.asked && !linkPick.outline.busy && (
+                    <button type="button" className="npr-diary-dayload" onClick={() => void askLinkOutline()}>
+                      从目录里挑一章 ›
+                    </button>
+                  )}
+                  {linkPick.outline.busy && <p className="npr-diary-sect-note">正在读这本书的目录…</p>}
+                  {linkPick.outline.asked && !linkPick.outline.busy && linkPick.outline.items.length === 0 && (
+                    <p className="npr-diary-sect-note">
+                      {linkPick.outline.error
+                        ? `读不到目录：${linkPick.outline.error}`
+                        : '这本书还没有目录（没抽过正文 / 没解读过），只能挂到整本。'}
+                    </p>
+                  )}
+                  {linkPick.outline.items.length > 0 && (
+                    <div className="npr-diary-linkchapters">
+                      {linkPick.outline.items.map((item) => (
+                        <button key={`${item.n}-${item.title}`} type="button"
+                          className={`npr-diary-linkbook${linkPick.chapter === item.n ? ' is-picked' : ''}`}
+                          title={item.title}
+                          onClick={() => setLinkPick((current) => current
+                            && { ...current, chapter: item.n, chapterTitle: item.title })}>
+                          {item.n}. {item.title}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            <footer className="npr-diary-linkfoot">
+              {linkPick.error !== '' && <p className="npr-diary-sect-note is-error">{linkPick.error}</p>}
+              <button type="button" className="npr-diary-action" disabled={linkPick.busy}
+                onClick={() => setLinkPick(null)}>取消</button>
+              <button type="button" className="npr-diary-save"
+                disabled={linkPick.bookId === '' || linkPick.busy}
+                onClick={() => void applyLink()}>
+                {linkPick.busy ? '正在挂…' : '挂上去'}
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
       {expand && (
         <div className="npr-diary-modal" role="dialog" aria-modal="true" aria-label="完整这一条"
           onClick={() => setExpand(null)}>

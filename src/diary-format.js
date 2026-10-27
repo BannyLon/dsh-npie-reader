@@ -314,8 +314,25 @@ export function parseSource(source) {
   return { isBook: true, title: body, label: body.includes('《') ? body : `《${body}》` };
 }
 
-/** 情绪 → 分数；不认识的返回 null（曲线要能区分「没有情绪」和「情绪最低」）。 */
-export function moodScore(emoji) {
+/**
+ * 反向：把「书名 + 章」拼成 `source`（`《深度工作》 · 第 3 章`）。
+ *
+ * ★ 必须和 `parseSource()` 同处一个文件：一个是「拼」，一个是「拆」，
+ *   两边的剥壳规则一旦分家，写进去的和读出来的就会对不上
+ *   （0.38 的双书名号 `《《…》》` 就是两边各拼了一次造成的）。
+ * ★ 书名本身带书名号时**不再套一层**：书源里的标题本来就长这样
+ *   `《译文名著文库》 076[法]雨果-九三年`，再套就成了两层。
+ * ★ 没选章就只给书名，不拼一个空的 `· `。
+ */
+export function sourceLabel(title, chapterTitle) {
+  const name = String(title ?? '').trim();
+  if (name === '') return '';
+  const quoted = name.includes('《') ? name : `《${name}》`;
+  const chapter = String(chapterTitle ?? '').trim();
+  return chapter === '' ? quoted : `${quoted} · ${chapter}`;
+}
+
+/** 情绪 → 分数；不认识的返回 null（曲线要能区分「没有情绪」和「情绪最低」）。 */export function moodScore(emoji) {
   if (typeof emoji !== 'string' || emoji === '') return null;
   return MOOD_SCORE.get(emoji) ?? MOOD_SCORE.get(normalizeMood(emoji)) ?? null;
 }
