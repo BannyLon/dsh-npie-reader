@@ -267,22 +267,55 @@ function MoodRow({ value, onChange, label }) {
 }
 
 /**
- * 时间轴里「已经挂在某本书上」的灵感，按书名归拢。
+ * 一条记录的 `source` 归一成一个**可分组**的键。
+ *
+ * ★ 书与文章共用这一个函数，因为「挂在哪儿」本来就只有一件事：把灵感锚回它
+ *   发生的那个现场。区别只在显示：
+ *   · 书：`《深度工作》· 第 3 章` → 键 `《深度工作》`（书名号是识别标志，
+ *     老条目也是这个形态，不需要迁移数据）；
+ *   · 文章：`Anthropic 刚刚向 SEC 递交了 S-1` → 键就是全文（不套书名号 ——
+ *     给一篇文章加书名号是在说它是一本书，那是谎）。
+ * ★ 空串表示「没有来源」：这类灵感不进任何分组，也不该被硬塞一个「未分类」。
+ */
+function sourceKey(source) {
+  const text = String(source ?? '').trim();
+  if (text === '') return '';
+  const book = /^《([^》]+)》/.exec(text);
+  return book ? `《${book[1]}》` : text;
+}
+
+/**
+ * 时间轴里「已经挂在一个来源上」的灵感，按来源归拢。
  *
  * ★ 按 `source` 而不是 `meta.book` 分组：`source` 是**人可读**的（`《深度工作》· 第 3 章`），
  *   `meta.book` 是书架内部 id，书单被 `BOOKS_PAGE_LIMIT` 截断时前端根本映射不出书名。
  *   两者在「按 L 记灵感」时是同时写入的，用哪个都不丢信息，但只有 `source` 能直接显示。
+ * ★ 带上 `entryKey`（最近那一条的）：只给日期是不够的 —— 那一天可能有七条，
+ *   跳过去用户看到的还是原来那一屏，只是日期变了，这就是「点了不对应」。
  */
-function linkedBooks(days) {
+function linkedSources(days) {
   const map = new Map();
   for (const day of days) {
     for (const entry of day.entries ?? []) {
-      if (entry.scope !== 'public' || entry.kind === '读后感' || !entry.source) continue;
-      const title = (/^《([^》]+)》/.exec(entry.source)?.[1]) ?? entry.source;
-      const cell = map.get(title) ?? { title, count: 0, last: day.date };
+      if (entry.scope !== 'public' || entry.kind === '读后感') continue;
+      const key = sourceKey(entry.source);
+      if (key === '') continue;
+      const isBook = key.startsWith('《');
+      const cell = map.get(key) ?? {
+        key,
+        kind: isBook ? 'book' : 'article',
+        title: isBook ? key.slice(1, -1) : key,
+        count: 0,
+        last: day.date,
+        entryKey: entryKey(entry),
+      };
       cell.count += 1;
-      if (day.date > cell.last) cell.last = day.date;
-      map.set(title, cell);
+      // 同一天内按记录顺序往后覆盖：最后写入的就是这一天最新的那一条。
+      if (day.date >= cell.last) {
+        cell.last = day.date;
+        cell.entryKey = entryKey(entry);
+      }
+      map.set(key, cell);
     }
   }
   return [...map.values()].sort((left, right) => (
@@ -339,6 +372,15 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
   const [tagSheetFind, setTagSheetFind] = useState('');
   /** 这一天的记录是不是展开了「更早的」那几条。换天要收回（见 `pick`）。 */
   const [dayAll, setDayAll] = useState(false);
+  /**
+   * 侧栏「挂在书上 / 挂在文章上」点开的那一个来源（`sourceKey()` 的返回值，空 = 不筛）。
+   *
+   * ★ 这个状态存在的理由就是用户说的「点击不对应」：点一行书名只 `jump(日期)`，
+   *   那一天若有七条，跳过去看到的还是原来那一屏 —— 日期变了，但没有任何东西
+   *   对应上刚才点的那个书名。所以点一行必须同时把列表**收窄**成那个来源，
+   *   并给出「现在只显示挂在《X》上的 · 全部」这条出口。
+   */
+  const [linkKey, setLinkKey] = useState('');
   const [timeline, setTimeline] = useState({ days: [], truncated: false, busy: false });
 
   // ---- 读后感工作台 -------------------------------------------------------
@@ -1008,6 +1050,27 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
   /** 退出筛选：连查询词一起清掉，侧栏回到「标签 / 时间轴 / 挂在书上」三块检索器。 */
   function clearFilter() {
     setSearch((current) => ({ ...current, open: false, query: '', hits: [], scanned: 0, truncated: false }));
+    setLinkKey('');
+  }
+
+  /**
+   * 点侧栏「挂在书上 / 挂在文章上」里的一行。
+   *
+   * ★ 只 `jump(item.last)` 是不够的 —— 那就是用户说的「点击不对应跳转显示」：
+   *   跳到那一天之后，列表还是那一天的**全部**记录，刚才点的书名在界面上
+   *   找不到任何对应物，只有日期偷偷换了。
+   * ★ 所以三件事一起做：把列表收窄成这个来源、跳到它最近一条所在的那一天、
+   *   滚到最近那一条并高亮。收窄是「对应」，滚动是「跳转」，两个都要。
+   */
+  function openSource(item) {
+    setLinkKey(item.key);
+    /*
+     * 不在这里 `setDayAll(true)`：`pick()` 会把它收回 false（换天就要收回折叠态），
+     * 同一次批处理里后写的赢。展开由 `focusKey` 那条 effect 兜底 —— 它滚不到目标时
+     * 会自己展开再滚（`if (!node) { if (!dayAll) setDayAll(true) }`）。
+     * 只留**一条**展开路径，否则两处各自展开、各自判断，迟早不一致。
+     */
+    jump(item.last, item.entryKey);
   }
 
   async function reveal() {
@@ -1088,6 +1151,17 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
   const inspirationEntries = day.entries.filter((entry) => entry.scope === 'public' && entry.kind !== '读后感');
   const privateEntries = day.entries.filter((entry) => entry.scope === 'private');
   const visibleEntries = moduleValue === 'private' ? privateEntries : inspirationEntries;
+  /**
+   * 侧栏点了「挂在《X》上」之后，列表收窄成这个来源的那几条。
+   *
+   * ★ 收窄只作用在**列表**上（`listEntries`），不改 `visibleEntries`：顶栏的
+   *   「7 条」说的是这一天的总量，跟着筛会让人以为这一天的记录变少了。
+   * ★ 收窄之后仍然可能为 0（换到别的天、那天没有挂在这个来源上的）—— 那时由
+   *   空状态说清楚「这一天没有挂在《X》上的」，而不是让列表静静空着。
+   */
+  const listEntries = linkKey === ''
+    ? visibleEntries
+    : visibleEntries.filter((entry) => sourceKey(entry.source) === linkKey);
 
   /** ★ 只数**私密**那一边。用合计会让私密日历上的点跟着灵感一起亮（用户报的就是这个）。 */
   const privateDays = marks.privateDays ?? {};
@@ -1112,7 +1186,15 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
     })
     .filter((item) => item.count > 0);
 
-  const linked = linkedBooks(timeline.days);
+  /*
+   * 侧栏「挂在书上 / 挂在文章上」两块，分开放。
+   * ★ 为什么分开而不是一个「挂在读过的东西上」：书与文章在**去哪里**这件事上不同 ——
+   *   书能回到那一章，文章能回到那一篇。混在一列里，用户看到的只是一个书名号的差别，
+   *   而那个差别恰好是「点了会发生什么」的全部提示。
+   */
+  const linked = linkedSources(timeline.days);
+  const linkedBookRows = linked.filter((item) => item.kind === 'book');
+  const linkedArticleRows = linked.filter((item) => item.kind === 'article');
 
   const filteredBooks = books.items.filter((item) => (
     bookQuery.trim() === '' || item.title.toLowerCase().includes(bookQuery.trim().toLowerCase())
@@ -1189,8 +1271,8 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
    *   早上的那条下午不需要一直占着屏幕。顺序本身不变 —— 展开不该让内容换个方向。
    * ★ 条数不够时 `slice(-n)` 返回全部，不需要额外的 if。
    */
-  const entriesShown = dayAll ? visibleEntries : visibleEntries.slice(-DAY_PREVIEW);
-  const entriesHidden = Math.max(0, visibleEntries.length - entriesShown.length);
+  const entriesShown = dayAll ? listEntries : listEntries.slice(-DAY_PREVIEW);
+  const entriesHidden = Math.max(0, listEntries.length - entriesShown.length);
   /**
    * 顶上那块「写入口」到底有没有东西可放。
    *
@@ -1211,7 +1293,10 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
      */
     <div ref={workareaRef}
       className={`npr-workarea npr-diary-workarea${aiOpen || chat ? ' has-companion' : ''}`}
-      style={{ '--npr-companion-width': `${companionWidth}%` }}>
+      /* `--npr-list-width` 也提到这一层：AI 面板的宽度上限要在**这里**算
+         （「正文至少留 340px」得先扣掉导航那 268px），而它原来只写在 `.npr-layout`
+         的 inline style 上 —— 那是兄弟节点，面板读不到。 */
+      style={{ '--npr-companion-width': `${companionWidth}%`, '--npr-list-width': `${listWidth}px` }}>
       {/* ★ `npr-diary-layout` / `npr-diary-nav` 两个类只用来把「AI 面板打开时收起
           导航」这条规则**限定在日记页**（见 refinements.css）。阅读页的行为不变。 */}
       <div className="npr-layout npr-diary-layout" style={{ '--npr-list-width': `${listWidth}px` }}>
@@ -1369,15 +1454,35 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                 {timeline.truncated && <p className="npr-diary-sect-note">只看了最近 {timeline.days.length} 天。</p>}
               </section>
 
-              {linked.length > 0 && (
+              {linkedBookRows.length > 0 && (
                 <section className="npr-diary-sect">
                   <h2 className="npr-diary-sect-head">挂在书上</h2>
-                  <p className="npr-diary-sect-note">读书时按 L 记的灵感，自动挂到那本书上。</p>
-                  {linked.map((item) => (
-                    <button key={item.title} type="button" className="npr-diary-dayrow"
-                      title={`《${item.title}》· 最近一条在 ${item.last}`}
-                      onClick={() => jump(item.last)}>
-                      <span className="npr-diary-dayrow-date">《{item.title}》</span>
+                  <p className="npr-diary-sect-note">读书时按 L 记的灵感，挂回那一章。</p>
+                  {linkedBookRows.map((item) => (
+                    <button key={item.key} type="button"
+                      className={`npr-diary-dayrow${linkKey === item.key ? ' npr-selected' : ''}`}
+                      title={`${item.key} · ${item.count} 条 · 最近一条在 ${item.last}`}
+                      onClick={() => openSource(item)}>
+                      <span className="npr-diary-dayrow-date">{item.key}</span>
+                      <span className="npr-diary-dayrow-count">{item.count} 条</span>
+                    </button>
+                  ))}
+                </section>
+              )}
+              {/* ★ 为什么文章也要一块：用户 2026-10-27 的原话是「那如果是在阅读 RSS 时
+                  创建的灵感怎么办？挂在书上的意义？」——问得对。挂在某处这件事的意义
+                  从来不是「因为它是书」，而是**回到现场**：一条灵感离开上下文就只剩
+                  半句话。所以书和文章各占一块，用同一个机制，只是回到的地方不同。 */}
+              {linkedArticleRows.length > 0 && (
+                <section className="npr-diary-sect">
+                  <h2 className="npr-diary-sect-head">挂在文章上</h2>
+                  <p className="npr-diary-sect-note">读 RSS 时按 L 记的灵感，挂回那一篇。</p>
+                  {linkedArticleRows.map((item) => (
+                    <button key={item.key} type="button"
+                      className={`npr-diary-dayrow${linkKey === item.key ? ' npr-selected' : ''}`}
+                      title={`${item.title} · ${item.count} 条 · 最近一条在 ${item.last}`}
+                      onClick={() => openSource(item)}>
+                      <span className="npr-diary-dayrow-date">{item.title}</span>
                       <span className="npr-diary-dayrow-count">{item.count} 条</span>
                     </button>
                   ))}
@@ -1559,6 +1664,10 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                 * ★ 窗口里放的是**快照**（`expand` 存的是条目本身），所以后台刷新、
                 *   换天、删掉别的一条都不会让它指错条目。
                 */}
+              {/* ★ `hasDock` 是这块的闸：读后感「还没选书 / 没读完」时上面**不该有**
+                  一个空着的写作坞（会留下一条 24px 的空白带 + 一条边线，看起来像
+                  加载失败的占位）。判据写在 `hasDock` 里，三种模块各有一道闸。 */}
+              {hasDock && (
               <div className="npr-diary-dock">
               <div className="npr-diary-sheet">
                 {/* ---- 写入口：三种模块三种形态 ------------------------------ */}
@@ -1752,14 +1861,32 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                         </small>
                       </section>
                     )}
-                    {loading && <div className="npr-empty">正在读这一天…</div>}
-                    {!loading && visibleEntries.length === 0 && (
-                      <div className="npr-diary-blank">
-                        <p>{moduleValue === 'private' ? '这一天还没有私密日记。' : '这一天还没有灵感。'}</p>
-                        <p>{moduleValue === 'private'
-                          ? '上面写一句就行。私密的只留在本机，不同步、不进模型。'
-                          : '上面写一句就行 —— 灵感多半是半句话。'}</p>
+                    {/* 来源筛选条：回答「列表为什么只剩这几条」，并给出口。
+                        与标签筛选条共用一套样式 —— 两者是同一件事（收窄），
+                        长成两个样子会让人以为是两种模式。 */}
+                    {linkKey !== '' && (
+                      <div className="npr-diary-filterbar">
+                        <span className="npr-diary-filterbar-text">
+                          只显示挂在 <b>{linkKey}</b> 上的{loading ? '…' : ` · 这天 ${listEntries.length} 条`}
+                        </span>
+                        <button type="button" className="npr-diary-filterbar-clear" onClick={() => setLinkKey('')}>全部</button>
                       </div>
+                    )}
+                    {loading && <div className="npr-empty">正在读这一天…</div>}
+                    {!loading && listEntries.length === 0 && (
+                      linkKey !== '' ? (
+                        <div className="npr-diary-blank">
+                          <p>这一天没有挂在 {linkKey} 上的灵感。</p>
+                          <p>侧栏那一行统计的是<strong>所有天</strong>；换到有记录的那一天，或者点上面的「全部」。</p>
+                        </div>
+                      ) : (
+                        <div className="npr-diary-blank">
+                          <p>{moduleValue === 'private' ? '这一天还没有私密日记。' : '这一天还没有灵感。'}</p>
+                          <p>{moduleValue === 'private'
+                            ? '上面写一句就行。私密的只留在本机，不同步、不进模型。'
+                            : '上面写一句就行 —— 灵感多半是半句话。'}</p>
+                        </div>
+                      )
                     )}
                     {/*
                       * ★ 默认只铺最近 `DAY_PREVIEW` 条，更早的收在这一行后面。
@@ -2013,8 +2140,15 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
             const vertical = getComputedStyle(area).flexDirection === 'column';
             const total = vertical ? rect.height : rect.width;
             const span = vertical ? rect.bottom - event.clientY : rect.right - event.clientX;
-            const minimum = Math.min(320, total * 0.3);
-            const amount = Math.max(minimum, Math.min(span, total - minimum));
+            /* ★ 面板打开时导航栏**还在**（用户 2026-10-27：「为什么打开 AI 整理左侧边栏
+               就关闭了呢」），所以「正文至少留多宽」得先把侧栏占的那 268px 扣掉。
+               不扣的话拖到底会让面板吃掉导航的位置，正文被压成一条缝 —— 上一版正是靠
+               **藏起导航**绕开这件事，而那只是把「正文太窄」换成了「导航没了」。
+               量真实宽度而不是读常量：侧栏本身可以拖。 */
+            const nav = vertical ? 0 : (area.querySelector('.npr-diary-nav')?.getBoundingClientRect().width ?? 0);
+            const room = Math.max(0, total - nav);
+            const minimum = Math.min(320, room * 0.42);
+            const amount = Math.max(minimum, Math.min(span, room - minimum));
             companionWidthRef.current = Math.round(amount / total * 100);
             setCompanionWidth(companionWidthRef.current);
           }}

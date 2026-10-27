@@ -456,6 +456,30 @@ describe('元数据行（情绪 / 关联 / 可见性）', () => {
     assert.deepEqual(normalizeMeta('字符串'), {});
   });
 
+  it('★ 文章的 key 也进 meta（读 RSS 时按 L 记的灵感要有出处）', () => {
+    // 用户 2026-10-27：「那如果是在阅读 RSS 时创建的灵感怎么办？」——
+    // 出处不能只写在 `source`（那是给人看的一句话，文章标题里带什么都不奇怪），
+    // 还要有一个稳定的 key 能反查回那一篇。
+    assert.deepEqual(normalizeMeta({ article: 'feed:abc/2026-10-27-1' }), { article: 'feed:abc/2026-10-27-1' });
+    // URL 片段要能过（订阅源的 key 可能带 `:` `/` `#`），空格也会出现。
+    assert.deepEqual(normalizeMeta({ article: 'https://example.com/a#b' }), { article: 'https://example.com/a#b' });
+    // ★ 但会**提前结束 HTML 注释**的 `-->` 必须拒：写进去之后那行注释就断了，
+    //   后半截会变成正文，而且读回来永远少一半。
+    assert.deepEqual(normalizeMeta({ article: 'x --> y' }), {});
+    // 换行同理：整行断成两行，第二行变成普通正文。
+    assert.deepEqual(normalizeMeta({ article: 'a\nb' }), {});
+    assert.deepEqual(normalizeMeta({ article: '' }), {});
+    assert.deepEqual(normalizeMeta({ article: 'x'.repeat(201) }), {});
+  });
+
+  it('★ 文章 key 能原样过一遍注释行（写进去再读回来要一样）', () => {
+    const key = 'feed:abc/2026-10-27-1';
+    const line = metaLine({ article: key, mood: '🙂' });
+    assert.deepEqual(parseMetaLine(line), { mood: '🙂', article: key });
+    // 顺序：mood 在 article 之前（META_FIELDS 的顺序，两次写出必须逐字节相同）
+    assert.ok(line.indexOf('mood') < line.indexOf('article'), line);
+  });
+
   it('元数据只认白名单字段，别的键不会被写回去', () => {
     assert.deepEqual(normalizeMeta({ mood: '🙂', secret: '不该出现', __proto__: 'x' }), { mood: '🙂' });
     assert.equal(metaLine({ mood: '🙂', extra: 1 }).includes('extra'), false);

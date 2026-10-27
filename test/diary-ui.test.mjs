@@ -433,13 +433,20 @@ describe('灵感模块：情绪 / 标签 / 时间轴 / 关联到书', () => {
     assert.match(diary, /entry\.kind !== '读后感'/, '时间轴没有滤掉读后感');
   });
 
-  it('★ 「挂在书上」把已关联的灵感按书名归拢（灵感流转的落地，不是只写进 meta）', () => {
-    // 「灵感流转」的另一半：在书里按 L 记的灵感会带 `source`，但**界面必须能按书反查**，
+  it('★ 「挂在书上」把已关联的灵感按来源归拢（灵感流转的落地，不是只写进 meta）', () => {
+    // 「灵感流转」的另一半：在书里按 L 记的灵感会带 `source`，但**界面必须能按来源反查**，
     // 否则它只是一条普通灵感，用户永远不知道自己挂过什么。
-    assert.match(diary, /function linkedBooks\(days\)/, '没有按书归拢的判据');
-    assert.match(diary, /\^《\(\[\^》\]\+\)》/, '没有从 source 里取书名');
-    assert.match(diary, /linked\.length > 0 &&/, '「挂在书上」那一块没有被条件渲染（会一直空着占位）');
-    assert.match(diary, /《\{item\.title\}》/, '那一块没把书名显示出来');
+    assert.match(diary, /function linkedSources\(days\)/, '没有按来源归拢的判据');
+    assert.match(diary, /\^《\(\[\^》\]\+\)》/, '没有从 source 里认出书名号');
+    // ★ 0.38：书与文章分两块 —— 用户 2026-10-27 问「在阅读 RSS 时创建的灵感怎么办？
+    //   挂在书上的意义？」，所以判据从「有没有那一块」变成「两块各自成立」。
+    assert.match(diary, /linkedBookRows\.length > 0 &&/, '「挂在书上」那一块没有被条件渲染');
+    assert.match(diary, /linkedArticleRows\.length > 0 &&/, '「挂在文章上」那一块不见了 —— RSS 的灵感没地方去');
+    assert.match(diary, /<span className="npr-diary-dayrow-date">\{item\.key\}<\/span>/, '那一块没把来源显示出来');
+    // ★ 「点了不对应」的那条：只 jump 日期不算跳转，还得把来源带过去并收窄列表。
+    assert.match(diary, /function openSource\(item\)[\s\S]{0,400}?setLinkKey\(item\.key\)/,
+      '点一行不会收窄列表 —— 跳过去看到的还是那一天的**全部**记录');
+    assert.match(diary, /jump\(item\.last, item\.entryKey\)/, '点一行没有滚到最近那一条');
   });
 });
 
@@ -640,23 +647,35 @@ describe('灵感流转：按 L 时自动带上正在读的书与章节', () => {
     assert.match(reader, /onReadingContext=\{setReadingCtx\}/, 'ReaderPage 没接上书架上报的上下文');
   });
 
-  it('② 浮层只从书架那半边拿上下文（订阅页记的灵感不挂书）', () => {
-    assert.match(reader, /context=\{mode === 'library' \? readingCtx : null\}/,
-      '订阅页也会带上上一本书的上下文');
+  it('② 浮层在书架与订阅两处都拿上下文（书 → 书名号，文章 → 标题）', () => {
+    // ★ 0.38 改的是**这一条本身**：0.37 及以前写的是 `mode === 'library' ? readingCtx : null`，
+    //   于是订阅页按 L 记的灵感连来源都没有。用户 2026-10-27 问「那如果是在阅读 RSS 时
+    //   创建的灵感怎么办？挂在书上的意义？」—— 意义是回到现场，与「是不是书」无关。
+    assert.match(reader, /mode === 'library' \? readingCtx : \(activeArticle\?\.article \? \{/,
+      '订阅页仍然不带上下文 —— 那篇文章名丢了，日记里回不去');
+    assert.match(reader, /articleKey: activeArticle\.article\.key,/, '没带上文章的 key');
+    // 书那边不能被顺手删掉（同一个三元的两支）。
+    assert.match(reader, /context=\{mode === 'library' \? readingCtx :/,
+      '书架那一支被改坏了');
   });
 
-  it('③ 浮层把书 / 章 / 页写进 meta，并把「会记到哪儿」说出来', () => {
-    assert.match(quick, /const linked = context\?\.bookId \? context : null;/, '没有从 context 取关联');
+  it('③ 浮层把书 / 章 / 页 / 文章写进 meta，并把「会记到哪儿」说出来', () => {
+    assert.match(quick, /const linked = context && \(context\.bookId \|\| context\.articleKey\) \? context : null;/,
+      '没有从 context 取关联（书和文章都要算）');
     assert.match(quick, /meta\.book = linked\.bookId;/, 'meta.book 没写');
     assert.match(quick, /meta\.chapter = linked\.chapter\.n;/, 'meta.chapter 没写');
     assert.match(quick, /meta\.page = linked\.page;/, 'meta.page 没写');
+    assert.match(quick, /meta\.article = linked\.articleKey;/, 'meta.article 没写 —— 文章的灵感没有出处');
     // 关联必须**看得见**，但它是一行纯文本（不是控件，见上一条 describe）。
-    assert.match(quick, /\{linked && <p className="npr-quick-link">会记到 \{source\}<\/p>\}/,
+    assert.match(quick, /\{linked && <p className="npr-quick-link">会记到 \{where\}<\/p>\}/,
       '「会记到哪儿」那行没了 —— 关联变成悄悄发生的');
+    // ★ 文章名**不套书名号**：套了就是在说它是一本书，而日记侧靠这个差别分两块。
+    assert.match(quick, /const source = bookTitle !== ''\s*\n\s*\? `《\$\{bookTitle\}》/, 
+      '书的 source 不再是《书名》形态 —— 日记侧分不出书和文章');
   });
 
   it('★ 反向对照：删掉 meta.book 那一行，判据必须变红', () => {
-    const old = quick.replace('      meta.book = linked.bookId;\n', '');
+    const old = quick.replace('        meta.book = linked.bookId;\n', '');
     assert.notEqual(old, quick, '替换没生效，反向对照是假绿');
     assert.doesNotMatch(old, /meta\.book = linked\.bookId;/);
   });
@@ -664,8 +683,8 @@ describe('灵感流转：按 L 时自动带上正在读的书与章节', () => {
   it('★ 没有阅读上下文时不写 meta.book（不能凭空挂书）', () => {
     // 守卫的形状就是「`linked` 为假时整个 meta 是空对象」——如果哪天有人把
     // `meta.book` 挪到 `if (linked)` 外面，订阅页记的灵感也会被挂上一个空 id。
-    assert.match(quick, /if \(linked\) \{\n\s*meta\.book = linked\.bookId;/,
-      'meta 的写入不在 `if (linked)` 里 —— 没有上下文时会写出一个空的书 id');
+    assert.match(quick, /if \(linked\) \{[\s\S]{0,200}?if \(linked\.bookId\) \{\n\s*meta\.book = linked\.bookId;/,
+      'meta 的写入不在 `if (linked)` / `if (linked.bookId)` 里 —— 没有上下文时会写出一个空的书 id');
   });
 });
 
@@ -951,7 +970,7 @@ describe('0.36：时间轴联动 / 一天太长 / 标签全量', () => {
 
   it('★ 一天太长：默认只铺最近 N 条，并说清楚还藏了几条', () => {
     assert.match(diary, /const DAY_PREVIEW = 10/);
-    assert.match(diary, /const entriesShown = dayAll \? visibleEntries : visibleEntries\.slice\(-DAY_PREVIEW\)/,
+    assert.match(diary, /const entriesShown = dayAll \? listEntries : listEntries\.slice\(-DAY_PREVIEW\)/,
       '默认没有截断 —— 一天几十条就要滚八屏');
     assert.match(diary, /更早还有 \{entriesHidden\} 条/, '折叠后没有说自己藏了多少 —— 等于把记录藏起来');
     assert.match(diary, /\{entriesShown\.map\(/, '列表没改成渲染 entriesShown');
@@ -1046,5 +1065,73 @@ describe('0.37：写入口固定 / 每条三行 / AI 面板可拖', () => {
     // 窄容器下 workarea 变纵向，分隔条要跟着改方向。
     assert.match(diary, /getComputedStyle\(area\)\.flexDirection === 'column'/,
       '分隔条写死了横向 —— 窄容器里会拖不动');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.38：漏在界面上的 `)}` / 提示词不换行 / 一开面板就收起侧栏 / 挂在书上点了不对应
+//
+// ★ 这一轮四条里有三条是**上一轮自己造成的**，所以每一条都配一条结构判据：
+//   ① 删代码时把 `{hasDock && (` 一起吃掉，`)}` 变成文本渲染在界面上；
+//   ② 面板一开就 `display: none` 收掉导航（用户：「为什么打开 AI 整理左侧边栏就关闭了呢」）；
+//   ③ 点一行书名只 `jump(日期)`，列表不跟着收窄。
+//   这三件事都不会报错，只会「用起来不对」，所以只能靠结构钉住。
+// ---------------------------------------------------------------------------
+
+describe('0.38：写作坞的闸 / 提示词换行 / 侧栏保留 / 来源筛选', () => {
+  it('★ `hasDock` 必须真的被用来包住写作坞（不是声明了却没人用）', () => {
+    // 声明了不用的后果就是 0.37 那个 bug：dock 无条件渲染，读后感「还没选书」时
+    // 顶上一条空白的 24px 带 + 一条边线，看起来像加载失败。
+    assert.match(diary, /\{hasDock && \(\s*\n\s*<div className="npr-diary-dock">/,
+      '写作坞没有被 hasDock 包住 —— 而 `hasDock` 又声明着，正是 0.37 漏掉 `)}` 的现场');
+    // 闸的三个分支都要在（灵感恒有 / 私密解锁 / 读后感选到读完的书）。
+    assert.match(diary, /const hasDock = moduleValue === 'inspiration'/, 'hasDock 的判据不见了');
+  });
+
+  it('★ AI 面板打开时**不收侧栏**，改成给正文一个下限', () => {
+    assert.doesNotMatch(diaryCss, /has-companion[^{]*\{[^}]*\.npr-diary-nav[^}]*display: none/,
+      '侧栏又被收起来了 —— 用户 2026-10-27 明确问「为什么打开 AI 整理左侧边栏就关闭了呢」');
+    assert.equal(/has-companion > \.npr-layout\.npr-diary-layout > \.npr-diary-nav,\s*\n?\s*\.npr-workarea\.has-companion > \.npr-layout\.npr-diary-layout > \.npr-resize \{ display: none; \}/.test(diaryCss),
+      false, '那对「收起导航 + 收起拖动条」的规则还在');
+    // 新的做法：面板宽度上限按「总宽 − 导航 − 340」算。
+    assert.match(diaryCss, /--npr-companion-width, 44%\), calc\(100% - var\(--npr-list-width, 268px\) - 340px\)/,
+      '面板没有留出正文的下限 —— 拖宽之后正文会被压成一条缝');
+    // 拖动时也必须扣掉侧栏，否则手柄算出来的上限和 CSS 不是一回事（会出现拖不动的死区）。
+    assert.match(diary, /querySelector\('\.npr-diary-nav'\)\?\.getBoundingClientRect\(\)\.width/,
+      '拖动没扣侧栏宽度 —— 面板会吃掉导航的位置');
+    assert.match(diary, /const room = Math\.max\(0, total - nav\);/, '没有把「减去导航」这一步算出来');
+  });
+
+  it('★ AI 面板里的快捷提示词换行，不横滚', () => {
+    // 用户 2026-10-27：「ai整理的提示prompt没有自适应」——最后一条被面板右边缘切掉，
+    // 而滚动条被 `scrollbar-width: none` 藏着：能滚，但看不出来等于没有。
+    assert.match(diaryCss, /\.npr-diary-companion \.npr-companion-prompt-scroll \{[^}]*flex-wrap: wrap/,
+      '提示词条还是横滚 —— 窄面板下最后一条被切掉');
+    assert.match(diaryCss, /\.npr-diary-companion \.npr-companion-prompt-scroll \{[^}]*overflow-x: visible/,
+      '还在 `overflow-x: auto` 里 —— 换行 + 横滚会互相抵消');
+    // ★ 只改日记页：伴读那边一长串提示词横滚是刻意的，换行会顶掉半屏输入框。
+    //   判据必须**锚在行首**（`\n`）：不锚的话 `.npr-diary-companion .npr-companion-
+    //   prompt-scroll` 自己会被这条反向断言当成「别人也被改了」，永远是假红。
+    assert.equal(/\n\.npr-companion-prompt-scroll \{[^}]*flex-wrap: wrap/.test(diaryCss), false,
+      '把伴读那边的横滚也一起改掉了 —— 那是另一个页面的既定行为');
+  });
+
+  it('★ 「挂在书上」点一行 = 收窄 + 跳那天 + 滚到最近一条', () => {
+    assert.match(diary, /const \[linkKey, setLinkKey\] = useState\(''\);/, '没有来源筛选状态');
+    assert.match(diary, /const listEntries = linkKey === ''[\s\S]{0,200}?sourceKey\(entry\.source\) === linkKey/,
+      '列表没有被筛选（点了书名还是显示一整天）');
+    // 顶栏那条「7 条」说的是这一天的总量，不能跟着筛 —— 否则会以为记录变少了。
+    assert.match(diary, /`\$\{visibleEntries\.length\} 条`/, '顶栏的条数被筛选影响了');
+    // 出口要一直在：筛选态必须能一键回到全部。
+    assert.match(diary, /只显示挂在 <b>\{linkKey\}<\/b> 上的/, '筛选条没说清「现在只显示什么」');
+    assert.match(diary, /onClick=\{\(\) => setLinkKey\(''\)\}>全部<\/button>/, '筛选态没有出口');
+  });
+
+  it('★ 文章也算「挂在某处」：分组认得出，且不套书名号', () => {
+    assert.match(diary, /function sourceKey\(source\)/, '没有来源归一（书和文章没法分组）');
+    assert.match(diary, /kind: isBook \? 'book' : 'article'/, '没有区分书和文章');
+    assert.match(diary, /<h2 className="npr-diary-sect-head">挂在文章上<\/h2>/, '文章那一块不见了');
+    // 给文章套书名号等于说它是一本书，而日记侧正是靠书名号分类的。
+    assert.match(diary, /return book \? `《\$\{book\[1\]\}》` : text;/, '文章的键被套上了书名号');
   });
 });

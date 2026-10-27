@@ -100,7 +100,14 @@ const NOT_CLASSES = new Set([
 
 // 有意保留的语义钩子：只用于在 DOM 上标记区块边界，没有对应样式。
 // 若将来给它们加样式，请从这里移走。
-const HOOK_ONLY = new Set(['npr-settings-sources-card', 'npr-width-options']);
+/*
+ * `npr-diary-layout` / `npr-diary-nav`（2026-10-27，0.38）：日记页的网格与阅读页完全同一套
+ * （`.npr-workarea.has-companion > .npr-layout` 那三条），所以它们**不该有自己的样式** ——
+ * 0.37 就是给它们写了 `display: none`，把「AI 面板一开侧栏就消失」变成了产品行为。
+ * 但它们必须留在 DOM 上：拖动分隔条时要按 `.npr-diary-nav` 的**真实宽度**算正文下限
+ * （见 DiaryApp 的 onPointerMove），删掉这句查询，面板拖宽就会吃掉导航的位置。
+ */
+const HOOK_ONLY = new Set(['npr-settings-sources-card', 'npr-width-options', 'npr-diary-layout', 'npr-diary-nav']);
 
 const missing = [...used].filter((n) => !defined.has(n) && !NOT_CLASSES.has(n) && !HOOK_ONLY.has(n)).sort();
 const unused = [...defined].filter((n) => !used.has(n)).sort();

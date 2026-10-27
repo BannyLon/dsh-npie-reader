@@ -1581,9 +1581,17 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
         </>
       )}
       {dialog === 'settings' && <SettingsPage api={api} initialTab={settingsEntry.tab} startAddingPrompt={settingsEntry.addPrompt} onSubscriptionsChanged={onSubscriptionAdded} onClose={() => { setDialog(undefined); setSettingsEntry({ tab: 'reading', addPrompt: false }); void loadChannels(); }} notify={notify} />}
-      {/* 灵感浮层：订阅页与书架页共用一份。日记页不挂（那儿本来就有一个输入框）。 */}
+      {/* 灵感浮层：订阅页与书架页共用一份。日记页不挂（那儿本来就有一个输入框）。
+          ★ 上下文**两边都给**（0.38）：用户 2026-10-27 问「那如果是在阅读 RSS 时
+            创建的灵感怎么办？挂在书上的意义？」—— 意义是**回到现场**，与「是不是书」
+            无关。以前只有书架页给 `readingCtx`，订阅页按 `L` 记的灵感连来源都没有，
+            于是在日记里既回不去那篇文章，也不在任何分组里出现。 */}
       {mode !== 'diary' && <QuickCapture open={quickOpen} onClose={() => setQuickOpen(false)} notify={notify}
-        context={mode === 'library' ? readingCtx : null} />}
+        context={mode === 'library' ? readingCtx : (activeArticle?.article ? {
+          articleKey: activeArticle.article.key,
+          articleTitle: readerTitle({ active, versions: activeArticle.versions, article: activeArticle.article }),
+          channel: activeArticle.article.channelName ?? '',
+        } : null)} />}
       {toast && <div role="status" aria-live="polite" className={`npr-toast${toast.isError ? ' is-error' : ''}`}>{toast.message}</div>}
     </div>
   );

@@ -5,15 +5,22 @@
 }
 .npr-workarea.has-companion > .npr-layout > .npr-sidebar { display: flex; }
 .npr-workarea.has-companion > .npr-layout > .npr-resize { display: block; }
-/* ★★ 日记页例外：AI 面板打开时**收起导航栏**。
-   上面那条「侧栏保持可见」是给阅读页写的（文章列表还得能点）。日记页的侧栏是
-   **导航**（标签 / 时间轴 / 日历），照搬过来就是：268px 导航 + 44% 面板，正文只剩
-   ~330px —— 写一句话要换三次行，读一条要滚半天。用户 2026-10-27 要的是给 AI 面板
-   调宽度，不是把日记挤成一条缝。收起之后正文与面板按剩下的宽度分。
-   ★ 用类名限定范围，不动阅读页的任何像素。 */
-.npr-workarea.has-companion > .npr-layout.npr-diary-layout { grid-template-columns: minmax(0, 1fr); }
-.npr-workarea.has-companion > .npr-layout.npr-diary-layout > .npr-diary-nav,
-.npr-workarea.has-companion > .npr-layout.npr-diary-layout > .npr-resize { display: none; }
+/* ★★ 日记页：AI 面板打开时导航栏**保留**。
+   0.37 这里做的是反的（面板一开就 `display: none` 收掉导航），理由写在当时的注释里：
+   「268px 导航 + 44% 面板，正文只剩 ~330px」。用户 2026-10-27 的回应是
+   「为什么打开 AI 整理左侧边栏就关闭了呢」—— 收起导航不是解法，是把这个
+   问题换成了另一个问题：正在看的那一天、那几个标签，一下全不见了。
+   现在导航留着，改成给**正文**一个下限：面板最多长到「总宽 − 导航 − 340px」。
+   ★ 340 这个数在两处出现：这里，和 DiaryApp 拖动分隔条的 onPointerMove。
+     必须同源 —— CSS 单方面截断会让手柄出现一段「拖不动，也看不出为什么」的死区。
+   ★ 只在横向布局（根容器 ≥ 701px）生效：容器查询在 700px 以下会把 workarea
+     翻成纵向，那时 `100%` 指的是宽度、flex-basis 却是高度，同一个公式会算错。 */
+@container (min-width: 701px) {
+  .npr-workarea.npr-diary-workarea.has-companion > .npr-diary-companion {
+    flex: 0 0 min(var(--npr-companion-width, 44%), calc(100% - var(--npr-list-width, 268px) - 340px));
+    width: min(var(--npr-companion-width, 44%), calc(100% - var(--npr-list-width, 268px) - 340px));
+  }
+}
 .npr-workarea.has-companion .npr-article { padding-inline: clamp(18px, 3%, 36px); }
 .npr-root .npr-channel { gap: 9px; }
 .npr-channel-mark { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--npr-muted); border-radius: 7px; }
@@ -232,6 +239,18 @@
 .npr-companion-prompt-strip { display: flex; align-items: center; gap: 5px; min-width: 0; width: 100%; padding: 7px 14px 8px; white-space: nowrap; color: var(--npr-fg); }
 .npr-companion-prompt-scroll { display: flex; align-items: center; gap: 5px; min-width: 0; flex: 1; overflow-x: auto; overflow-y: hidden; overscroll-behavior-inline: contain; scrollbar-width: none; }
 .npr-companion-prompt-scroll::-webkit-scrollbar { display: none; }
+/* ★★ AI 整理面板里的快捷提示词：**换行**，不横滚。
+   用户 2026-10-27：「ai整理的提示prompt没有自适应」。截图里最后一条被面板右边缘
+   切掉半个字 —— 它其实能滚（`overflow-x: auto`），但滚动条被上面那条
+   `scrollbar-width: none` 藏起来了，于是「这里还有第三条半」在界面上完全没有提示。
+   能滚而看不出来 = 看不见。
+   日记页的提示词只有 4 条：宽度够时仍是一行，不够就换行，全部看得见。
+   ★ 只作用在日记页（`.npr-diary-companion`）：伴读那边是一长串按文章内容生成的
+     提示词，换行会把输入框顶掉半屏 —— 那边横滚是刻意的。 */
+.npr-diary-companion .npr-companion-prompt-strip { align-items: flex-start; white-space: normal; }
+.npr-diary-companion .npr-companion-prompt-scroll {
+  flex-wrap: wrap; overflow-x: visible; overflow-y: visible; row-gap: 6px;
+}
 .npr-native-chat .npr-companion-prompt-strip button { appearance: none; display: inline-flex; align-items: center; justify-content: center; flex: none; min-height: 34px; padding: 0 11px; border: 0; border-radius: 8px; background: transparent; box-shadow: none; color: var(--npr-muted); font: inherit; font-size: 12px; font-weight: 500; line-height: 1; white-space: nowrap; cursor: pointer; transition: background-color .14s ease, color .14s ease; }
 .npr-native-chat .npr-companion-prompt-strip .npr-companion-prompt-ghost { background: color-mix(in srgb, var(--npr-fg) 5%, var(--npr-bg)); color: var(--npr-fg); }
 .npr-native-chat .npr-companion-prompt-strip button:hover:not(:disabled) { background: color-mix(in srgb, var(--npr-fg) 7%, var(--npr-bg)); color: var(--npr-fg); }

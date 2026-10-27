@@ -124,7 +124,7 @@ export const META_OPEN = '<!-- npr ';
 const META_LINE = /^<!--\s*npr\s+(\{.*\})\s*-->\s*$/;
 
 /** 元数据里允许出现的字段。**白名单**：多一个字段也不会被写回去，避免把脏数据带进文件。 */
-const META_FIELDS = Object.freeze(['mood', 'book', 'chapter', 'page', 'vis']);
+const META_FIELDS = Object.freeze(['mood', 'book', 'chapter', 'page', 'article', 'vis']);
 
 function pad2(value) {
   return String(value).padStart(2, '0');
@@ -203,6 +203,19 @@ export function normalizeMeta(input) {
   const mood = moodScore(source.mood);
   if (mood !== null) meta.mood = normalizeMood(source.mood);
   if (typeof source.book === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(source.book)) meta.book = source.book;
+  /*
+   * `article`：读 RSS 时按 L 记的灵感挂在哪一篇上（订阅源里的 `key`）。
+   *
+   * ★ 与 `book` 不同，这里的 key 不是 `[A-Za-z0-9_-]` —— 它可能带 URL 片段（`:` `/` `#`）。
+   *   但它同样要能安全地放进那行 JSON 注释里：只禁两样 —— 会提前结束注释的 `-->`，
+   *   和换行（会让整行注释断成两行，后半截变成正文）。其余交给 `JSON.stringify` 转义。
+   * ★ 为什么不复用 `book`：一本书和一个订阅源是两种东西，混进同一个字段之后
+   *   「按书反查」就会捞到文章。宁可多一个字段。
+   */
+  if (typeof source.article === 'string'
+    && source.article.length >= 1 && source.article.length <= 200
+    && !source.article.includes('-->')
+    && !/[\r\n]/.test(source.article)) meta.article = source.article;
   for (const field of ['chapter', 'page']) {
     const value = Number(source[field]);
     if (Number.isInteger(value) && value >= 0) meta[field] = value;
