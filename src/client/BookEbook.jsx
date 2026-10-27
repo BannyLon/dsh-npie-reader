@@ -173,6 +173,8 @@ export function BookEbook({
   onWriteReflection,
   /** 与 `BookReader` 同义：报「当前在第几节」，落到灵感速记的 `meta.chapter`。 */
   onChapter,
+  /** 与 `BookReader` 同义：打开时先落到第几节（`null` = 按上次读到的）。 */
+  initialPage,
 }) {
   const [status, setStatus] = useState('loading');
   const [error, setError] = useState('');
@@ -304,7 +306,9 @@ export function BookEbook({
         const sections = Array.isArray(body.sections) ? body.sections : [];
         setIndex({ ...body, sections });
         // 回到上次读到的那一节。节号可能超出（换过文件版本），夹一下。
-        const resume = clampSection(current.page || 1, sections.length);
+        // 带了 `initialPage`（从日记「挂在书上」点进来）就用它。
+        const wanted = Number.isInteger(initialPage) && initialPage > 0 ? initialPage : (current.page || 1);
+        const resume = clampSection(wanted, sections.length);
         setPage(resume);
         setPageDraft(String(resume));
         setStatus('ready');

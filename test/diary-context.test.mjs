@@ -40,16 +40,41 @@ describe('开场白', () => {
 });
 
 describe('权限边界（与 tools.js 里真实存在的工具必须一致）', () => {
-  it('★ 明说只有 diary_append，且它只会追加', () => {
+  /**
+   * ★ 2026-10-27 改过一轮：原来这里断言「只有 diary_append，不会改写删除」。
+   *   那条判据被用户推翻了 —— 只有 append 时，模型把「压成三条」执行成「再追加三条」，
+   *   原稿留在原地，用户得到的是**重复**而不是改稿。所以现在要断言的是
+   *   「三个写入口都在，且三条护栏都还在」。
+   */
+  it('★ 三个写入口都点到：append 追加、update 原地改写、delete 删除', () => {
     const out = diaryContext({ date: '2026-10-26', entries: [entry()], total: 1 });
     assert.match(out, /diary_append/);
+    assert.match(out, /diary_update/);
+    assert.match(out, /diary_delete/);
     assert.match(out, /追加/);
-    assert.match(out, /不会修改已有内容/);
+    assert.match(out, /原地改写/);
+    // 少说一个 ⇒ 模型不知道自己能改；多说一个 ⇒ 它去调一个不存在的工具。
+    assert.doesNotMatch(out, /diary_edit|diary_remove/, '提示里出现了 tools.js 里没有的工具名');
   });
 
-  it('★ 明说没有改写/删除工具（否则模型会回「已经改好了」）', () => {
+  it('★ 要求先拿编号再动手（模型不许自己数下标）', () => {
     const out = diaryContext({ date: '2026-10-26', entries: [entry()], total: 1 });
-    assert.match(out, /没有.*改写或删除/);
+    assert.match(out, /diary_today/);
+    assert.match(out, /从 0 开始/);
+  });
+
+  it('★ 「压成几条」不许用 append 顶替（否则原文和改稿并排，第二天分不清）', () => {
+    const out = diaryContext({ date: '2026-10-26', entries: [entry()], total: 1 });
+    assert.match(out, /追加一份/);
+    assert.match(out, /分不清哪条是原稿/);
+  });
+
+  it('★ 删除不可撤销 + 没说清是哪一条时先问（把自作主张挡在提示层）', () => {
+    const out = diaryContext({ date: '2026-10-26', entries: [entry()], total: 1 });
+    assert.match(out, /删除不可撤销/);
+    assert.match(out, /先.*确认/);
+    // 改过删过要交代是哪一条，不许只说「整理好了」。
+    assert.ok(out.includes('明说改 / 删了哪一条'), '没有要求交代改/删了哪一条');
   });
 
   it('★ 明说引用要逐字（不然用户会以为自己记错了）', () => {
@@ -61,7 +86,8 @@ describe('权限边界（与 tools.js 里真实存在的工具必须一致）', 
   it('权限段在**空日记**时也在（空态同样可能被要求写）', () => {
     const out = diaryContext({ date: '2026-10-26', entries: [], total: 0 });
     assert.match(out, /diary_append/);
-    assert.match(out, /没有.*改写或删除/);
+    assert.match(out, /diary_update/);
+    assert.match(out, /diary_delete/);
   });
 });
 

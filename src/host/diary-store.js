@@ -508,6 +508,9 @@ export function createDiaryStore(options = {}) {
         book: entry.meta?.book ?? null,
         chapter: entry.meta?.chapter ?? null,
         page: entry.meta?.page ?? null,
+        // 挂在文章上的那一条记的是订阅源里的 key：日记页点一下要能回到那一篇，
+        // 而不是把用户丢回「这一天」的日记列表（0.39 之前就是这样）。
+        article: entry.meta?.article ?? null,
         tags: parseTags(entry.body),
         preview: entry.body.replace(/\s+/g, ' ').slice(0, 160),
       });
@@ -644,16 +647,33 @@ export function createDiaryStore(options = {}) {
       .filter((name) => name.endsWith('.md') && isValidDateKey(name.slice(0, -3)));
     const privNames = (await readDirQuiet(diaryPrivateDir()))
       .filter((name) => name.endsWith('.md.enc') && isValidDateKey(name.slice(0, -7)));
-    let bytes = 0;
-    for (const [dir, name] of [...pubNames.map((n) => [diaryDailyDir(), n]), ...privNames.map((n) => [diaryPrivateDir(), n])]) {
-      const info = await stat(join(dir, name)).catch(() => null);
-      bytes += info?.size ?? 0;
+    /*
+     * ★ 两边**分开称重**（2026-10-27 用户反馈「这个数据怎么还在灵感这里出现」）：
+     *   以前只回一个 `days` = 公开 + 私密，界面于是原样印成
+     *   「日记共 4 天（私密 1 天）· 5 KB」—— 在灵感模块里也会闻到私密的存在：
+     *   天数里混着私密的天，字节数里混着私密的密文，再挂一个导出私密明文的入口。
+     *   那不是「信息多一点」，是**两个模块的数据串在一起** —— 你在读自己的灵感，
+     *   界面却在汇报你写过多少私密日记。
+     *   ⇒ 现在两边各自给天数与字节数，页脚按当前模块挑自己的那份。
+     * ★ 合计仍保留：`days` / `bytes` 回答的是另一个问题（「这套日记一共占多少盘」），
+     *   只是它不再被当成某一个模块的数字。
+     */
+    let publicBytes = 0;
+    for (const name of pubNames) {
+      publicBytes += (await stat(join(diaryDailyDir(), name)).catch(() => null))?.size ?? 0;
+    }
+    let privateBytes = 0;
+    for (const name of privNames) {
+      privateBytes += (await stat(join(diaryPrivateDir(), name)).catch(() => null))?.size ?? 0;
     }
     const secretStatus = secret.peek();
     return {
       days: pubNames.length + privNames.length,
+      publicDays: pubNames.length,
       privateDays: privNames.length,
-      bytes,
+      bytes: publicBytes + privateBytes,
+      publicBytes,
+      privateBytes,
       root: diaryRoot(),
       // ★ 只报「已知的状态」，**不在这里取密钥**：页脚会频繁调它，而取密钥可能碰
       //   系统钥匙串。用户没写过私密日记时更不该凭空造一把密钥出来。

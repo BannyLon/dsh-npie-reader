@@ -55,12 +55,20 @@ export function QuickCapture({ open, onClose, notify, context }) {
     : '';
   const bookTitle = linked?.bookTitle || linked?.bookId || '';
   const articleTitle = linked?.articleTitle || '';
+  /**
+   * 书名这一层：**书源里的标题本来就带书名号**（`《译文名著文库》 076[法]雨果…`），
+   * 再无条件套一对就变成 `《《译文名著文库》 076…》`。用户在日记里看到的就是这个。
+   * ⇒ 已经含 `《` 的标题原样用，只有裸标题才补书名号。
+   */
+  const bookLabel = bookTitle === ''
+    ? ''
+    : (bookTitle.includes('《') ? bookTitle : `《${bookTitle}》`);
   /** 存进 `source` 的那串（书带书名号，文章就是标题本身）。 */
-  const source = bookTitle !== ''
-    ? `《${bookTitle}》${chapterLabel ? ` · ${chapterLabel}` : ''}`
+  const source = bookLabel !== ''
+    ? `${bookLabel}${chapterLabel ? ` · ${chapterLabel}` : ''}`
     : articleTitle;
   /** 给人看的那串：文章名套「」—— 便于在一行里认出「这一整句是一个标题」。 */
-  const where = bookTitle !== '' ? source : (articleTitle === '' ? '' : `「${articleTitle}」`);
+  const where = bookLabel !== '' ? source : (articleTitle === '' ? '' : `「${articleTitle}」`);
 
   // 打开就聚焦（「打开即写」），关掉就清空草稿 —— 留着草稿会让下一次按 L 变成
   // 「咦，怎么有上次没写完的半句」。

@@ -56,7 +56,7 @@ import { sanitizeHtml } from '../host/sanitize.js';
 import { markdownToHtml } from '../host/markdown.js';
 import {
   DIARY_MODULES, MOODS, REFLECTION_TEMPLATE, dateKey, monthKeyOf, normalizeMood, parseMonthKey,
-  parseTags, shiftMonth,
+  parseSource, parseTags, shiftMonth,
 } from '../diary-format.js';
 import {
   appendDiaryEntry, downloadDiaryBundle, fetchDiaryBook, fetchDiaryDay, fetchDiaryExport,
@@ -175,8 +175,6 @@ function EntryBody({ html, text, onExpand }) {
 const AI_DAY_PROMPT = [
   '帮我整理**今天这一整天**的记录（上下文里给了这一天所有的条目，不是某一条）。',
   '保留我的原意和语气，把没说清的地方说清楚，不要编我没写过的事。',
-  '几条说的是同一件事就并成一条；只有半句的碎片可以只留一句更准的话。',
-  '先把整理稿给我看，并写清打算怎么落到日记里：哪一条用 diary_update 改写、哪几条用 diary_delete 删掉。',
   '我说「就这样」你再动手；不要追加一份新的副本 —— 原文要么被改，要么被删，不要在旁边多出一条。',
 ].join('\n');
 
@@ -267,21 +265,14 @@ function MoodRow({ value, onChange, label }) {
 }
 
 /**
- * 一条记录的 `source` 归一成一个**可分组**的键。
+ * 一条记录的 `source` 归一成一个**可分组**的键（= 给人看的那串书名 / 文章名）。
  *
- * ★ 书与文章共用这一个函数，因为「挂在哪儿」本来就只有一件事：把灵感锚回它
- *   发生的那个现场。区别只在显示：
- *   · 书：`《深度工作》· 第 3 章` → 键 `《深度工作》`（书名号是识别标志，
- *     老条目也是这个形态，不需要迁移数据）；
- *   · 文章：`Anthropic 刚刚向 SEC 递交了 S-1` → 键就是全文（不套书名号 ——
- *     给一篇文章加书名号是在说它是一本书，那是谎）。
+ * ★ 解析规则（切 ` · `、剥重复书名号）在 `diary-format.js` 的 `parseSource()` 里 ——
+ *   因为写入侧（`QuickCapture`）也要用同一套判断，两边各写一份必然漂开。
  * ★ 空串表示「没有来源」：这类灵感不进任何分组，也不该被硬塞一个「未分类」。
  */
 function sourceKey(source) {
-  const text = String(source ?? '').trim();
-  if (text === '') return '';
-  const book = /^《([^》]+)》/.exec(text);
-  return book ? `《${book[1]}》` : text;
+  return parseSource(source)?.label ?? '';
 }
 
 /**
@@ -292,29 +283,52 @@ function sourceKey(source) {
  *   两者在「按 L 记灵感」时是同时写入的，用哪个都不丢信息，但只有 `source` 能直接显示。
  * ★ 带上 `entryKey`（最近那一条的）：只给日期是不够的 —— 那一天可能有七条，
  *   跳过去用户看到的还是原来那一屏，只是日期变了，这就是「点了不对应」。
+ * ★ 还要带上**去现场**需要的那几样（`bookId` / `page` / `article`）：
+ *   0.38 点一行只会在日记里筛出这一天的那几条，用户 2026-10-27 的原话是
+ *   「挂在书上为什么还会有日记显示的内容」—— 点一本书该回那本书，不是看日记。
  */
 function linkedSources(days) {
   const map = new Map();
   for (const day of days) {
     for (const entry of day.entries ?? []) {
       if (entry.scope !== 'public' || entry.kind === '读后感') continue;
-      const key = sourceKey(entry.source);
-      if (key === '') continue;
-      const isBook = key.startsWith('《');
+      const parsed = parseSource(entry.source);
+      if (parsed === null) continue;
+      const key = parsed.label;
       const cell = map.get(key) ?? {
         key,
-        kind: isBook ? 'book' : 'article',
-        title: isBook ? key.slice(1, -1) : key,
+        kind: parsed.isBook ? 'book' : 'article',
+        title: parsed.title,
         count: 0,
         last: day.date,
         entryKey: entryKey(entry),
+        bookId: '',
+        article: '',
+        page: null,
+        chapter: null,
       };
       cell.count += 1;
       // 同一天内按记录顺序往后覆盖：最后写入的就是这一天最新的那一条。
       if (day.date >= cell.last) {
         cell.last = day.date;
         cell.entryKey = entryKey(entry);
+        // 页码/章节必须跟 bookId **同源**：一个是「回哪本书」，一个是「回到第几页」，
+        // 取了两条不同记录的话会落到另一本书的页上。
+        if (entry.book) {
+          cell.bookId = entry.book;
+          cell.page = Number.isInteger(entry.page) ? entry.page : null;
+          cell.chapter = Number.isInteger(entry.chapter) ? entry.chapter : null;
+        }
+        if (entry.article) cell.article = entry.article;
       }
+      // 兜底：最近那条缺 id（老条目只写了书名）时，用同组里另一条有 id 的顶上 ——
+      // 否则「回到那本书」会在一组数据里时灵时不灵。
+      if (cell.bookId === '' && entry.book) {
+        cell.bookId = entry.book;
+        cell.page = Number.isInteger(entry.page) ? entry.page : null;
+        cell.chapter = Number.isInteger(entry.chapter) ? entry.chapter : null;
+      }
+      if (cell.article === '' && entry.article) cell.article = entry.article;
       map.set(key, cell);
     }
   }
@@ -323,7 +337,9 @@ function linkedSources(days) {
   ));
 }
 
-export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, intent }) {
+export function DiaryApp({
+  onExit, notify, api, SessionProvider, renderSlot, intent, onOpenBook, onOpenArticle,
+}) {
   const today = useMemo(() => dateKey(), []);
   /**
    * 当前模块。默认「灵感速记」—— 它是最轻的那个，也是打开日记时最常做的事。
@@ -718,7 +734,16 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
     }
   }
 
-  const pick = (date) => {
+  /**
+   * 换一天。
+   *
+   * ★ `keepLink` 只给「回到现场」那条兜底路径用（见 `openSource`）：点书名正常是
+   *   打开那本书，只有拿不到书 id 时才留在日记里筛。除此之外**任何手动导航**
+   *   （时间轴、月历、前一天/后一天、搜索命中、写完一条）都必须退出来源筛选。
+   *   用户 2026-10-27 的原话：「点击选择完挂在书上的条目后，再点击时间轴的条目
+   *   就回不去了」—— 筛选是**对着一个来源**的临时视图，换了地方就该失效。
+   */
+  const pick = (date, opts = undefined) => {
     setSelected(date);
     setConfirmKey('');
     /* 换一天时把「刚才定位到哪一条」和「展开了更早的」都收回：
@@ -726,6 +751,7 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
        `jump()` 是 pick + setFocusKey，同一个事件里后者生效（React 批处理，顺序即结果）。 */
     setFocusKey('');
     setDayAll(false);
+    if (opts?.keepLink !== true) setLinkKey('');
     // 换一天**不**重新上锁：锁是「这个人现在在这台机器前」这件事，不是「这一天」。
     // 换了天就掉锁会让连续翻阅十天的日记变成输十次口令。
     const parsed = parseMonthKey(date.slice(0, 7));
@@ -740,8 +766,8 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
    *   收掉，用户的原话是「为什么这个搜索框我一点击内容条它就消失」。
    *   导航和检索是两个独立的状态，不该互相打断：搜索框只由搜索按钮与 Esc 关。
    */
-  const jump = (date, key = '') => {
-    pick(date);
+  const jump = (date, key = '', opts = undefined) => {
+    pick(date, opts);
     if (key) {
       setFocusKey(key);
       // 序号每次都动：同一条再点一次也要滚回去（`setFocusKey` 同值是 no-op）。
@@ -1054,23 +1080,27 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
   }
 
   /**
-   * 点侧栏「挂在书上 / 挂在文章上」里的一行。
+   * 点侧栏「挂在书上 / 挂在文章上」里的一行：**回到现场**。
    *
-   * ★ 只 `jump(item.last)` 是不够的 —— 那就是用户说的「点击不对应跳转显示」：
-   *   跳到那一天之后，列表还是那一天的**全部**记录，刚才点的书名在界面上
-   *   找不到任何对应物，只有日期偷偷换了。
-   * ★ 所以三件事一起做：把列表收窄成这个来源、跳到它最近一条所在的那一天、
-   *   滚到最近那一条并高亮。收窄是「对应」，滚动是「跳转」，两个都要。
+   * ★ 0.38 的做法是在日记里把列表收窄成这个来源，并跳到那一天。用户的判词是
+   *   「挂在书上为什么还会有日记显示的内容」——他说得对：点一本书得到一页日记，
+   *   那这个分组就只是日记的一个筛选器，不是「挂回那一章」。
+   *   ⇒ 现在点书就**打开那本书**（翻到最近那条所在的页），点文章就打开那一篇。
+   * ★ 拿不到 id 时才退化成筛选（0.30 之前的老条目只有书名、书也可能已经被删）。
+   *   兜底走 `keepLink: true`：`pick()` 默认会清筛选，这里要留着它。
+   * ★ 宿主没给回调（夹具、别的外壳）同样落到筛选 —— 不画一颗点了没反应的按钮。
    */
   function openSource(item) {
+    if (item.kind === 'book' && item.bookId !== '' && typeof onOpenBook === 'function') {
+      onOpenBook({ bookId: item.bookId, title: item.title, page: item.page, chapter: item.chapter });
+      return;
+    }
+    if (item.kind === 'article' && item.article !== '' && typeof onOpenArticle === 'function') {
+      onOpenArticle(item.article);
+      return;
+    }
     setLinkKey(item.key);
-    /*
-     * 不在这里 `setDayAll(true)`：`pick()` 会把它收回 false（换天就要收回折叠态），
-     * 同一次批处理里后写的赢。展开由 `focusKey` 那条 effect 兜底 —— 它滚不到目标时
-     * 会自己展开再滚（`if (!node) { if (!dayAll) setDayAll(true) }`）。
-     * 只留**一条**展开路径，否则两处各自展开、各自判断，迟早不一致。
-     */
-    jump(item.last, item.entryKey);
+    jump(item.last, item.entryKey, { keepLink: true });
   }
 
   async function reveal() {
@@ -1207,6 +1237,21 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
    *   这两个数在界面上必须分开，否则「划线 12」会让人以为写了 12 条笔记。
    */
   const noteCount = annotations.items.filter((item) => String(item.note ?? '').trim() !== '').length;
+
+  /**
+   * 页脚那句「东西在哪」——**按当前模块挑自己的那份**。
+   *
+   * ★ 以前直接印合计：`日记共 4 天（私密 1 天）· 5 KB`。于是灵感模块底部也会报
+   *   私密的天数、把私密的密文算进字节里，再挂一个导出私密明文的按钮。
+   *   用户 2026-10-27 的原话：「这个数据怎么还在灵感这里出现」。
+   * ⇒ 灵感只报灵感的天数与字节、指到 `root`；私密只报私密的、指到 `root/private`。
+   *   至于「导出私密明文」那个入口，它属于私密模块 —— 灵感页里不需要它，
+   *   顶栏那个导出按钮已经管了「导出全部日记」。
+   */
+  const footPrivate = moduleValue === 'private';
+  const footDays = footPrivate ? (stats?.privateDays ?? 0) : (stats?.publicDays ?? 0);
+  const footBytes = footPrivate ? (stats?.privateBytes ?? 0) : (stats?.publicBytes ?? 0);
+  const footWhere = footPrivate ? `${stats?.root ?? ''}/private` : (stats?.root ?? '');
   const reflectionChars = bookEntries.items.reduce(
     (sum, entry) => sum + String(entry.body ?? '').replace(/\s/g, '').length,
     0,
@@ -1457,11 +1502,15 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
               {linkedBookRows.length > 0 && (
                 <section className="npr-diary-sect">
                   <h2 className="npr-diary-sect-head">挂在书上</h2>
-                  <p className="npr-diary-sect-note">读书时按 L 记的灵感，挂回那一章。</p>
+                  <p className="npr-diary-sect-note">读书时按 L 记的灵感 —— 点一行回到那本书的对应页。</p>
                   {linkedBookRows.map((item) => (
                     <button key={item.key} type="button"
                       className={`npr-diary-dayrow${linkKey === item.key ? ' npr-selected' : ''}`}
-                      title={`${item.key} · ${item.count} 条 · 最近一条在 ${item.last}`}
+                      /* 有书 id = 点了会走；没有（0.30 之前的老条目 / 书已删）= 只在日记里筛，
+                         两种行为不同，提示也得不同 —— 同一句文案会让点空的那次像坏了。 */
+                      title={item.bookId === ''
+                        ? `${item.key} · ${item.count} 条 · 最近一条在 ${item.last}（这本书已不在书架）`
+                        : `打开这本书${Number.isInteger(item.page) ? `第 ${item.page} 页` : ''} · 共 ${item.count} 条`}
                       onClick={() => openSource(item)}>
                       <span className="npr-diary-dayrow-date">{item.key}</span>
                       <span className="npr-diary-dayrow-count">{item.count} 条</span>
@@ -1476,11 +1525,13 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
               {linkedArticleRows.length > 0 && (
                 <section className="npr-diary-sect">
                   <h2 className="npr-diary-sect-head">挂在文章上</h2>
-                  <p className="npr-diary-sect-note">读 RSS 时按 L 记的灵感，挂回那一篇。</p>
+                  <p className="npr-diary-sect-note">读 RSS 时按 L 记的灵感 —— 点一行回到那一篇。</p>
                   {linkedArticleRows.map((item) => (
                     <button key={item.key} type="button"
                       className={`npr-diary-dayrow${linkKey === item.key ? ' npr-selected' : ''}`}
-                      title={`${item.title} · ${item.count} 条 · 最近一条在 ${item.last}`}
+                      title={item.article === ''
+                        ? `${item.title} · ${item.count} 条 · 最近一条在 ${item.last}（这篇已不在订阅里）`
+                        : `打开这篇文章 · 共 ${item.count} 条`}
                       onClick={() => openSource(item)}>
                       <span className="npr-diary-dayrow-date">{item.title}</span>
                       <span className="npr-diary-dayrow-count">{item.count} 条</span>
@@ -2015,19 +2066,20 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                 )}
 
                 {/*
-                  * ★ 这条页脚只属于「日记」本身（灵感 / 私密），**不能进读后感**。
-                  *   用户 2026-10-27 的截图里，读后感模块底部挂着
-                  *   「日记共 4 天（私密 1 天）· 1 KB · 存在 /Users/…/diary 连私密一起导出」
-                  *   —— 那是两个模块的数据串在了一起：他在看一本书的读后感，却被报了
-                  *   日记的天数、磁盘路径，还给了一个导出日记的入口。同一个 `<p>` 覆盖了
-                  *   三个模块，就必然在其中一个里是错的。
+                  * ★ 这条页脚只属于「灵感 / 私密」这两个各自的模块，**不能进读后感**：
+                  *   用户 2026-10-27 的截图里，读后感模块底部挂着「日记共 4 天 · 存在 /Users/…」
+                  *   —— 他在看一本书的读后感，却被报了日记的天数与磁盘路径。
+                  * ★ 2026-10-27 第二次反馈：进了灵感模块，它又印「日记共 4 天（私密 1 天）」。
+                  *   同一个 `<p>` 覆盖三个模块就必然在其中两个里是错的，所以现在是
+                  *   「哪个模块报哪个模块的数」（见 `footDays` / `footBytes` / `footWhere`）。
+                  * ★ 一份都还没有时不印：「灵感共 0 天 · 0 KB」只是噪音。
                   */}
-                {stats && moduleValue !== 'reflection' && (
+                {stats && moduleValue !== 'reflection' && footDays > 0 && (
                   <p className="npr-diary-foot">
-                    日记共 {stats.days} 天{stats.privateDays > 0 ? `（私密 ${stats.privateDays} 天）` : ''} · {(stats.bytes / 1024).toFixed(0)} KB · 存在 {stats.root}
-                    {stats.privateDays > 0 && gate.unlocked && (
+                    {footPrivate ? '私密' : '灵感'}共 {footDays} 天 · {(footBytes / 1024).toFixed(0)} KB · 存在 {footWhere}
+                    {footPrivate && gate.unlocked && (
                       <button type="button" className="npr-diary-linkish" onClick={() => void exportWithPrivate()}>
-                        {exportArmed ? '再点一次：明文会写进下载目录' : '连私密一起导出'}
+                        {exportArmed ? '再点一次：明文会写进下载目录' : '导出私密明文'}
                       </button>
                     )}
                   </p>

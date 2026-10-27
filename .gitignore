@@ -17,3 +17,7 @@ test/.tmp/
 .build/
 # 探测会话残留（`probe-<随机>/a.txt`）—— 不是本项目的文件，不该进版本库
 probe-*/
+# 测试临时目录的**第二处**落点：有些用例用 `mkdtemp` 拿到仓库根的 `tmptest/`
+# （不是上面的 `test/.tmp/`），跑完不保证清干净。实测攒到 133 个目录 / 9.3 MB，
+# 而且会被 `git status` 列成未跟踪 —— 一个 `git add -A` 就把 9 MB 残渣提交进去。
+tmptest/

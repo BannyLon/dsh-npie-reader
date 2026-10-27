@@ -99,8 +99,11 @@ const REMOTE_METHODS = [
 //   0.20.1 才发现这里还停在 9 个 —— 说明当时的全量测试没有真跑完。
 const TOOL_NAMES = [
   'book_annotations', 'book_chapter', 'book_export_skill', 'book_list', 'book_outline', 'book_search',
-  // 2026-10-26 新增日记三件套（读今天 / 只追加 / 跨天搜）。**没有**改写与删除 —— 见 `tools.js`。
-  'diary_append', 'diary_search', 'diary_today',
+  // 2026-10-26 新增日记三件套（读今天 / 追加 / 跨天搜）。
+  // 2026-10-27 补 `diary_update` / `diary_delete` —— 只有一个 append 时，模型会把
+  //   「压成三条」执行成「再追加三条」，原稿留在原地 ⇒ 用户得到的是**重复**。
+  //   护栏不是「不给能力」，而是「改删前必须先 diary_today 拿到编号」。
+  'diary_append', 'diary_delete', 'diary_search', 'diary_today', 'diary_update',
   'rss_add_subscription', 'rss_digest', 'rss_generate_version', 'rss_list_articles', 'rss_list_channels',
   'rss_read_article', 'rss_refresh', 'rss_remove_subscription', 'rss_search_articles',
 ];
@@ -1949,14 +1952,18 @@ describe('日记伴读上下文 setDiaryContext', () => {
     assert.equal(state.systemPromptContributions[0].text({ agent: { session: { id: 'other' } } }), '');
   });
 
-  it('★ 权限说明与工具集一致：只有 append，没有改写/删除', async () => {
+  it('★ 权限说明与工具集一致：追加 / 改写 / 删除三个都要说到', async () => {
     const { service, state } = boot();
     await service.ready;
     await service.diary.append({ date: '2026-10-26', body: '一条' });
     await service.setDiaryContext({ sessionId: 'd2', date: '2026-10-26' });
     const text = state.systemPromptContributions[0].text({ agent: { session: { id: 'd2' } } });
-    assert.match(text, /diary_append/);
-    assert.match(text, /没有.*改写或删除/);
+    // ★ 三个写入口一个都不能少：少说一个 ⇒ 模型不知道自己能改能删，把「压成三条」执行成
+    //   「再追加三条」（原稿留在原地，用户得到的是重复而不是改稿）；多说一个 ⇒ 它去调
+    //   一个不存在的工具。所以这里对着 `tools.js` 里真实注册的名字逐个核。
+    for (const name of ['diary_append', 'diary_update', 'diary_delete']) {
+      assert.ok(text.includes(name), `提示里没有 ${name} —— 与真实注册的工具集不一致`);
+    }
     // ★ 反向对照：绝不能带上阅读那句「默认不修改文件」—— 模型会因此拒绝追加。
     assert.equal(text.includes('默认不修改文件'), false);
   });
@@ -2014,18 +2021,21 @@ describe('日记伴读上下文 setDiaryContext', () => {
 });
 
 describe('书架：HTTP 路由真的挂上了', () => {
-  it('注册了三条 prefix 路由，路径取自共用常量', async () => {
+  it('注册了四条 prefix 路由，路径取自共用常量', async () => {
     const { service, state } = boot();
     await service.ready;
-    // ★ 顺序就是源码里的注册顺序：书架 → vendor → 日记。
+    // ★ 顺序就是源码里的注册顺序：书架 → pdfjs → 编辑器 → 日记。
     //   日记**单独一条前缀**（2026-10-26）：两条通道的风险面不同（书架能读配置过的书源目录，
     //   日记只碰自己的一个子目录），分开之后「日记挂了但书架还在」是可诊断的。
+    //   2026-10-27 多了 `/vendor/npie-reader/editor`（0.35 换 Milkdown 编辑器带来的静态资源，
+    //   373 KB，客户端是动态 import —— 用不到就不请求，但路由要在）。三条 → 四条。
     assert.deepEqual(state.webRoutes.map((entry) => entry.route.path), [
       '/api/dsh-npie-reader/library',
       '/vendor/npie-reader/pdfjs',
+      '/vendor/npie-reader/editor',
       '/api/dsh-npie-reader/diary',
     ]);
-    assert.deepEqual(state.webRoutes.map((entry) => entry.route.kind), ['prefix', 'prefix', 'prefix']);
+    assert.deepEqual(state.webRoutes.map((entry) => entry.route.kind), ['prefix', 'prefix', 'prefix', 'prefix']);
   });
 
   it('★ 路由对不可信请求回 403（这条链路上唯一的防线）', async () => {

@@ -313,6 +313,32 @@ describe('stats', () => {
     for (const name of privateNames) expected += (await stat(join(diaryRoot(), 'private', name))).size;
     assert.equal(result.bytes, expected);
   });
+
+  it('★ 公开与私密**分开报**：灵感页不该闻到私密的天数与字节', async () => {
+    // 用户 2026-10-27 的原话：「日记共 4 天（私密 1 天）· 5 KB 这个数据怎么还在灵感
+    //   这里出现」。根因是 `stats()` 只给合计 ⇒ 界面只好把它当成**任何模块**的数字，
+    //   于是灵感页会汇报你写过几天私密日记、连它们的密文一起算进 KB 里。
+    await store.append({ date: '2026-08-11', time: '08:00', body: '公开一条' });
+    await secure.append({ date: '2026-08-12', time: '22:00', body: '私密一条', vis: 'private' });
+
+    const result = await secure.stats();
+    const publicNames = (await readdir(join(diaryRoot(), 'daily'))).filter(name => name.endsWith('.md'));
+    const privateNames = await readdir(join(diaryRoot(), 'private')).catch(() => []);
+    assert.equal(result.publicDays, publicNames.length, 'publicDays 不是 daily/ 里的天数');
+    assert.equal(result.privateDays, privateNames.length, 'privateDays 不是 private/ 里的天数');
+
+    let publicSum = 0;
+    for (const name of publicNames) publicSum += (await stat(join(diaryRoot(), 'daily', name))).size;
+    let privateSum = 0;
+    for (const name of privateNames) privateSum += (await stat(join(diaryRoot(), 'private', name))).size;
+    assert.equal(result.publicBytes, publicSum, 'publicBytes 里混进了私密的密文');
+    assert.equal(result.privateBytes, privateSum, 'privateBytes 里混进了公开的正文');
+    // ★ 反假绿：两边都真的是非零数，上面四条「各自对得上」才不是靠 0 === 0 蒙混过去的。
+    assert.ok(result.publicDays > 0 && result.privateDays > 0, '两边都得有天，否则这条判据没咬住');
+    assert.ok(result.publicBytes > 0 && result.privateBytes > 0, '两边都得有字节');
+    assert.equal(result.days, result.publicDays + result.privateDays, '天数合计不是两边相加');
+    assert.equal(result.bytes, result.publicBytes + result.privateBytes, '字节合计不是两边相加');
+  });
 });
 
 describe('写入范围', () => {
@@ -481,6 +507,22 @@ describe('timeline：把「挂在哪本书上」带出来', () => {
     const plain = day.entries.find(entry => entry.preview === '普通灵感');
     assert.equal(plain.book, null);
     assert.equal(plain.chapter, null);
+  });
+
+  it('★ 挂在文章上的那条带出 `article`（日记页点一下要能回到那一篇）', async () => {
+    // 0.39 之前时间轴只带 book/chapter/page，文章的 key 留在 `meta.article` 里没出来
+    // ⇒ 日记页点「挂在文章上」只能把日记筛一遍，回不到那篇。
+    const date = '2026-12-02';
+    await store.append({
+      date, time: '08:30', kind: '灵感', body: '读 RSS 时记的',
+      source: 'Anthropic 刚刚向 SEC 递交了 S-1', meta: { article: 'feed:28095aa5' },
+    });
+    await store.append({ date, time: '09:00', kind: '灵感', body: '没有出处的一条' });
+    const day = (await store.timeline()).days.find(item => item.date === date);
+    const linked = day.entries.find(entry => entry.preview === '读 RSS 时记的');
+    assert.equal(linked.article, 'feed:28095aa5');
+    // 反向对照：没有出处的那条是 null（不是 undefined、也不是空串）。
+    assert.equal(day.entries.find(entry => entry.preview === '没有出处的一条').article, null);
   });
 });
 

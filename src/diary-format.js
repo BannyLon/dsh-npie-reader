@@ -282,6 +282,38 @@ export function parseTags(body) {
   return out;
 }
 
+/**
+ * 条目的 `source` 拆成「挂在哪儿」。
+ *
+ * 格式是 `《书名》 · 第 3 章`（书）或 `文章标题`（RSS 文章）。返回值：
+ * `{ isBook, title, label }` —— `title` 不带外层书名号，`label` 是给人看的那串。
+ *
+ * ★ **必须容忍书名里自带书名号**。书源里的标题本来就长这样：
+ *   `《译文名著文库》 076[法]雨果-九三年（叶尊译，上海译文出版社2011）`。
+ *   0.38 之前写进 `source` 时又套了一层 ⇒ 存成
+ *   `《《译文名著文库》 076[...]》 · 第三卷`，当时按「第一个 `》` 前的内容」取键，
+ *   得到畸形的 `《《译文名著文库》`；侧栏显示成 `《《译文名著文库》》`，点进去的
+ *   筛选条也是这串。用户 2026-10-27 的截图就是它。
+ * ★ 解法是**剥到没有外层书名号为止**，再决定要不要显示书名号：
+ *   剥完的结果里若已经含 `《`，说明书名本身带书名号，原样显示；否则补一对。
+ *   ⇒ 老数据一条都不用迁移，新写入也不会再出现双套（见 `QuickCapture`）。
+ * ★ 空串返回 `null`：没有来源的灵感不进任何分组，也不该被硬塞一个「未分类」。
+ */
+export function parseSource(source) {
+  const text = String(source ?? '').trim();
+  if (text === '') return null;
+  // 只有书名号开头才当成书；文章标题里可能出现 ` · `（「A · B」是常见写法），
+  // 对文章做切分会把它截断成一个搜不到的标题。
+  if (!text.startsWith('《')) return { isBook: false, title: text, label: text };
+  const head = text.split(/\s+·\s+/)[0].trim();
+  let body = head;
+  while (body.length > 2 && body.startsWith('《') && body.endsWith('》')) {
+    body = body.slice(1, -1).trim();
+  }
+  if (!body || /^[《》\s]*$/.test(body)) return null;
+  return { isBook: true, title: body, label: body.includes('《') ? body : `《${body}》` };
+}
+
 /** 情绪 → 分数；不认识的返回 null（曲线要能区分「没有情绪」和「情绪最低」）。 */
 export function moodScore(emoji) {
   if (typeof emoji !== 'string' || emoji === '') return null;

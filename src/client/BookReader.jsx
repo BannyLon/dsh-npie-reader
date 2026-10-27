@@ -155,6 +155,18 @@ export function BookReader({
    *   宁可只记页码，也不要记一个错的章节（错的章节会把一条灵感挂到别的书上）。
    */
   onChapter,
+  /**
+   * 打开时先落到第几页（可选，`null` / 缺省 = 按上次读到的地方）。
+   *
+   * ★ 只给「从别处带着一个位置进来」用：日记里点「挂在书上」的那一行，要落到
+   *   当年记这条灵感的那一页，而不是上次读到的地方。
+   * ★ **只在打开文档那一次读**（`[book.id, supported, attempt]` 依赖），与
+   *   `current.page` 同一条规矩：它是恢复点，不是受控值 —— 放进依赖会让翻页
+   *   反过来重开文档。
+   * ★ 不写进 `states`：翻到那页 ≠ 承认「我现在读到第 19 页了」，用户若直接关掉，
+   *   原来的进度应当原样保留。
+   */
+  initialPage,
 }) {
   const [status, setStatus] = useState('loading');
   const [error, setError] = useState('');
@@ -620,7 +632,9 @@ export function BookReader({
         setDoc(loaded);
         setNumPages(loaded.numPages);
         // 回到上次读到的那一页。页码可能超出（换过文件版本），夹一下。
-        const resume = clampPage(current.page || 1, loaded.numPages);
+        // 带了 `initialPage`（从日记「挂在书上」点进来）就用它 —— 那才是用户点的那个位置。
+        const wanted = Number.isInteger(initialPage) && initialPage > 0 ? initialPage : (current.page || 1);
+        const resume = clampPage(wanted, loaded.numPages);
         setPage(resume);
         setPageDraft(String(resume));
         setStatus('ready');

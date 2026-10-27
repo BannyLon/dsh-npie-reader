@@ -14,7 +14,7 @@ import {
   DIARY_MODULES, ENTRY_KINDS, LEGACY_KINDS, MOODS, REFLECTION_TEMPLATE, appendEntryText, buildDay,
   buildFrontmatter, dateKey, dayCharCount, dayFileName, entryAt, entryBlock, entryHeading,
   isValidDateKey, isValidMonthKey, metaLine, monthGrid, monthKeyOf, moodScore, normalizeMeta,
-  parseDay, parseMetaLine, parseMonthKey, parseTags, removeEntryText, shiftMonth, splitFrontmatter,
+  parseDay, parseMetaLine, parseMonthKey, parseSource, parseTags, removeEntryText, shiftMonth, splitFrontmatter,
   updateEntryText,
   timeKey,
 } from '../src/diary-format.js';
@@ -542,6 +542,48 @@ describe('元数据行（情绪 / 关联 / 可见性）', () => {
     const { entries } = parseDay('## 09:31 灵感\n\n正文\n');
     assert.deepEqual(entries[0].meta, {});
     assert.deepEqual(entryBlock(entry()).includes('npr'), false, '空元数据不该写出注释行');
+  });
+});
+
+describe('来源（parseSource）', () => {
+  it('书：切掉 ` · 第几章`，并保留书名号', () => {
+    assert.deepEqual(parseSource('《深度工作》 · 第 3 章'), {
+      isBook: true, title: '深度工作', label: '《深度工作》',
+    });
+  });
+
+  it('文章：整段就是标题，不切 ` · `（「A · B」是常见写法），也不套书名号', () => {
+    assert.deepEqual(parseSource('Anthropic 刚刚向 SEC 递交了 S-1'), {
+      isBook: false, title: 'Anthropic 刚刚向 SEC 递交了 S-1', label: 'Anthropic 刚刚向 SEC 递交了 S-1',
+    });
+    assert.deepEqual(parseSource('模型 · 资本 · 幻觉').label, '模型 · 资本 · 幻觉');
+  });
+
+  it('★ 书名自带书名号时只剥外层（0.38 存成过 `《《X》 076…》`）', () => {
+    // 真实数据：书源标题是 `《译文名著文库》 076[法]雨果-九三年（叶尊译…）`，
+    // 0.38 的 `QuickCapture` 又套了一层 ⇒ 侧栏显示成 `《《译文名著文库》》`。
+    const source = '《《译文名著文库》 076[法]雨果-九三年（叶尊译，上海译文出版社2011）》 · 第三卷 阿尔马洛';
+    const parsed = parseSource(source);
+    assert.equal(parsed.isBook, true);
+    // 剥掉最外那层之后，里面那段**本身**就带书名号 ⇒ 原样显示，不再补一对。
+    assert.equal(parsed.label, '《译文名著文库》 076[法]雨果-九三年（叶尊译，上海译文出版社2011）');
+    assert.equal(parsed.title, '《译文名著文库》 076[法]雨果-九三年（叶尊译，上海译文出版社2011）');
+  });
+
+  it('★ 反向对照：`《《X》` 若按「第一个 》」截断，会得到畸形的 `《《X》`', () => {
+    // 这条守的是**0.38 的错法**：`^《([^》]+)》` 在 `《《X》 076》` 上只能取到 `《X`。
+    const source = '《《译文名著文库》 076[法]雨果-九三年》 · 第三卷';
+    const oldWay = /^《([^》]+)》/.exec(source);
+    assert.equal(`《${oldWay[1]}》`, '《《译文名著文库》', '旧写法在这条数据上本该截出畸形键');
+    // 正确结果不出现两个连续的 `》`。
+    assert.doesNotMatch(parseSource(source).label, /》》/);
+  });
+
+  it('空来源返回 null（不进任何分组，也不硬塞「未分类」）', () => {
+    assert.equal(parseSource(''), null);
+    assert.equal(parseSource(null), null);
+    assert.equal(parseSource('   '), null);
+    assert.equal(parseSource('《》'), null);
   });
 });
 

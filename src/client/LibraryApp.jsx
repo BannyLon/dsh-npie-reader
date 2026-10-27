@@ -255,7 +255,11 @@ export const BookRow = memo(function BookRow({
  *   而 tab 是 `ReaderPage` 的状态 —— 这里只把书原样往上递，不自己切视图
  *   （切走之后本组件就卸载了，自己调自己的出口没有意义）。
  */
-export function LibraryApp({ reading, onExit, notify, api, SessionProvider, renderSlot, onWriteReflection, onReadingContext }) {
+export function LibraryApp({
+  reading, onExit, notify, api, SessionProvider, renderSlot, onWriteReflection, onReadingContext,
+  /** 外面要打开的一本书（日记页「挂在书上」点进来的）：bookId + page + at。 */
+  intent, onIntentDone,
+}) {
   const [books, setBooks] = useState([]);
   const [source, setSource] = useState(null);
   /** 电子书伴读里点「+」要打开设置页的快捷提示词；模式与 ReaderPage 的 settingsEntry 相同。 */
@@ -427,6 +431,43 @@ export function LibraryApp({ reading, onExit, notify, api, SessionProvider, rend
     const current = stateOf(statesRef.current, id);
     if (current.state === 'unread') void persistRef.current(id, { state: 'reading' });
   }, []);
+
+  /**
+   * 从日记「挂在书上」点进来时要打开的那本 + 那一页。
+   *
+   * ★ 位置走阅读器的 `initialPage`，**不写进 `states`**：翻到那页 ≠「我现在读到
+   *   第几页了」，用户看完直接关掉，原来的进度该原样留着。
+   * ★ 用 `at` 当一次性触发键：同一本书再点一次 `bookId` 不变，只比 `id` 的话
+   *   effect 不跑 —— 点了没反应，还不报错。
+   * ★ 用完就通知外层清掉：不清的话，下次从订阅页切回书架（本组件重新挂载）
+   *   `intent` 还是旧的，会**无缘无故再跳一次**。
+   */
+  const [openAt, setOpenAt] = useState(null);
+  useEffect(() => {
+    if (!intent?.bookId) return;
+    const page = Number.isInteger(intent.page) && intent.page > 0 ? intent.page : null;
+    setOpenAt({ id: intent.bookId, page });
+    openBook(intent.bookId);
+    onIntentDone?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intent?.at]);
+
+  /**
+   * 那本书**不在书架上**时（换过书源 / 文件被删）把人送回日记。
+   *
+   * ★ 没有这一步的表现是：切到书架、右侧停在欢迎页，一句话都没有 —— 用户刚点了一个
+   *   书名，得到一页「随心所阅，无界书房」，只会以为功能坏了。
+   * ★ 必须等 `loading` 结束再判：书单还在路上时 `books` 是空的，那时判断等于
+   *   把每本书都当成「不在」。
+   */
+  useEffect(() => {
+    if (!openAt || loading) return;
+    if (books.some((item) => item.id === openAt.id)) return;
+    setOpenAt(null);
+    notify('这本书已经不在书架上了，已留在日记里');
+    onExit?.('diary');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openAt, loading, books]);
 
   /**
    * 「重新阅读」：把一本已读完的书**放回「在读」**并打开。
@@ -922,6 +963,7 @@ export function LibraryApp({ reading, onExit, notify, api, SessionProvider, rend
           //   而分流之后两个组件各自的卸载重建由 `key` 保证。
           isEbookExtension(selected.ext) ? (
             <BookEbook key={selected.id} book={selected} states={states}
+              initialPage={openAt?.id === selected.id ? openAt.page : null}
               notify={notify} onPageChange={onPageChange}
               onImmersiveChange={setImmersive}
               api={api} SessionProvider={SessionProvider} renderSlot={renderSlot}
@@ -931,6 +973,7 @@ export function LibraryApp({ reading, onExit, notify, api, SessionProvider, rend
               onFinished={() => void persist(selected.id, { state: 'read' })} />
           ) : (
             <BookReader key={selected.id} book={selected} reading={reading} states={states}
+              initialPage={openAt?.id === selected.id ? openAt.page : null}
               notify={notify} onPageChange={onPageChange}
               onImmersiveChange={setImmersive}
               // 抽取目录时发现是扫描版 ⇒ 左栏那一行**当场**挂上标记，不等下次刷新。

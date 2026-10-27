@@ -319,7 +319,19 @@ describe('`L` 灵感浮层：只有一个输入框', () => {
     assert.doesNotMatch(quick, /<select/, '浮层里出现了下拉选择');
     assert.equal((quick.match(/<textarea/g) ?? []).length, 1, '浮层里不止一个输入框');
     assert.equal((quick.match(/<button/g) ?? []).length, 2, '浮层的按钮不止「关闭」与「保存」两个');
+    // ★ 只数个数是不够的：2 这个数字对「把保存换成别的操作」完全不敏感 —— 只要按钮总数
+    //   还是 2，就算把「保存」删掉、塞一个无关按钮进来，这条判据照样绿。
+    //   所以还要点名:这两个按钮必须是**关闭**与**保存**。
+    assert.match(quick, /aria-label="关闭"/, '浮层没有「关闭」按钮');
+    assert.match(quick, /保存/, '浮层没有「保存」按钮');
     assert.match(quick, /appendDiaryEntry\(\{ date: dateKey\(\), kind: '灵感', body: draft, source, meta \}\)/);
+  });
+
+  it('★ 反向对照：把「关闭」按钮删掉，上面的点名判据必须变红', () => {
+    // 判据要跟 guardian 一样先证明自己不是假绿 —— 去掉 aria-label="关闭" 就得报错。
+    const broken = quick.replace(/aria-label="关闭"/, 'aria-label="取消"');
+    assert.notEqual(broken, quick, '替换没生效，反向对照不成立');
+    assert.doesNotMatch(broken, /aria-label="关闭"/, '删掉「关闭」居然还判绿 —— 这条判据没有真正咬住');
   });
 
   it('★ 浮层里没有 data-window-drag（模态不能是拖动区）', () => {
@@ -433,20 +445,27 @@ describe('灵感模块：情绪 / 标签 / 时间轴 / 关联到书', () => {
     assert.match(diary, /entry\.kind !== '读后感'/, '时间轴没有滤掉读后感');
   });
 
-  it('★ 「挂在书上」把已关联的灵感按来源归拢（灵感流转的落地，不是只写进 meta）', () => {
+  it('★ 「挂在书上」把已关联的灵感按来源归拢，点一行**回到那本书**', () => {
     // 「灵感流转」的另一半：在书里按 L 记的灵感会带 `source`，但**界面必须能按来源反查**，
     // 否则它只是一条普通灵感，用户永远不知道自己挂过什么。
     assert.match(diary, /function linkedSources\(days\)/, '没有按来源归拢的判据');
-    assert.match(diary, /\^《\(\[\^》\]\+\)》/, '没有从 source 里认出书名号');
+    // ★ 分组键的解析在 `diary-format.js`（`QuickCapture` 写入侧要用同一套判断），
+    //   日记页只消费结果 —— 两边各写一份正则，迟早对不上。
+    assert.match(diary, /const parsed = parseSource\(entry\.source\)/, '没有从 source 认出「挂在哪儿」');
     // ★ 0.38：书与文章分两块 —— 用户 2026-10-27 问「在阅读 RSS 时创建的灵感怎么办？
     //   挂在书上的意义？」，所以判据从「有没有那一块」变成「两块各自成立」。
     assert.match(diary, /linkedBookRows\.length > 0 &&/, '「挂在书上」那一块没有被条件渲染');
     assert.match(diary, /linkedArticleRows\.length > 0 &&/, '「挂在文章上」那一块不见了 —— RSS 的灵感没地方去');
     assert.match(diary, /<span className="npr-diary-dayrow-date">\{item\.key\}<\/span>/, '那一块没把来源显示出来');
-    // ★ 「点了不对应」的那条：只 jump 日期不算跳转，还得把来源带过去并收窄列表。
-    assert.match(diary, /function openSource\(item\)[\s\S]{0,400}?setLinkKey\(item\.key\)/,
-      '点一行不会收窄列表 —— 跳过去看到的还是那一天的**全部**记录');
-    assert.match(diary, /jump\(item\.last, item\.entryKey\)/, '点一行没有滚到最近那一条');
+    // ★ 用户 2026-10-27：「挂在书上为什么还会有日记显示的内容」—— 点一本书要回那本书，
+    //   不是在日记里把这天的一条筛出来。收窄列表从「主行为」降级成「拿不到书 id 时的兜底」。
+    assert.match(diary, /function openSource\(item\)[\s\S]{0,900}?onOpenBook\(\{ bookId: item\.bookId/,
+      '点一行没有回到那本书 —— 又只是把日记筛了一遍');
+    // 「回到现场」还得落在**那一页**：落在第 1 页只是回到这本书，没回到那个位置。
+    assert.match(diary, /page: item\.page, chapter: item\.chapter \}\)/, '回书没带上页码/章节');
+    // 兜底路径（老条目只有书名 / 书已删）仍要能筛，并且要把筛选态留住。
+    assert.match(diary, /jump\(item\.last, item\.entryKey, \{ keepLink: true \}\)/,
+      '兜底路径没有滚到最近那一条，或没留住筛选态');
   });
 });
 
@@ -669,9 +688,11 @@ describe('灵感流转：按 L 时自动带上正在读的书与章节', () => {
     // 关联必须**看得见**，但它是一行纯文本（不是控件，见上一条 describe）。
     assert.match(quick, /\{linked && <p className="npr-quick-link">会记到 \{where\}<\/p>\}/,
       '「会记到哪儿」那行没了 —— 关联变成悄悄发生的');
-    // ★ 文章名**不套书名号**：套了就是在说它是一本书，而日记侧靠这个差别分两块。
-    assert.match(quick, /const source = bookTitle !== ''\s*\n\s*\? `《\$\{bookTitle\}》/, 
-      '书的 source 不再是《书名》形态 —— 日记侧分不出书和文章');
+    // ★ 书名号**不能无条件套**：书源标题本身就带《》（`《译文名著文库》 076[法]雨果…`），
+    //   再套一层会存成 `《《译文名著文库》 076…》` —— 用户 2026-10-27 的截图就是它，
+    //   侧栏还会因为「按第一个 》 截断」显示成畸形的 `《《译文名著文库》》。
+    assert.match(quick, /bookTitle\.includes\('《'\) \? bookTitle : `《\$\{bookTitle\}》`/,
+      '书名号又无条件套了一层 —— 书源带《》的书名会被套成双书名号');
   });
 
   it('★ 反向对照：删掉 meta.book 那一行，判据必须变红', () => {
@@ -812,7 +833,7 @@ describe('私密日记：口令闸门，而不是屏幕遮罩', () => {
   it('★ 离开私密模块就上锁（锁跟着人，不跟着日期）', () => {
     assert.match(diary, /void lockDiaryGate\(\)/, '离开模块没有上锁');
     // 反向：`pick()` 里**不该**再清「已显示」那套旧状态（它已经不存在了）。
-    const pick = /const pick = \(date\) => \{([\s\S]*?)\n  \};/.exec(diary);
+    const pick = /const pick = \(date[^)]*\) => \{([\s\S]*?)\n  \};/.exec(diary);
     assert.ok(pick, 'pick() 的锚点找不到了');
     assert.doesNotMatch(pick[1], /setRevealed/, 'pick() 还在用已删掉的 revealed 状态');
   });
@@ -820,17 +841,19 @@ describe('私密日记：口令闸门，而不是屏幕遮罩', () => {
 
 describe('搜索框：导航不再关掉它', () => {
   it('★ `jump()` 不碰搜索状态', () => {
-    const body = /const jump = \(date, key = ''\) => \{([\s\S]*?)\n  \};/.exec(diary);
+    // `[^)]*` 而不是 `key = ''`：签名后来加过 `opts`（回书那条兜底要留住筛选态），
+    // 写成精确签名会让「签名变了」被误报成「功能坏了」。
+    const body = /const jump = \(date[^)]*\) => \{([\s\S]*?)\n  \};/.exec(diary);
     assert.ok(body, 'jump() 的锚点找不到了');
     assert.doesNotMatch(body[1], /setSearch/, 'jump() 又把搜索框关了 —— 点一条内容它就消失');
   });
 
   it('★ 反向对照：把 `setSearch` 塞回 jump，判据必须变红', () => {
     const broken = diary.replace(
-      /(const jump = \(date, key = ''\) => \{\n)/,
+      /(const jump = \(date[^)]*\) => \{\n)/,
       "$1    setSearch((current) => ({ ...current, open: false }));\n",
     );
-    const body = /const jump = \(date, key = ''\) => \{([\s\S]*?)\n  \};/.exec(broken);
+    const body = /const jump = \(date[^)]*\) => \{([\s\S]*?)\n  \};/.exec(broken);
     assert.match(body[1], /setSearch/, '反向对照没生效，这条判据是假绿');
   });
 });
@@ -982,10 +1005,13 @@ describe('0.36：时间轴联动 / 一天太长 / 标签全量', () => {
       '点了被折叠的条目不会展开 —— 点击静默无效');
     // 窗口给到 900：pick 里有一段解释为什么换天要收回状态的注释，
     // 400 字符会在注释里就截断（写这条时踩过一次，报「pick 没找到」而不是「断言失败」）。
-    const pick = /const pick = \(date\) => \{([\s\S]{0,900}?)\n  \};/.exec(diary);
+    const pick = /const pick = \(date[^)]*\) => \{([\s\S]{0,1200}?)\n  \};/.exec(diary);
     assert.ok(pick, 'pick 没找到');
     assert.match(pick[1], /setFocusKey\(''\)/, '换天没有清掉上一条的高亮');
     assert.match(pick[1], /setDayAll\(false\)/, '换天没收回「展开了更早的」');
+    // ★ 2026-10-27：「挂在书上」筛完之后再点时间轴就回不去了 —— 换天必须退出来源筛选。
+    assert.match(pick[1], /if \(opts\?\.keepLink !== true\) setLinkKey\(''\)/,
+      '换天没有退出来源筛选 —— 点了时间轴还困在「只显示挂在 X 上」');
   });
 });
 
@@ -1129,9 +1155,57 @@ describe('0.38：写作坞的闸 / 提示词换行 / 侧栏保留 / 来源筛选
 
   it('★ 文章也算「挂在某处」：分组认得出，且不套书名号', () => {
     assert.match(diary, /function sourceKey\(source\)/, '没有来源归一（书和文章没法分组）');
-    assert.match(diary, /kind: isBook \? 'book' : 'article'/, '没有区分书和文章');
+    // ★ 解析本体在 `diary-format.js`：写入侧（`QuickCapture`）与读取侧（这里）必须同一套，
+    //   否则「存进去的书名」和「分组用的书名」会慢慢漂开。
+    assert.match(diary, /parseSource\(source\)\?\.label/, '来源键没有走统一解析');
+    assert.match(diary, /kind: parsed\.isBook \? 'book' : 'article'/, '没有区分书和文章');
     assert.match(diary, /<h2 className="npr-diary-sect-head">挂在文章上<\/h2>/, '文章那一块不见了');
-    // 给文章套书名号等于说它是一本书，而日记侧正是靠书名号分类的。
-    assert.match(diary, /return book \? `《\$\{book\[1\]\}》` : text;/, '文章的键被套上了书名号');
+    // 文章不套书名号这条规则本身由 `test/diary-format.test.mjs` 的 `parseSource` 用例守。
+  });
+});
+
+/**
+ * 0.39：页脚「东西在哪」必须按模块报自己的数。
+ *
+ * ★ 用户 2026-10-27 第二次反馈：「日记共 4 天（私密 1 天）· 5 KB 这个数据怎么还在灵感
+ *   这里出现」。`stats.days` / `stats.bytes` 是公开 + 私密的**合计** —— 它在任何一个
+ *   模块里印出来，都是在读灵感的人面前汇报他写过几天私密日记。
+ */
+describe('0.39：页脚按模块报自己的数（灵感页不该闻到私密）', () => {
+  /** 切出页脚那一段 JSX —— 判据要打在**那一块**上，不是整个文件。 */
+  const footBlock = (source = diary) => {
+    const start = source.indexOf('<p className="npr-diary-foot">');
+    assert.notEqual(start, -1, '页脚不见了 —— 这条断言的锚点失效，先修断言');
+    return source.slice(start, source.indexOf('</p>', start));
+  };
+
+  it('★ 天数与字节按当前模块挑（私密用 privateDays，其余用 publicDays）', () => {
+    assert.match(diary, /footDays = footPrivate \? \(stats\?\.privateDays \?\? 0\) : \(stats\?\.publicDays \?\? 0\)/,
+      '页脚没有按模块挑天数 —— 又用了合计数');
+    assert.match(diary, /footBytes = footPrivate \? \(stats\?\.privateBytes \?\? 0\) : \(stats\?\.publicBytes \?\? 0\)/,
+      '页脚没有按模块挑字节数 —— 私密的密文又算进了灵感的 KB');
+    assert.match(diary, /footWhere = footPrivate \? `\$\{stats\?\.root \?\? ''\}\/private`/,
+      '私密那条没指到自己的目录');
+  });
+
+  it('★ 页脚里**一个合计数都没有**（这是「数据串联」的可执行版本）', () => {
+    assert.doesNotMatch(footBlock(), /stats\./, '页脚又直接读 stats —— 合计一旦回来，灵感页就闻到私密了');
+    assert.doesNotMatch(footBlock(), /（私密/, '页脚又在括号里汇报私密天数');
+  });
+
+  it('★ 反向对照：把合计数塞回页脚，上面那条必须变红', () => {
+    const broken = diary.replace('{footDays} 天', '{stats.days} 天');
+    assert.notEqual(broken, diary, '替换没生效，反向对照是假绿');
+    assert.match(footBlock(broken), /stats\./, '合计数塞回来了居然还判绿 —— 这条判据没咬住');
+  });
+
+  it('★ 读后感仍然不挂这条页脚（0.38 那次修的，别回退）', () => {
+    assert.match(diary, /moduleValue !== 'reflection' && footDays > 0/,
+      '读后感又挂上了别的模块的页脚');
+  });
+
+  it('★ 「导出私密明文」跟着私密模块走，不在灵感页出现', () => {
+    assert.match(diary, /\{footPrivate && gate\.unlocked && \(/,
+      '导出私密明文的入口没有跟着私密模块 —— 灵感页会出现一个它不该有的按钮');
   });
 });

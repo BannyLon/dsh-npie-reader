@@ -209,9 +209,17 @@ function noDragReason(tagText) {
  * 只认深度 0 的 `>`。
  */
 function openTagOf(source, className) {
-  let anchor = source.indexOf(`className="${className}"`);
-  if (anchor === -1) anchor = source.indexOf(`${className}\${`); // 模板串形式：className={`${x}${y}`}
-  if (anchor === -1) anchor = source.indexOf(`"${className} `); // 多类名形式：className="a b"
+  /**
+   * 四种写法都要认：`className="a"` / `className="a b"` / `className={`a${x}`}` /
+   * `className={`a b${x}`}`。
+   * ★ 最后那种是日记页的 `.npr-workarea`（`npr-workarea npr-diary-workarea${…}`）。
+   *   以前只认「类名紧跟 `$`」，于是它找不到、整条断言报「先修断言」—— 而那条
+   *   「祖先链干净」的守卫**一直是红的**，谁也没发现。
+   */
+  const word = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const hit = new RegExp(`className=(?:"[^"]*\\b${word}\\b|\\{\`[^\`]*\\b${word}\\b)`).exec(source);
+  let anchor = -1;
+  if (hit) anchor = hit.index + hit[0].lastIndexOf(className);
   assert.ok(anchor !== -1, `找不到 class="${className}" —— 断言自己失效了，先修断言`);
   const start = source.lastIndexOf('<', anchor);
   assert.ok(start !== -1, `class="${className}" 前面找不到开标签的 <`);
@@ -302,12 +310,19 @@ describe('拖动区的祖先必须干净（no-drag 矩形会被做差减掉）',
     assert.doesNotMatch(openTagOf(bookCode, 'npr-book'), /tabindex/i, '.npr-book 带了 tabindex');
   });
 
-  test('★ 书架与日记的文件里**一个** tabindex 都没有（新加的祖先最容易顺手带上）', () => {
+  test('★ 书架与日记里除了 AI 面板那条分隔条，不该再有 tabindex', () => {
     // 键盘操作在书架/日记里走 window 级监听（方向键翻页、j/k 翻页），任何容器都不需要
     // tabindex。一旦有人给列表加个 `tabIndex={0}` 想让它「可聚焦」，拖动区会整块失效，
     // 而源码里 data-window-drag 一个不少 —— 正是那种只在真机上看得出来的假绿。
+    // ★ 唯一例外是 0.37 加的 AI 面板分隔条（`.npr-companion-divider`）：它要用方向键
+    //   调宽度，必须可聚焦；与订阅那边那条同构（见下面那条）。它是一条 6px 竖条，
+    //   不与任何拖动行重叠 —— 但**除了它之外一处都不许有**。
     for (const [name, source] of [['LibraryApp', libraryCode], ['BookReader', bookCode], ['DiaryApp', diaryCode]]) {
-      assert.equal([...source.matchAll(/tabIndex=/g)].length, 0, `${name} 里出现了 tabIndex`);
+      const hits = [...source.matchAll(/tabIndex=/g)].length;
+      const divider = [...source.matchAll(/npr-companion-divider/g)].length;
+      assert.equal(hits, name === 'DiaryApp' ? 1 : 0,
+        `${name} 里出现了 ${hits} 处 tabIndex（只允许日记页那条 AI 面板分隔条）`);
+      if (name === 'DiaryApp') assert.ok(divider > 0, 'DiaryApp 的 tabIndex 不在 AI 面板分隔条上');
     }
   });
 

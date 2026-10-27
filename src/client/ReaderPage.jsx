@@ -669,6 +669,20 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     });
     setMode('diary');
   };
+  /**
+   * 「带着一本书进书架」的一次性意图 —— 日记页点「挂在书上」的那一行走过来。
+   *
+   * ★ 方向与 `writeReflection` 相反，理由同一条：切视图的权力只在 `mode` 这一层。
+   * ★ 带 `page`：用户点的是「我在这本书第 19 页记的那条灵感」，落在一本书的第 1 页
+   *   等于没有回到现场。阅读器用 `initialPage` 落位，**不改这本书的进度**。
+   * ★ 带 `at`：同一本书再点一次也要重新定位（值相同的话 effect 不跑，点了没反应）。
+   */
+  const [libraryIntent, setLibraryIntent] = useState(null);
+  const openBookFromDiary = ({ bookId, page }) => {
+    if (!bookId) return;
+    setLibraryIntent({ bookId, page: Number.isInteger(page) ? page : null, at: Date.now() });
+    setMode('library');
+  };
   useEffect(() => { if (dialog) { setPickerOpen(false); setAddMenu(null); } }, [dialog]);
   const openPicker = (event) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -958,6 +972,21 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
       void api.setRead([key], true).catch(e => notify(e.message, true));
       setPage((previous) => ({ ...previous, entries: previous.entries.map((entry) => (entry.key === key ? { ...entry, read: true } : entry)) }));
     }
+  };
+
+  /**
+   * 日记页点「挂在文章上」的那一行 → 打开那一篇。
+   *
+   * ★ **先 `openArticle` 再切视图**：`openArticle` 只写自己的状态、不依赖订阅视图
+   *   已经挂载（它不碰 DOM，除了 `rootRef` 上那次可选的滚动）。反过来的话，切过去
+   *   会先闪一下上一篇 —— 用户点的是一篇，看到的是另一篇。
+   * ★ 定义在 `openArticle` 之后，而不是跟 `openBookFromDiary` 放在一起：`const` 在
+   *   初始化之前是死区，放在前面只能靠「反正点击时已经初始化了」这种巧合过关。
+   */
+  const openArticleFromDiary = (key) => {
+    if (!key) return;
+    void openArticle(key);
+    setMode('feeds');
   };
 
   /** 强制去原文页抓全文：订阅源只给摘要时的手动补全入口。 */
@@ -1279,14 +1308,15 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
         // 两边完全共用，不需要在这里额外铺一套。
         <LibraryApp reading={reading} onExit={(next) => setMode(next === 'diary' ? 'diary' : 'feeds')} notify={notify}
           api={api} SessionProvider={SessionProvider} renderSlot={renderSlot}
-          onWriteReflection={writeReflection} onReadingContext={setReadingCtx} />
+          onWriteReflection={writeReflection} onReadingContext={setReadingCtx} intent={libraryIntent}
+          onIntentDone={() => setLibraryIntent(null)} />
       ) : mode === 'diary' ? (
         // 日记同理：自带同一套骨架 + 自己的 `[data-window-drag]` 顶栏。
         // ★ 它**不**接收 `onExit={() => setMode('feeds')}` 那种无参回调 —— 三个视图之后，
         //   「离开」有两个方向，回调必须带目标。
         <DiaryApp reading={reading} onExit={(next) => setMode(next === 'library' ? 'library' : 'feeds')} notify={notify}
           api={api} SessionProvider={SessionProvider} renderSlot={renderSlot}
-          intent={diaryIntent} />
+          intent={diaryIntent} onOpenBook={openBookFromDiary} onOpenArticle={openArticleFromDiary} />
       ) : (
       <div ref={workareaRef} style={{ '--npr-companion-width': `${companionWidth}%` }} className={`npr-workarea${askContext ? ' has-companion' : ''}`}><div className="npr-layout">
         <aside className="npr-sidebar">
