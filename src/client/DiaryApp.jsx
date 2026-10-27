@@ -50,7 +50,7 @@
  * ★ 私密条目**不给「AI 整理」**：宿主的 `setDiaryContext` 读的是公开那半边，
  *   按钮能点的话模型看到的会是同一天的另一段内容。这是边界，不是没做。
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { sanitizeHtml } from '../host/sanitize.js';
 import { markdownToHtml } from '../host/markdown.js';
@@ -108,6 +108,56 @@ function firstMood(...candidates) {
     if (typeof value === 'string' && value.trim() !== '') return normalizeMood(value);
   }
   return '';
+}
+
+/**
+ * 一条记录的正文：**最多三行**，多出来的收在「展开全文」后面。
+ *
+ * 用户 2026-10-27：「已留存的记录展示区域。设置个显示规则，每条内容最多显示三行，
+ * 如果内容过多，就有一个展开更多的查看的窗口。」
+ *
+ * 为什么是「量出来」而不是「数字数」：
+ *   - 数字数得先按显示宽度折行（600px 的栏里 15px 字 ≈ 40 字/行，窄一点就变了），
+ *     而面板宽度是**可拖的**，同一个字数在不同宽度下是 3 行还是 4 行说不准；
+ *   - CSS 的 `-webkit-line-clamp: 3` 直接按排版结果截，宽度怎么变都还是三行。
+ *   所以截断交给 CSS，**「要不要给按钮」交给实测**（`scrollHeight > clientHeight`）。
+ *   ★ 不做「字数不够就不 clamp」的判断：一条 60 字的记录在窄栏里可能就有四行了。
+ * ★ `ResizeObserver` 是必需的：拖动侧栏、拖 AI 面板、切窗口都会改宽度，
+ *   只测一次会留下「明明能放下却还给着展开按钮」的残留。
+ */
+function EntryBody({ html, text, onExpand }) {
+  const ref = useRef(null);
+  const [over, setOver] = useState(false);
+
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node) return undefined;
+    const measure = () => setOver(node.scrollHeight - node.clientHeight > 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [html, text]);
+
+  return (
+    <>
+      {/*
+        * 两个分支合成**一个元素**：clamp 用的是 `display:-webkit-box`，
+        * 夹在一个外层容器上会连内层的块级子元素一起算，行数就不准了。
+        */}
+      <div
+        ref={ref}
+        className={`npr-diary-body npr-diary-clamp${html ? '' : ' npr-diary-body-plain'}`}
+        {...(html ? { dangerouslySetInnerHTML: { __html: html } } : { children: text })} />
+      {over && (
+        <button type="button" className="npr-diary-more" onClick={onExpand}>
+          展开全文
+          <Icon name="chevron-down" size={12} />
+        </button>
+      )}
+    </>
+  );
 }
 
 /**
@@ -362,9 +412,33 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
   const [peek, setPeek] = useState('');
   /** 正在看的那一条的计时器。用 ref 而不是 state：它不参与渲染。 */
   const peekTimer = useRef(0);
+  /**
+   * 「展开全文」那个阅读窗里放的是哪一条（`null` = 没开）。
+   *
+   * ★ 这里存的是**条目快照**而不是 `index`：快照不会因为列表重排、换天、
+   *   删掉别的一条而指错行。窗口是只读的，没有理由跟着列表一起变。
+   * ★ 私密条目也能展开，但**只在已经点开看的那一条上**（`veiled` 的不给按钮）：
+   *   窗口不该成为绕过「逐条点开」的第二条路。上锁 / 超时会把窗口一起关掉。
+   */
+  const [expand, setExpand] = useState(null);
   /** 侧栏时间轴里展开的那一天（同一次只展开一天）。 */
   const [openDay, setOpenDay] = useState('');
   const [stats, setStats] = useState(null);
+  /**
+   * AI 面板的宽度（百分比），可拖动。
+   *
+   * ★ 用户 2026-10-27：「AI整理弹开的窗口应该是可调节宽度。」
+   *   阅读页的伴读面板早就能拖（`.npr-companion-divider`），日记页漏了这条 ——
+   *   于是同一套面板在两边行为不一样。这里补上，并且**共用同一个存储键**：
+   *   「AI 侧栏多宽」是这台机器上的一项偏好，不该按页面分两套。
+   */
+  const [companionWidth, setCompanionWidth] = useState(() => {
+    const saved = Number(localStorage.getItem('npr.companionWidth'));
+    return Number.isFinite(saved) && saved >= 25 && saved <= 75 ? saved : 44;
+  });
+  const companionWidthRef = useRef(companionWidth);
+  const companionDrag = useRef(false);
+  const workareaRef = useRef(null);
 
   const savingRef = useRef(false);
   const aiRef = useRef(false);
@@ -554,6 +628,18 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [tagSheet]);
+
+  /* 「展开全文」的阅读窗同样吃 Esc —— 它盖住整块正文，没有别的出口。 */
+  useEffect(() => {
+    if (!expand) return undefined;
+    const onKey = (event) => {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      setExpand(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [expand]);
 
   // 关掉面板时把会话还回去，否则它会一直挂着一个 retain。
   useEffect(() => () => { chatRef.current?.release?.(); }, []);
@@ -860,6 +946,8 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
       clearTimeout(peekTimer.current);
       peekTimer.current = 0;
     }
+    // 阅读窗里可能正摊着这一条的全文 —— 收起正文却不关窗，等于给了个后门。
+    setExpand(null);
     setPeek((current) => (current === '' ? current : ''));
   }
 
@@ -871,12 +959,14 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
     }
     if (peek === key) {
       setPeek('');
+      setExpand(null);
       return;
     }
     setPeek(key);
     peekTimer.current = setTimeout(() => {
       peekTimer.current = 0;
       setPeek('');
+      setExpand(null);
     }, PEEK_MS);
   }
 
@@ -1101,11 +1191,31 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
    */
   const entriesShown = dayAll ? visibleEntries : visibleEntries.slice(-DAY_PREVIEW);
   const entriesHidden = Math.max(0, visibleEntries.length - entriesShown.length);
+  /**
+   * 顶上那块「写入口」到底有没有东西可放。
+   *
+   * ★ 三种模块各有一道闸（灵感：恒有；私密：解锁才有；读后感：选中且读完的书才有）。
+   *   不判这一下的话，读后感「还没选书」时顶上会挂一条 24px 的空白带 + 一条边线，
+   *   看起来像块加载失败的占位。
+   */
+  const hasDock = moduleValue === 'inspiration'
+    || (moduleValue === 'private' && (gate.available === false || gate.unlocked))
+    || (moduleValue === 'reflection' && Boolean(book && book.readable));
 
   return (
-    <div className={`npr-workarea${chat ? ' has-companion' : ''}`}>
-      <div className="npr-layout" style={{ '--npr-list-width': `${listWidth}px` }}>
-        <aside className="npr-sidebar">
+    /*
+     * ★ `has-companion` 从 `chat` 改成 `aiOpen || chat`：面板**一打开**就该占位置。
+     *   原来要等对话建好才让位，于是点了「AI 整理」之后有一小段时间面板浮在最右边、
+     *   正文没让位、分隔条也不存在 —— 拖都拖不了。与面板自己的渲染判据
+     *   （`{aiOpen && <aside>}`）对齐。
+     */
+    <div ref={workareaRef}
+      className={`npr-workarea npr-diary-workarea${aiOpen || chat ? ' has-companion' : ''}`}
+      style={{ '--npr-companion-width': `${companionWidth}%` }}>
+      {/* ★ `npr-diary-layout` / `npr-diary-nav` 两个类只用来把「AI 面板打开时收起
+          导航」这条规则**限定在日记页**（见 refinements.css）。阅读页的行为不变。 */}
+      <div className="npr-layout npr-diary-layout" style={{ '--npr-list-width': `${listWidth}px` }}>
+        <aside className="npr-sidebar npr-diary-nav">
           {/* ★ 这一条 `data-window-drag` 是**布局必需**：没有它，在日记页按住空白处拖不动窗口。 */}
           <div className="npr-sidebar-toolbar" data-window-drag>
             <ViewSwitch mode="diary" onChange={(next) => { if (next !== 'diary') onExit?.(next); }} showLibrary />
@@ -1422,8 +1532,34 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                   )}
                 </div>
               )}
-              <div className="npr-diary-scroll">
-              {/* 正文宽度约束：一行 70 个汉字没人读得下去。40em ≈ 600px ≈ 40 个汉字。 */}
+              {/*
+                * ★★ 写入口**固定在顶上，不参与滚动**。
+                *
+                *   用户 2026-10-27：「记录灵感的部分是固定的不随滚动条滚动，另外已留存的
+                *   记录展示区域…」—— 原来写入口和记录列表装在**同一个** `.npr-diary-scroll`
+                *   里，往下翻十来条之后输入框就没了；想再记一句，得先滚回顶。
+                *   速记这件事的动作顺序是「想到 → 写 → 再来一句」，写入口必须一直在手边。
+                *
+                *   现在把它拆成上下两块：
+                *     `.npr-diary-dock`   —— 固定，只有写作区（内容少、高度稳定）
+                *     `.npr-diary-scroll` —— 只滚记录
+                *   两块各有一份 `.npr-diary-sheet`，所以宽度约束（600px 居中）和左右留白
+                *   仍然完全对齐 —— 拆成两层最容易出的错就是上下两块的左边缘差几像素。
+                *
+                * ★ 读后感「还没选书 / 没读完」那两种状态**留在滚动区**：那两块不是写入口，
+                *   是说明。把它们钉在顶上会占掉半屏，而且没有可写的东西。
+                */}
+              {/*
+                * 「展开全文」的阅读窗。
+                *
+                * ★ 为什么是**窗口**而不是「就地展开」：用户抱怨的正是「拉长页面很长，
+                *   要滚动好久」。就地展开等于把这条记录重新拉长一次，只是这次是他自己点的 ——
+                *   读完还得再滚回来。窗口有固定高度和自己的滚动条，合上就回到原处，
+                *   列表的行高永远不变。
+                * ★ 窗口里放的是**快照**（`expand` 存的是条目本身），所以后台刷新、
+                *   换天、删掉别的一条都不会让它指错条目。
+                */}
+              <div className="npr-diary-dock">
               <div className="npr-diary-sheet">
                 {/* ---- 写入口：三种模块三种形态 ------------------------------ */}
                 {moduleValue === 'inspiration' && (
@@ -1437,7 +1573,7 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                     onSubmit={() => void saveQuick()}
                     busy={saving}
                     inputRef={draftRef}
-                    maxHeight={300}
+                    maxHeight={220}
                     placeholder="这一刻想到什么？"
                   />
                 )}
@@ -1457,7 +1593,7 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                       onSubmit={() => void saveQuick()}
                       busy={saving}
                       inputRef={draftRef}
-                      maxHeight={360}
+                      maxHeight={260}
                       placeholder="这一页只留在本机。"
                       extra={<MoodRow value={mood} onChange={setMood} label="今天的心情" />}
                     />
@@ -1477,55 +1613,62 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                   </section>
                 )}
 
-                {moduleValue === 'reflection' && (
+                {moduleValue === 'reflection' && book && book.readable && (
+                  <section className="npr-diary-write">
+                    {/* 书籍档案卡：这本书读过多少、划过多少、写过多少。五个数全部是
+                        已有的计量，没有为它新加任何埋点。 */}
+                    <div className="npr-diary-dossier" role="group" aria-label="这本书的档案">
+                      <span className="npr-diary-dossier-cell">
+                        <strong>{annotations.items.length}</strong><span>划线</span>
+                      </span>
+                      <span className="npr-diary-dossier-cell">
+                        <strong>{noteCount}</strong><span>摘录笔记</span>
+                      </span>
+                      <span className="npr-diary-dossier-cell">
+                        <strong>{bookEntries.items.length}</strong><span>读后感</span>
+                      </span>
+                      <span className="npr-diary-dossier-cell">
+                        <strong>{reflectionChars}</strong><span>字</span>
+                      </span>
+                      <span className="npr-diary-dossier-cell"
+                        title="来自书架的阅读进度。插件没有计时器，所以这里没有「阅读时长」这一格。">
+                        <strong>{readLabel}</strong><span>读到</span>
+                      </span>
+                    </div>
+                    <DiaryComposer
+                      variant="reflection"
+                      value={refDraft}
+                      onChange={setRefDraft}
+                      onSubmit={() => void saveReflection()}
+                      busy={saving}
+                      inputRef={refRef}
+                      maxHeight={300}
+                      placeholder="写下这本书留给你的东西。"
+                      actions={(
+                        <>
+                          <button type="button" className="npr-diary-linkish" onClick={() => setRefDraft((current) => (current.trim() === '' ? REFLECTION_TEMPLATE : `${current.replace(/\s+$/, '')}\n\n${REFLECTION_TEMPLATE}`))}>
+                            套用模板
+                          </button>
+                          <button type="button" className="npr-diary-linkish" onClick={() => setRefDraft('')}>清空</button>
+                        </>
+                      )}
+                    />
+                  </section>
+                )}
+              </div>
+              </div>
+              )}
+
+              {/* ---- 记录区：只滚这一块 ------------------------------------ */}
+              <div className="npr-diary-scroll">
+              <div className="npr-diary-sheet">
+                {/* 读后感的两种「还不能写」：留在滚动区（它们是说明，不是写入口）。 */}
+                {moduleValue === 'reflection' && !(book && book.readable) && (
                   book ? (
-                    book.readable ? (
-                      <section className="npr-diary-write">
-                        {/* 书籍档案卡：这本书读过多少、划过多少、写过多少。五个数全部是
-                            已有的计量，没有为它新加任何埋点。 */}
-                        <div className="npr-diary-dossier" role="group" aria-label="这本书的档案">
-                          <span className="npr-diary-dossier-cell">
-                            <strong>{annotations.items.length}</strong><span>划线</span>
-                          </span>
-                          <span className="npr-diary-dossier-cell">
-                            <strong>{noteCount}</strong><span>摘录笔记</span>
-                          </span>
-                          <span className="npr-diary-dossier-cell">
-                            <strong>{bookEntries.items.length}</strong><span>读后感</span>
-                          </span>
-                          <span className="npr-diary-dossier-cell">
-                            <strong>{reflectionChars}</strong><span>字</span>
-                          </span>
-                          <span className="npr-diary-dossier-cell"
-                            title="来自书架的阅读进度。插件没有计时器，所以这里没有「阅读时长」这一格。">
-                            <strong>{readLabel}</strong><span>读到</span>
-                          </span>
-                        </div>
-                        <DiaryComposer
-                          variant="reflection"
-                          value={refDraft}
-                          onChange={setRefDraft}
-                          onSubmit={() => void saveReflection()}
-                          busy={saving}
-                          inputRef={refRef}
-                          maxHeight={420}
-                          placeholder="写下这本书留给你的东西。"
-                          actions={(
-                            <>
-                              <button type="button" className="npr-diary-linkish" onClick={() => setRefDraft((current) => (current.trim() === '' ? REFLECTION_TEMPLATE : `${current.replace(/\s+$/, '')}\n\n${REFLECTION_TEMPLATE}`))}>
-                                套用模板
-                              </button>
-                              <button type="button" className="npr-diary-linkish" onClick={() => setRefDraft('')}>清空</button>
-                            </>
-                          )}
-                        />
-                      </section>
-                    ) : (
-                      <div className="npr-diary-blocked">
-                        <p><strong>《{book.title}》还没标记读完。</strong></p>
-                        <p>读后感只对读完的书开放 —— 回到书架，读完并点顶部那颗「标记读完」，再回来这里写。</p>
-                      </div>
-                    )
+                    <div className="npr-diary-blocked">
+                      <p><strong>《{book.title}》还没标记读完。</strong></p>
+                      <p>读后感只对读完的书开放 —— 回到书架，读完并点顶部那颗「标记读完」，再回来这里写。</p>
+                    </div>
                   ) : (
                     /*
                      * ★ 空状态照抄「阅读」那一页的版式（`.npr-welcome` 那一组类，
@@ -1687,9 +1830,7 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                                   <span className="npr-diary-veil-meta">{entry.body.length} 字 · 看完自己收起</span>
                                 </button>
                               )
-                              : (html
-                                ? <div className="npr-diary-body" dangerouslySetInnerHTML={{ __html: html }} />
-                                : <p className="npr-diary-body npr-diary-body-plain">{entry.body}</p>)}
+                              : <EntryBody html={html} text={entry.body} onExpand={() => setExpand(entry)} />}
                           {privateSide && !empty && !veiled && (
                             <button type="button" className="npr-diary-veil-close" onClick={hidePeek}>收起</button>
                           )}
@@ -1739,9 +1880,7 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                               )}
                             </span>
                           </header>
-                          {html
-                            ? <div className="npr-diary-body" dangerouslySetInnerHTML={{ __html: html }} />
-                            : <p className="npr-diary-body npr-diary-body-plain">{entry.body}</p>}
+                          <EntryBody html={html} text={entry.body} onExpand={() => setExpand(entry)} />
                         </article>
                       );
                     })}
@@ -1807,6 +1946,103 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
         *   任何一步失败，用户看到的是「点了没反应」，而真正的原因被关在从未渲染的
         *   面板里。这与 AI 伴读的行为也不一致：伴读是先出面板、再在面板里报错。
         */}
+      {/*
+        * ★★ 「展开全文」的阅读窗挂在 **workarea** 上，不是正文流里。
+        *   挂在 `.npr-diary-flow` 里的话，遮罩只盖住右侧阅读列，左边那一栏导航
+        *   还是亮的 —— 看起来像遮罩没铺满，而不是「有一层窗口盖在上面」。
+        *   为此 `.npr-diary-workarea` 加了 `position: relative`（见 refinements.css）；
+        *   `.npr-workarea` 本身没有定位，直接挂 absolute 会跑到 `.npr-root` 上去。
+        * ★ 窗口里放的是**快照**（`expand` 存的是条目本身），所以后台刷新、换天、
+        *   删掉别的一条都不会让它指错条目。
+        */}
+      {expand && (
+        <div className="npr-diary-modal" role="dialog" aria-modal="true" aria-label="完整这一条"
+          onClick={() => setExpand(null)}>
+          <div className="npr-diary-modal-card" onClick={(event) => event.stopPropagation()}>
+            <header className="npr-diary-modal-head">
+              <div className="npr-diary-modal-meta">
+                <span className="npr-diary-time">{expand.time}</span>
+                {expand.kind && <span className="npr-diary-kind">{expand.kind}</span>}
+                {expand.scope === 'private' && <span className="npr-diary-lock">私密</span>}
+                {expand.source && <span className="npr-diary-source-tag" title={expand.source}>引自 {expand.source}</span>}
+              </div>
+              <button type="button" className="npr-diary-modal-close" onClick={() => setExpand(null)}
+                aria-label="关闭" autoFocus><Icon name="x" size={14} /></button>
+            </header>
+            <div className="npr-diary-modal-body">
+              {renderBody(expand.body)
+                ? <div className="npr-diary-body" dangerouslySetInnerHTML={{ __html: renderBody(expand.body) }} />
+                : <p className="npr-diary-body npr-diary-body-plain">{expand.body}</p>}
+            </div>
+            {parseTags(expand.body).length > 0 && (
+              <div className="npr-diary-tagrow npr-diary-modal-tags">
+                {parseTags(expand.body).map((tag) => (
+                  <button key={tag} type="button" className="npr-diary-tag"
+                    title={`找所有带 #${tag} 的日记`}
+                    onClick={() => { searchTag(tag); setExpand(null); }}>#{tag}</button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/*
+        * ★ 面板宽度可拖（用户 2026-10-27：「AI整理弹开的窗口应该是可调节宽度」）。
+        *   与阅读页的伴读面板同一套实现、**同一个存储键** —— 「AI 侧栏多宽」是这台
+        *   机器上的一项偏好，不该按页面分两套。样式（`.npr-companion-divider`）在
+        *   `PANEL_CSS` 里，`ensureStyles()` 已经保证它进了文档。
+        * ★ 窄容器下 `.npr-workarea` 会变成纵向（CSS 容器查询），分隔条要跟着改成
+        *   上下拖 —— 所以方向是**算出来的 flex-direction**，不是写死横竖。
+        */}
+      {aiOpen && (
+        <div className="npr-companion-divider"
+          role="separator" aria-label="调整日记与 AI 面板的宽度" aria-orientation="vertical"
+          aria-valuemin={25} aria-valuemax={75} aria-valuenow={companionWidth} tabIndex={0}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            companionDrag.current = true;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            event.currentTarget.dataset.dragging = 'true';
+          }}
+          onPointerMove={(event) => {
+            if (!companionDrag.current) return;
+            const area = workareaRef.current;
+            const rect = area?.getBoundingClientRect();
+            if (!rect) return;
+            const vertical = getComputedStyle(area).flexDirection === 'column';
+            const total = vertical ? rect.height : rect.width;
+            const span = vertical ? rect.bottom - event.clientY : rect.right - event.clientX;
+            const minimum = Math.min(320, total * 0.3);
+            const amount = Math.max(minimum, Math.min(span, total - minimum));
+            companionWidthRef.current = Math.round(amount / total * 100);
+            setCompanionWidth(companionWidthRef.current);
+          }}
+          onPointerUp={(event) => {
+            companionDrag.current = false;
+            event.currentTarget.dataset.dragging = 'false';
+            localStorage.setItem('npr.companionWidth', String(companionWidthRef.current));
+          }}
+          onPointerCancel={(event) => {
+            companionDrag.current = false;
+            event.currentTarget.dataset.dragging = 'false';
+          }}
+          onKeyDown={(event) => {
+            const step = event.shiftKey ? 10 : 2;
+            if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+            event.preventDefault();
+            const next = Math.max(25, Math.min(75,
+              companionWidth + (['ArrowLeft', 'ArrowUp'].includes(event.key) ? step : -step)));
+            companionWidthRef.current = next;
+            setCompanionWidth(next);
+            localStorage.setItem('npr.companionWidth', String(next));
+          }}
+          onDoubleClick={() => {
+            companionWidthRef.current = 44;
+            setCompanionWidth(44);
+            localStorage.setItem('npr.companionWidth', '44');
+          }} />
+      )}
       {aiOpen && (
         <aside className="npr-companion npr-diary-companion" aria-label="AI 整理">
           <header className="npr-companion-header">

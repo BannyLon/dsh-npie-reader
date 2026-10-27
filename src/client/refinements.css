@@ -5,6 +5,15 @@
 }
 .npr-workarea.has-companion > .npr-layout > .npr-sidebar { display: flex; }
 .npr-workarea.has-companion > .npr-layout > .npr-resize { display: block; }
+/* ★★ 日记页例外：AI 面板打开时**收起导航栏**。
+   上面那条「侧栏保持可见」是给阅读页写的（文章列表还得能点）。日记页的侧栏是
+   **导航**（标签 / 时间轴 / 日历），照搬过来就是：268px 导航 + 44% 面板，正文只剩
+   ~330px —— 写一句话要换三次行，读一条要滚半天。用户 2026-10-27 要的是给 AI 面板
+   调宽度，不是把日记挤成一条缝。收起之后正文与面板按剩下的宽度分。
+   ★ 用类名限定范围，不动阅读页的任何像素。 */
+.npr-workarea.has-companion > .npr-layout.npr-diary-layout { grid-template-columns: minmax(0, 1fr); }
+.npr-workarea.has-companion > .npr-layout.npr-diary-layout > .npr-diary-nav,
+.npr-workarea.has-companion > .npr-layout.npr-diary-layout > .npr-resize { display: none; }
 .npr-workarea.has-companion .npr-article { padding-inline: clamp(18px, 3%, 36px); }
 .npr-root .npr-channel { gap: 9px; }
 .npr-channel-mark { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--npr-muted); border-radius: 7px; }
@@ -2368,6 +2377,19 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
    14px 给三个模块共用（读后感与私密的第一个孩子也是写入口）。 */
 .npr-diary-scroll { flex: 1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 14px var(--npr-diary-pad) 40px; }
 
+/* ★★ 写入口**固定在顶上**，不随记录一起滚（用户 2026-10-27：「记录灵感的部分是
+   固定的不随滚动条滚动」）。速记的动作顺序是「想到 → 写 → 再来一句」，
+   往下翻十来条之后输入框就没了，等于每记一句都要先滚回顶部。
+   ★ 两块各自带一份 `.npr-diary-sheet`（600px 居中的那个宽度约束），横向留白也用
+     同一个 `--npr-diary-pad` —— 拆成上下两层最容易出的错，就是左边缘差几像素。
+   ★ 底色是必需的：它是滚动区的**上方边界**，没有底色时记录会从它下面透出来。
+     这里用 `--npr-bg` 而不是叠一层阴影：阴影在深色主题下会发灰。 */
+.npr-diary-dock { flex: 0 0 auto; padding: 14px var(--npr-diary-pad) 8px; background: var(--npr-bg); border-bottom: 1px solid var(--npr-border); }
+/* 写作区自己那一圈底边交给 dock 的 border —— 两道线挨在一起会变成 2px 的粗边。 */
+.npr-diary-dock .npr-diary-write { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
+/* 滚动区不再需要顶部那 14px：dock 已经给过了。留 6px 是条目上边线到 dock 边线的呼吸。 */
+.npr-diary-dock + .npr-diary-scroll { padding-top: 6px; }
+
 /* ── 顶栏：这一页的**第一级**层级 ────────────────────────────────────
    ★ 0.31.0 的日期是 14px 粗体，和正文（15px）、说明（11px）挤在同一层灰里，
      整页没有焦点 —— 打开日记页，眼睛不知道该落在哪儿。
@@ -2722,6 +2744,19 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-diary-body code { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--npr-fg) 8%, transparent); font-size: .92em; }
 .npr-diary-body a { color: var(--npr-fg); text-decoration: underline; text-underline-offset: 2px; }
 .npr-diary-body-plain { white-space: pre-wrap; }
+
+/* ★★ 一条记录默认只露出**三行**（用户 2026-10-27：「每条内容最多显示三行，如果内容
+   过多，就有一个展开更多的查看的窗口」）。
+   ★ 为什么截断交给 CSS 而不是「数够多少字就切」：面板宽度是**可拖的**（侧栏、AI 面板、
+     窗口本身都会改它），一行能放几个字随之变化 —— 同一个字数在窄栏里是四行、在宽栏里
+     是两行。`-webkit-line-clamp` 直接按**排版结果**截，宽度怎么变都还是三行。
+   ★ 由此带来一个必须的配套：要不要给「展开全文」得**量出来**（见 EntryBody 的
+     `scrollHeight > clientHeight`），不能靠字数估。 */
+.npr-diary-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+/* 「展开全文」是这一条的**页脚动作**，不是按钮卡片：11.5px 文字 + 一枚向下的箭头。
+   ★ 箭头是给方向感的（下面还有），不用 emoji 也不用彩色。 */
+.npr-root .npr-diary-more { display: inline-flex; align-items: center; gap: 3px; margin: 3px 0 0; padding: 0; border: 0; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11.5px; cursor: pointer; }
+.npr-root .npr-diary-more:hover { color: var(--npr-fg); text-decoration: underline; }
 /* 私密条目「收着」的样子。虚线边框是有意的：它说的是「这里有一个洞，
    不是一段文字」，实线加底色会被读成一张内容卡。
    ★ 收着的时候 DOM 里**没有**正文节点 —— 这不是 CSS 遮蔽，是没渲染。 */
@@ -2838,6 +2873,27 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 /* ── 标签浮层（`全部 N 个 ›`） ─────────────────────────────────────────
    盖住整个滚动区，而不是跳去另一页：关掉要能回到原来的滚动位置。
    用阅读区的完整面积装「全量」，因为 268px 的侧栏装不下几千个 —— 这才是问题的解法。 */
+/* 阅读窗的定位锚就是这一层：`.npr-workarea` 本身没有定位，把 `absolute` 的遮罩
+   挂上去会一路跑到 `.npr-root`（或者更外层）。加在这里而不是给 `.npr-workarea`
+   全局加，是为了不动阅读页。 */
+.npr-diary-workarea { position: relative; }
+
+/* ★★ 「展开全文」的阅读窗。
+   ★ 为什么是窗口而不是就地展开：用户抱怨的正是「拉长页面很长」，就地展开等于
+     把这一条重新拉长一次，读完还要再滚回来。窗口有固定尺寸和自己的滚动条，
+     列表的行高永远不变 —— 关掉就回到原处。
+   ★ 遮罩固定在**黑**上，不用 `var(--npr-fg)` 混色：深色主题下 fg 是浅色，
+     混出来是一层「白雾」，看起来像蒙了灰而不是压暗。 */
+.npr-diary-modal { position: absolute; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgb(0 0 0 / 32%); }
+.npr-diary-modal-card { display: flex; flex-direction: column; min-height: 0; max-height: 100%; width: min(560px, 100%); border: 1px solid var(--npr-border-strong); border-radius: 12px; background: var(--npr-bg); box-shadow: 0 18px 48px -20px rgba(0, 0, 0, .45); }
+.npr-diary-modal-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--npr-border); flex-shrink: 0; }
+.npr-diary-modal-meta { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; flex-wrap: wrap; }
+.npr-root .npr-diary-modal-close { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex-shrink: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--npr-muted); cursor: pointer; }
+.npr-root .npr-diary-modal-close:hover { border-color: var(--npr-border-strong); color: var(--npr-fg); }
+/* 窗口里的正文**不 clamp**：它是「看全文」的最后一步。 */
+.npr-diary-modal-body { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 12px 14px; font-size: 15px; }
+.npr-diary-modal-tags { padding: 0 14px 12px; margin-top: 0; }
+
 .npr-tagsheet { position: absolute; inset: 0; z-index: 30; display: flex; flex-direction: column; min-height: 0; padding: 14px 0 0; background: var(--npr-bg); }
 .npr-tagsheet-head { display: flex; align-items: center; gap: 8px; padding: 0 14px 10px; }
 .npr-tagsheet-title { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; font-weight: 600; color: var(--npr-fg); }

@@ -713,7 +713,10 @@ describe('读后感门禁：只对读完的书开放', () => {
   });
 
   it('★ 书没读完时不画输入框，而是说清楚为什么', () => {
-    assert.match(diary, /book\.readable \? \(/, '输入框没有受 readable 控制');
+    // 0.36 起写入口被提到固定的 `.npr-diary-dock` 里，判据从此压在这一层上：
+    // `book && book.readable && (...)`。守的仍然是同一件事 —— 没读完不给写。
+    assert.match(diary, /moduleValue === 'reflection' && book && book\.readable && \(/,
+      '输入框没有受 readable 控制');
     assert.match(diary, /npr-diary-blocked/, '没读完时没有说明块 —— 用户会以为功能坏了');
     assert.match(diary, /还没标记读完/, '说明里没点明原因');
   });
@@ -887,7 +890,8 @@ describe('0.35：标签扩展性 / 私密逐条查看 / 读后感空状态', () 
       '收着的判据不见了 —— 解锁后会把整页私密日记铺成明文');
     assert.match(diary, /className="npr-diary-veil"[\s\S]{0,200}?peekEntry\(key\)/, '收着的时候没有「点开看」入口');
     // 收着时必须**不渲染**正文节点，而不是渲染了再遮住。
-    const veilBranch = /\{empty\s*\?[\s\S]*?: veiled\s*\?([\s\S]*?): \(html/.exec(diary);
+    // 0.36 起「摊开」那一支不再是内联的 html/纯文本二选一，而是 `<EntryBody>`。
+    const veilBranch = /\{empty\s*\?[\s\S]*?: veiled\s*\?([\s\S]*?): <EntryBody/.exec(diary);
     assert.ok(veilBranch, '收着 / 展开的分支结构没找到');
     // 只允许读**长度**（「23 字」那种提示），不许把正文本身放进 DOM。
     assert.equal(veilBranch[1].includes('dangerouslySetInnerHTML'), false, '收着的分支里在渲染 HTML —— 正文已经进 DOM 了');
@@ -963,5 +967,84 @@ describe('0.36：时间轴联动 / 一天太长 / 标签全量', () => {
     assert.ok(pick, 'pick 没找到');
     assert.match(pick[1], /setFocusKey\(''\)/, '换天没有清掉上一条的高亮');
     assert.match(pick[1], /setDayAll\(false\)/, '换天没收回「展开了更早的」');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.37：写作区固定 / 三行截断 / AI 面板可拖
+//
+// ★ 三条反馈的共同点：**都不是「少个按钮」，是布局结构不对**
+//   ① 写入口和记录挤在同一个滚动容器里 ⇒ 翻下去就没了输入框；
+//   ② 一条长记录整段摊开 ⇒ 一屏只剩两三条，用户说的「要滚动好久」；
+//   ③ 日记页的 AI 面板宽度写死 ⇒ 同一套面板在阅读页能拖、在这里不能。
+//   结构一旦回退，界面上不会报错，只会「用起来很难受」，所以必须钉住。
+// ---------------------------------------------------------------------------
+
+const diaryCss = read('refinements.css');
+
+describe('0.37：写入口固定 / 每条三行 / AI 面板可拖', () => {
+  it('★ 写入口在固定的 dock 里，不在滚动区里', () => {
+    // 顺序即结构：dock 必须先出现，scroll 在它后面 —— 反过来就是「dock 在滚动区里面」。
+    const dockAt = diary.indexOf('<div className="npr-diary-dock">');
+    const scrollAt = diary.indexOf('<div className="npr-diary-scroll">', dockAt);
+    assert.ok(dockAt > 0, '没有 dock —— 写入口还和记录挤在同一个滚动容器里');
+    assert.ok(scrollAt > dockAt, 'dock 不在滚动区之前（写入口还是会被滚走）');
+    // 写作区必须落在 dock 与 scroll 之间这一段里。
+    const between = diary.slice(dockAt, scrollAt);
+    assert.match(between, /<DiaryComposer/, 'dock 里没有写入口');
+    assert.match(diaryCss, /\.npr-diary-dock \{[^}]*flex: 0 0 auto/, 'dock 会被 flex 拉伸/压缩');
+    assert.match(diaryCss, /\.npr-diary-dock \{[^}]*background: var\(--npr-bg\)/,
+      'dock 没有底色 —— 记录会从它下面透出来');
+  });
+
+  it('★ dock 与滚动区各带一份 sheet（宽度约束不能一边有一边没有）', () => {
+    const dockAt = diary.indexOf('<div className="npr-diary-dock">');
+    const scrollAt = diary.indexOf('<div className="npr-diary-scroll">', dockAt);
+    assert.match(diary.slice(dockAt, scrollAt), /<div className="npr-diary-sheet">/,
+      'dock 里没有 sheet —— 600px 的宽度约束只作用在滚动区，上下两块左边缘会差几像素');
+    assert.match(diary.slice(scrollAt, scrollAt + 400), /<div className="npr-diary-sheet">/,
+      '滚动区里没有 sheet');
+  });
+
+  it('★ 每条最多三行，靠排版结果截而不是数字数', () => {
+    assert.match(diaryCss, /-webkit-line-clamp: 3/, '没有三行截断');
+    assert.match(diary, /className=\{`npr-diary-body npr-diary-clamp\$\{html \? '' : ' npr-diary-body-plain'\}`\}/,
+      '正文没用 clamp 容器');
+    // 「要不要给展开按钮」必须量出来：宽度可拖，字数换算不准。
+    assert.match(diary, /node\.scrollHeight - node\.clientHeight > 1/, '展开按钮没有按实际溢出判断');
+    assert.match(diary, /new ResizeObserver\(measure\)/, '拖窗口/拖侧栏后不会重新量 —— 按钮会残留');
+    assert.match(diary, /\{over && \(/, '没有 overflow 判据就直接给了按钮（每条都会有「展开全文」）');
+  });
+
+  it('★ 展开是**窗口**，不是把这一条就地拉长', () => {
+    assert.match(diary, /className="npr-diary-modal"/, '展开没有独立的阅读窗');
+    assert.match(diary, /role="dialog" aria-modal="true" aria-label="完整这一条"/, '阅读窗没有对话框语义');
+    assert.match(diaryCss, /\.npr-diary-modal-body \{[^}]*overflow: auto/, '窗口正文不能自己滚 —— 长文会撑破卡片');
+    // 窗口里的正文**不能**再被 clamp，否则「看全文」还是三行。
+    assert.match(diary, /npr-diary-modal-body[\s\S]{0,400}?dangerouslySetInnerHTML/, '窗口里没有渲染正文');
+    assert.equal(/npr-diary-modal-body[\s\S]{0,300}?npr-diary-clamp/.test(diary), false,
+      '窗口里的正文也被 clamp 了 —— 展开之后还是三行');
+    // Esc 是唯一的另一条出口（它盖住了整块正文）。
+    assert.match(diary, /\}, \[expand\]\);/, '阅读窗没有 Esc / 状态收回的 effect');
+  });
+
+  it('★ 私密：「展开全文」不能成为绕过逐条点开的第二条路', () => {
+    // 上锁 / 超时必须连窗口一起关掉，否则收起了正文、窗口里还摊着全文。
+    assert.match(diary, /function hidePeek\(\)[\s\S]{0,300}?setExpand\(null\)/,
+      '收起私密正文时没有关掉阅读窗 —— 那是个后门');
+    assert.match(diary, /peekTimer\.current = setTimeout\(\(\) => \{[\s\S]{0,120}?setExpand\(null\)/,
+      '30 秒超时只收了正文，窗口里还是明文');
+  });
+
+  it('★ AI 面板宽度可拖，且与阅读页共用同一个偏好', () => {
+    assert.match(diary, /className="npr-companion-divider"/, '日记页的 AI 面板没有分隔条');
+    assert.match(diary, /localStorage\.getItem\('npr\.companionWidth'\)/, '没有读取已存的宽度');
+    assert.match(diary, /localStorage\.setItem\('npr\.companionWidth'/, '拖完没有存 —— 下次打开又回去了');
+    assert.match(diary, /--npr-companion-width/, '没把宽度变量挂到 workarea 上');
+    // `has-companion` 必须跟着**面板打开**，不能等对话建好：否则点了没反应、也拖不了。
+    assert.match(diary, /aiOpen \|\| chat \? ' has-companion' : ''/, '面板打开后正文没有让位');
+    // 窄容器下 workarea 变纵向，分隔条要跟着改方向。
+    assert.match(diary, /getComputedStyle\(area\)\.flexDirection === 'column'/,
+      '分隔条写死了横向 —— 窄容器里会拖不动');
   });
 });
