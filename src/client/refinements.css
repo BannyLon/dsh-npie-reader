@@ -10,11 +10,23 @@
 .npr-channel-mark { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--npr-muted); border-radius: 7px; }
 .npr-channel-mark.curated { color: var(--npr-fg); }
 .npr-channel-mark.all { color: var(--npr-fg); }
-/* 设置齿轮：0.20.1 起在侧栏**工具栏最右端**（原先挂在筛选 chip 行里）。
-   选择器带三层（.npr-root + 工具栏 + 按钮）是为了压住 `.npr-root .npr-icon` 那条
-   32×32 的基础尺寸 —— 两者特异度若相同，谁生效就只看源码顺序，而这种「看着生效了、
-   换个顺序就变」的规则最容易被后来的改动悄悄掀翻。 */
-.npr-root .npr-sidebar-toolbar .npr-settings-button { width: 30px; height: 30px; padding: 6px; border-radius: 7px; color: var(--npr-muted); }
+/* 侧栏工具栏里的**工具按钮**（加订阅 / 搜索 / 刷新 / 设置）全部降一档：28×28、
+   颜色从 --npr-muted 退到 --npr-faint、hover 才回到正文色。
+   ★ 目的只有一个：让同一行里「两个主功能」与「对列表做动作的按钮」不再同级。
+     0.29.0 之前是 24 / 32 / 30 三个尺寸（分段 / 图标 / 齿轮）、两种图标色，无序。
+   ★ 作用域必须带 `.npr-sidebar-toolbar`，**不能**直接改 `.npr-root .npr-icon`：
+     正文工具栏（.npr-reader-toolbar）和探索页里的 .npr-icon 是另一套语义（对当前
+     文章的动作），跟着降权会把它们压得看不清。
+   ★ hover 那条**必须显式补在这里**：文件上方 `.npr-root .npr-icon:hover` 与本规则
+     特异度相同（3），本规则在下 ⇒ 不补的话它会把 hover 的 color 盖掉，鼠标经过时
+     工具按钮不会变亮。background 不受影响（本规则没声明它，不参与竞争）。
+   ★ 设置齿轮：0.20.1 起在侧栏**工具栏最右端**（原先挂在筛选 chip 行里）。下面三条
+     仍带三层选择器 —— 为了压住 `.npr-root .npr-icon` 那条 32×32 的基础尺寸，
+     两者特异度若相同，谁生效就只看源码顺序，而这种「看着生效了、换个顺序就变」的
+     规则最容易被后来的改动悄悄掀翻。 */
+.npr-root .npr-sidebar-toolbar .npr-icon { width: 28px; height: 28px; padding: 5px; color: var(--npr-faint); }
+.npr-root .npr-sidebar-toolbar .npr-icon:hover { color: var(--npr-fg); }
+.npr-root .npr-sidebar-toolbar .npr-settings-button { border-radius: 7px; }
 .npr-root .npr-sidebar-toolbar .npr-settings-button:hover { background: var(--npr-hover); color: var(--npr-fg); }
 .npr-root .npr-sidebar-toolbar .npr-settings-button svg { width: 17px; height: 17px; }
 
@@ -594,12 +606,35 @@
    ══════════════════════════════════════════════════════════════════════ */
 
 /* ── 模式开关 ───────────────────────────────────────────────────────── */
-.npr-viewswitch { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 1px; padding: 1px; border: 1px solid var(--npr-border); border-radius: 7px; background: var(--npr-bg); }
-.npr-root .npr-viewswitch button { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--npr-faint); cursor: pointer; }
-.npr-root .npr-viewswitch button:hover { color: var(--npr-fg); background: var(--npr-hover); }
-/* 选中态用中性填充而不是品牌色：品牌色当浅底文字/小图标会掉对比度，
-   而这里是 15px 的线性图标，最容易被吃掉。 */
-.npr-root .npr-viewswitch button[aria-pressed=true] { color: var(--npr-fg); background: color-mix(in srgb, var(--npr-fg) 11%, transparent); }
+/* ★ 0.29.0（2026-10-26 用户：这两个图标是插件的两个最主要的功能，不是工具按钮）：
+   它原先读起来就是两个按钮，因为**三个信号全都在说「同级」**：
+     ① 容器只靠 1px 的 --npr-border，在侧栏底色上对比度约 1.1:1 ⇒ 看不出「一个控件」；
+     ② 选中态 `--npr-fg 11%` 与工具按钮的 hover（5%）同色系、同量级
+        ⇒「被选中」被读成「刚点过一下」；
+     ③ 尺寸也乱：分段按钮 24、工具 32、齿轮 30，图标 15 / 17 / 17 —— 三个层级无序，
+        无序就等于没有主次。
+   现在的做法是**叠三个互相独立的信号**，任一条失效，另外两条还能把它读出来：
+     ① 轨道：容器给一层 8% 的填充（--npr-bg-2 就是侧栏底色，纸色主题下同样跟随）；
+     ② 分隔线：::after 拉一条 16px 竖线，把「视图层 ｜ 动作层」切开；
+     ③ 权重：选中块用 --npr-bg 抬起来，图标描边 1.7 → 2。
+   ★ 选中**不再用「填充变灰」**还有一条硬理由：灰填充在本插件里是 hover 的语义
+     （见文件上方 `.npr-icon:hover`）。同一个视觉不能既表示「选中」又表示「经过」，
+     否则永远分不清「我现在在书这一半」和「鼠标正停在书上面」。
+   ★ 品牌色仍然不用：15px 线性图标上品牌色会掉到 3:1 以下（原先那句注释同理）。
+   ★ 分隔线走 ::after、并且**绝对定位到盒子外面**：一是 `role="group"` 里凭空多一个
+     空节点对读屏是噪声（生成内容不进无障碍树）；二是它若留在流内，轨道的填充会
+     连同它一起被染成一块「带线的灰尾巴」，看着像轨道画歪了。 */
+.npr-viewswitch { position: relative; display: inline-flex; flex: 0 0 auto; align-items: center; gap: 1px; padding: 2px; margin-right: 16px; border: 0; border-radius: 8px; background: color-mix(in srgb, var(--npr-fg) 8%, var(--npr-bg-2)); }
+/* 8px 空 + 1px 线 + 9px 空（含工具栏的 2px gap）= 两侧视觉等距 */
+.npr-viewswitch::after { content: ''; position: absolute; left: 100%; top: 50%; width: 1px; height: 16px; margin-left: 8px; transform: translateY(-50%); background: var(--npr-border-strong); }
+.npr-root .npr-viewswitch button { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--npr-muted); cursor: pointer; }
+/* 这两个是主功能，未选中也不该像「禁用」——所以停在中性色，把更淡的那一档留给工具按钮 */
+.npr-root .npr-viewswitch button:hover { color: var(--npr-fg); background: color-mix(in srgb, var(--npr-fg) 7%, transparent); }
+/* 选中：抬起来的一块。底色用 --npr-bg —— 纸色主题下它与 --npr-bg-2 同值，但轨道是
+   「加了 8% 深」的那一层，所以块仍然是块；描边再兜一层，深浅主题都不靠方向感。 */
+.npr-root .npr-viewswitch button[aria-pressed=true] { color: var(--npr-fg); background: var(--npr-bg); box-shadow: 0 0 0 1px color-mix(in srgb, var(--npr-fg) 14%, var(--npr-bg)), 0 1px 2px color-mix(in srgb, var(--npr-fg) 12%, transparent); }
+/* 描边比填充更能扛主题：深色下「更浅的块」不再成立，粗一档的图标仍然说得清谁被选中 */
+.npr-root .npr-viewswitch button[aria-pressed=true] svg { stroke-width: 2; }
 .npr-root .npr-viewswitch button:focus-visible { outline-offset: 1px; }
 
 /* ── 书单侧栏 ───────────────────────────────────────────────────────── */
@@ -791,7 +826,10 @@
 /* 书名可以被挤，但**不能挤出省略号以外的东西**：挤没了就等于「不知道在读哪一本」。 */
 .npr-book-pill-title { min-width: 0; max-width: 160px; margin-right: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--npr-fg); font-size: 12px; font-weight: 600; }
 .npr-book-pill-item { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11.5px; white-space: nowrap; cursor: pointer; }
-.npr-book-pill-item:hover { background: var(--npr-hover); color: var(--npr-fg); }
+.npr-book-pill-item:hover:not(:disabled) { background: var(--npr-hover); color: var(--npr-fg); }
+/* 「写读后感」在书还没标记读完时是禁用的（读后感只对读完的书开放）。
+   ★ 不禁用、让用户点了再说不行，会更糟：规则本来可以在按下去**之前**就告诉他。 */
+.npr-book-pill-item:disabled { opacity: .4; cursor: default; }
 .npr-book-pill-item:focus-visible { outline: 2px solid var(--npr-accent-strong); outline-offset: 1px; }
 /* `is-on` = 这一项对应的面板正开着 / 这个状态正生效。用**强调色描边 + 文字**而不是
    整块填充：胶囊里并排六个动作，块状高亮会让眼睛找不到「现在开着哪个」。 */
@@ -2305,4 +2343,325 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
   background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; cursor: pointer;
 }
 .npr-book-empty-actions button:hover { background: var(--npr-hover); }
+
+/* ── 日记（2026-10-26）─────────────────────────────────────────────────
+   全部沿用 `--npr-*` 那套主题变量，**不新造变量**：新增一个未定义的 `var(--x)`
+   会让整条声明变成 guaranteed-invalid（空值），波及全部后代 —— 这条教训在本文件
+   上方 `--npr-chat-bg` 那段写着。
+   ★ 品牌色只用在「选中态的一道边」上，不用作浅底文字，也不承载白字：
+     15px 以下的小字上品牌色对比度会掉到 3:1 以下。 */
+
+/* 右侧那一块：日期条固定，下面的内容自己滚（`.npr-reader` 本身是 overflow:auto，
+   若不分层，滚动会把日期条一起带走）。
+   ★ `--npr-diary-sheet-w` 是**正文窄栏宽度**、`--npr-diary-pad` 是**左右内边距**。
+     工具栏与滚动区都吃这两个变量 —— 左缘必须落在同一条竖线上，否则「标题贴边、
+     正文居中」，眼睛会读成两个不同的容器。
+   ★ 两个值都定义在**这一层**（而不是各自写在工具栏和滚动区里）：窄容器那段
+     `@container` 只需要改这里的 `--npr-diary-pad`，两边就一起变。
+     上一版把 `clamp(16px,3vw,34px)` 抄在两处，窄容器下滚动区改 16px、工具栏还是
+     34px —— 差 18px，而且只在窗口很窄时才出现。 */
+.npr-diary-reader { --npr-diary-sheet-w: 600px; --npr-diary-pad: clamp(16px, 3vw, 34px); display: flex; flex-direction: column; overflow: hidden; }
+.npr-diary-scroll { flex: 1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 var(--npr-diary-pad) 40px; }
+
+/* ── 顶栏：这一页的**第一级**层级 ────────────────────────────────────
+   ★ 0.31.0 的日期是 14px 粗体，和正文（15px）、说明（11px）挤在同一层灰里，
+     整页没有焦点 —— 打开日记页，眼睛不知道该落在哪儿。
+     现在它是 h1（20–26px）+ 一行 11.5px 的事实（日期 · 条数 · 字数），
+     三级层级一次拉开：**标题 → 正文 → 元信息**。
+   ★ 高度必须覆盖 `.npr-book-toolbar` 的 44px：h1 加副标题两行放不进 44px，
+     硬塞会溢出到下面那行去。
+   ★★ `padding-inline` 是**算出来的**，不是随手给的 34px。
+     正文窄栏在滚动区里是 `margin:0 auto`，它相对 `.npr-reader` 的左缘等于
+     `(100% - 栏宽) / 2`（滚动区左右的内边距在推导里正好抵消：
+     `P + (W - 2P - S)/2 = (W - S)/2`，与 P 无关）。
+     所以工具栏用同一个式子当内边距，h1 的左缘就与正文左缘**恒等**；
+     窗口比栏宽还窄时式子为负，`max()` 退回 `--npr-diary-pad`（与滚动区同一个值）。
+     实测（1240 窗口、911 的阅读列）：改之前 h1 在 x=333、正文在 x=495，差 162px。 */
+.npr-diary-reader > .npr-book-toolbar {
+  height: auto; min-height: 56px; align-items: center; gap: 14px;
+  padding: 9px max(var(--npr-diary-pad), calc((100% - var(--npr-diary-sheet-w)) / 2)) 9px;
+  border-bottom: 1px solid var(--npr-border);
+}
+.npr-diary-head { flex: 1; min-width: 0; }
+.npr-diary-h1 { margin: 0; font-size: clamp(19px, 1.9vw, 24px); font-weight: 600; line-height: 1.25; letter-spacing: -.01em; color: var(--npr-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npr-diary-sub { margin: 3px 0 0; font-size: 11.5px; line-height: 1.4; color: var(--npr-faint); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 「AI 整理这一天」：日期栏上的一个动作，不是每条记录上的按钮。
+   ★ 用**描边**而不是品牌色填充：它是一页一次的动作，和「记下来」（每次写完都要点）
+     不该是同一个视觉重量。 */
+.npr-root .npr-diary-ai { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; height: 30px; padding: 0 12px; border: 1px solid var(--npr-border-strong); border-radius: 9px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; cursor: pointer; }
+.npr-root .npr-diary-ai:hover:not(:disabled) { border-color: var(--npr-accent); }
+.npr-root .npr-diary-ai:disabled { opacity: .45; cursor: not-allowed; }
+
+/* 正文的**宽度约束**：一行 70 个汉字没人读得下去。
+   ★ 用 `var(--npr-diary-sheet-w)` 而不是 `40em`：`40em` 量的是**这个元素自己**的
+     字号，而它继承的是 `.npr-root` 的 13px ⇒ 实际只有 520px（≈34 个汉字），
+     与注释里「40 个汉字」的意图对不上。上一版就是这么错的，肉眼看不出来 ——
+     只会觉得「行有点短」。现在宽度是一个**显式的数**，与工具栏共用同一个变量。
+   ★ 同时把字号钉在 15px：写入口（`.npr-diary-input`）本来就是 15px，
+     而正文吃的是 `var(--npr-font-size)`（阅读设置，默认 **19px**）——
+     于是「写的时候 15、读的时候 19」，同一页里两套字号。日记是独立版面，
+     不跟阅读字号走，写和读用同一个尺寸。 */
+.npr-diary-sheet { max-width: var(--npr-diary-sheet-w); margin: 0 auto; font-size: 15px; }
+
+/* 月历 */
+.npr-diary-cal { padding: 2px 10px 6px; flex-shrink: 0; }
+.npr-diary-cal-head { display: flex; align-items: center; gap: 4px; height: 30px; }
+.npr-diary-cal-title { flex: 1; min-width: 0; font-size: 12px; font-weight: 600; color: var(--npr-fg); text-align: center; }
+.npr-diary-cal-today { height: 24px; padding: 0 8px; border: 1px solid var(--npr-border-strong); border-radius: 6px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; cursor: pointer; }
+.npr-diary-cal-today:hover:not(:disabled) { background: var(--npr-hover); color: var(--npr-fg); }
+.npr-diary-cal-today:disabled { opacity: .45; cursor: default; }
+.npr-diary-cal-week, .npr-diary-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.npr-diary-cal-week { margin-bottom: 2px; }
+.npr-diary-cal-week span { text-align: center; font-size: 10px; color: var(--npr-faint); }
+.npr-root .npr-diary-cal-cell { position: relative; display: flex; align-items: center; justify-content: center; height: 28px; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; cursor: pointer; }
+.npr-root .npr-diary-cal-cell:hover { background: var(--npr-hover); }
+/* 不在本月的格子画淡但**照样可点**：点了就跳过去。 */
+.npr-root .npr-diary-cal-cell.is-out { color: var(--npr-faint); }
+.npr-root .npr-diary-cal-cell.is-today { border-color: var(--npr-border-strong); }
+/* 选中：**实心**（fg 底 / bg 字）。
+   ★ 0.32.0 第一版是「一道品牌色细边 + 7% 淡底」，实测和「今天」那格（灰边 + 无底）
+     几乎分不开 —— 品牌色在本机是浅薄荷绿，1px 边压在白底上等于没有。
+     截图里选中日和今天看起来是同一档。
+   ★ 实心填充不会和 hover 混淆：hover 是 `--npr-hover` 的极淡灰（「鼠标在这儿」），
+     这里是 fg 底 + bg 字（「你选的就是这天」），两档之间没有过渡地带。 */
+.npr-root .npr-diary-cal-cell.is-selected { border-color: var(--npr-fg); background: var(--npr-fg); color: var(--npr-bg); font-weight: 600; }
+.npr-diary-cal-dot { position: absolute; bottom: 3px; left: 50%; width: 3px; height: 3px; margin-left: -1.5px; border-radius: 50%; background: var(--npr-muted); }
+/* 那天的情绪。有心情就把点放大一号并上色 —— 翻一个月历能看出这个月大概怎么样，
+   这正是「情绪追踪」要的东西（0.31.0 只有一个灰点，只说明「写过」）。
+   ★ 色值与心情按钮那一组是同一套；两处都写死而不是抽变量，是因为自定义属性里
+     再套 color-mix 在本环境不解析（见本文件顶部那条教训）。 */
+.npr-diary-cal-dot[data-tone] { width: 5px; height: 5px; margin-left: -2.5px; }
+.npr-diary-cal-dot[data-tone="5"] { background: #16a34a; }
+.npr-diary-cal-dot[data-tone="4"] { background: #4ade80; }
+.npr-diary-cal-dot[data-tone="3"] { background: #9ca3af; }
+.npr-diary-cal-dot[data-tone="2"] { background: #f59e0b; }
+.npr-diary-cal-dot[data-tone="1"] { background: #6366f1; }
+/* 等宽数字：不然 1 和 11 在格子里左右跳，一整月看下来像没对齐。 */
+.npr-diary-cal-day { font-variant-numeric: tabular-nums; line-height: 1; }
+/* 选中格是 fg 实底，点必须反过来用 bg —— 否则深绿点压在深底上，那一格什么都看不见。 */
+.npr-root .npr-diary-cal-cell.is-selected .npr-diary-cal-dot { background: var(--npr-bg); }
+.npr-diary-cal-note { margin: 6px 0 0; font-size: 11px; color: var(--npr-faint); text-align: center; }
+
+/* ── 侧栏：三块**检索器**（不是一份内容列表）──────────────────────────
+   ★ 0.31.0 的灵感侧栏是「最近 30 天、每天每条的时间 + 正文前 160 字」—— 那是把右边
+     的正文抄了一遍：既没有「按标签检索」，也没有「按时间轴检索」，只提供了「按日期
+     跳转」，却占满了整栏。用户 2026-10-27 的原话是「实在是不符合常理」。
+   ★ 现在每一块都有**自己的小标题**。以前侧栏里只有「今天 2 条 / 昨天 2 条」两行字，
+     用户根本不知道那一栏在数什么 —— 私密模块里那两行数的甚至是**灵感**。 */
+.npr-diary-panel { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding-bottom: 14px; }
+.npr-diary-sect { padding: 10px 0 4px; }
+.npr-diary-sect + .npr-diary-sect { border-top: 1px solid var(--npr-border); }
+.npr-diary-sect-head { display: flex; align-items: center; gap: 6px; margin: 0 0 4px; padding: 0 14px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em; color: var(--npr-faint); text-transform: uppercase; }
+.npr-diary-sect-badge { padding: 0 5px; border-radius: 999px; background: color-mix(in srgb, var(--npr-fg) 9%, transparent); color: var(--npr-muted); font-size: 10px; font-weight: 500; letter-spacing: 0; }
+.npr-diary-sect-note { margin: 2px 0 4px; padding: 0 14px; font-size: 11px; line-height: 1.6; color: var(--npr-faint); }
+.npr-diary-sect-note.is-error { color: var(--dsw-alias-state-error-primary); }
+/* 「还没读完」那一组整体压暗：它必须**看得见**（用户要知道自己有哪些书），
+   但**点不动**（读后感只对读完的书开放）。压暗 + 每行写「未读完」两件事一起做，
+   否则一条灰行既像禁用又像加载中。 */
+.npr-diary-sect.is-muted .npr-diary-sect-head { color: var(--npr-faint); }
+.npr-diary-sect.is-muted .npr-diary-dayrow-date { color: var(--npr-muted); }
+
+/* 侧栏里的一行：日期 / 书名 / 分组。 */
+.npr-root button.npr-diary-dayrow { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 14px; border: 0; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.npr-root button.npr-diary-dayrow:hover:not(:disabled) { background: var(--npr-hover); }
+.npr-root button.npr-diary-dayrow.npr-selected { background: color-mix(in srgb, var(--npr-fg) 8%, transparent); font-weight: 600; }
+/* ★ 有 `disabled` 属性 ≠ 用户看得出（本文件 §六 那条教训的同一个失败模式）。
+   0.32.0 第一版这里只写了 `cursor: default`，截图里「还没读完」那两行和上面能点的
+   行差别只有字色淡一档 —— 用户会先点一下，点不动才知道有门禁。而门禁正是用户
+   这一轮点名的第 ⑤ 条要求，它必须在**看**的时候成立，不能只在**点**的时候成立。
+   ⇒ 三件事一起做：书名退到 faint、「未读完」做成**状态胶囊**（它是状态，不是条数）、
+     整行没有 hover 反馈（上面那条 `:hover:not(:disabled)` 已经挡住背景色）。 */
+.npr-root button.npr-diary-dayrow:disabled { cursor: default; }
+.npr-root button.npr-diary-dayrow:disabled .npr-diary-dayrow-date { color: var(--npr-faint); }
+.npr-root button.npr-diary-dayrow:disabled .npr-diary-dayrow-count {
+  padding: 1px 6px; border: 1px solid var(--npr-border); border-radius: 999px;
+  font-size: 10px; letter-spacing: .02em;
+}
+.npr-diary-dayrow-date { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npr-diary-dayrow-count { flex: 0 0 auto; font-size: 11px; color: var(--npr-muted); font-variant-numeric: tabular-nums; }
+.npr-diary-dayrow-mood { flex: 0 0 auto; font-size: 12px; line-height: 1; }
+
+/* 搜索结果 */
+.npr-root button.npr-diary-hit { display: block; width: 100%; padding: 9px 14px; border: 0; background: transparent; color: var(--npr-fg); font: inherit; text-align: left; cursor: pointer; }
+.npr-root button.npr-diary-hit:hover { background: var(--npr-hover); }
+.npr-diary-hit-meta { display: block; font-size: 11px; color: var(--npr-muted); }
+.npr-diary-hit-text { display: block; margin-top: 2px; font-size: 12px; line-height: 1.6; }
+
+/* ── 写入口：**去卡片化** ──────────────────────────────────────────────
+   ★ 0.31.0 是「带边框圆角的卡片里再套一个带边框圆角的 textarea」—— 两层框，
+     视觉噪音全在边框上。现在只有**一层很淡的面**、没有边：书写区应该像纸，
+     不像一张表单。
+   ★ 字号跟正文对齐到 15px：写的地方比读的地方小一号，写的时候会不自觉地
+     把句子写短（而日记里最该长出来的就是句子）。 */
+.npr-diary-write { margin: 16px 0 8px; }
+.npr-diary-input { display: block; width: 100%; min-height: 96px; padding: 10px 12px; border: 0; border-radius: 10px; background: color-mix(in srgb, var(--npr-fg) 4%, transparent); color: var(--npr-fg); font: inherit; font-size: 15px; line-height: 1.85; resize: vertical; }
+/* 灵感速记：输入框是主角，给它更高的起点（打开即写，不该先看见一个矮盒子）。 */
+.npr-diary-input-quick { min-height: 128px; }
+/* 读后感：模板一填就有四段，给高一点。 */
+.npr-diary-input-tall { min-height: 260px; }
+.npr-diary-input::placeholder { color: var(--npr-faint); }
+.npr-diary-input:focus-visible { outline: 2px solid var(--npr-accent); outline-offset: 1px; }
+.npr-diary-writefoot { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.npr-diary-foot-hint { flex: 1; min-width: 0; font-size: 11px; color: var(--npr-faint); }
+/* 书籍档案卡（读后感工作台）：书名下面那一排数。
+   ★ 用一条**淡底 + 细边**把它和下面的输入框分开：它是「这本书的档案」，
+     不是正文的一部分；不加这条分隔，五个数看着像输入框的标题行。 */
+.npr-diary-dossier { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--npr-border); border-radius: 9px; background: color-mix(in srgb, var(--npr-fg) 4%, transparent); }
+.npr-diary-dossier-cell { display: inline-flex; align-items: baseline; gap: 5px; min-width: 0; }
+.npr-diary-dossier-cell strong { font-size: 13px; font-weight: 600; color: var(--npr-fg); font-variant-numeric: tabular-nums; }
+.npr-diary-dossier-cell span { font-size: 11px; color: var(--npr-faint); }
+/* 「记下来」。
+   ★★ 底色用 `--npr-fg`、字色用 `--npr-bg`，**不是**品牌色 + 白字。
+   0.31.0 是 `background: var(--npr-accent); color: var(--npr-bg)` —— 而 `--npr-accent`
+   在本机是一支**浅薄荷绿**，白字压上去实测对比度约 2:1（用户 2026-10-27 的截图里
+   那颗按钮就是浅绿底白字，糊成一片）。`--npr-accent-strong` 只是「深一点的品牌色」，
+   不保证够深；而 `fg/bg` 这一对是主题里**对比度最大**的两色，任何主题下都成立。
+   品牌色仍然出现在选中态、focus ring 与 hover 描边上 —— 它只是不再承载文字。 */
+.npr-root .npr-diary-save { height: 30px; padding: 0 16px; border: 1px solid var(--npr-fg); border-radius: 8px; background: var(--npr-fg); color: var(--npr-bg); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.npr-root .npr-diary-save:hover:not(:disabled) { background: var(--npr-accent-strong); border-color: var(--npr-accent-strong); color: #fff; }
+.npr-root .npr-diary-save:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ── 心情：独立成行、放大、带中文标签 ─────────────────────────────────
+   ★ 用户 2026-10-27：「这一部分你用的 emoji 很不明显，不够清楚」。
+     0.31.0 是 26×26px 的方块、`font-size: 14px`、默认 `filter: grayscale(.55)` +
+     `opacity: .7`，还和「0 字 · ⌘+Enter」挤在同一行 —— 五个里有两个（😐 / 😕）在
+     那个尺寸下几乎分不开。
+   ★ 现在：整行五等分、表情 22px、**默认不灰化**、每档带中文名、选中时按档染色。
+     参照 Daylio（情绪追踪这个品类的标杆：五档 + 颜色 + 文字标签，情绪是第一等公民）
+     和 StoryPad（GitHub 上星数最高的开源日记本：情绪单独一栏，不挤在角落）。
+   ★ 五档色是**固定的语义色**，不跟主题走 —— 跟本文件里划线的四种 tone
+     （#f2c200 / #34c759 / #3a96ff / #ff2d78）同一个做法。染色只用在
+     15% 透明度的底和一道边上，所以深浅主题都读得清；「一般」用中性灰，
+     因为它本来就是中间态，给它一个色相反而会被读成「有情绪」。 */
+.npr-diary-moodrow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-top: 10px; }
+.npr-root .npr-diary-moodrow button { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 2px 6px; border: 1px solid var(--npr-border); border-radius: 10px; background: transparent; color: var(--npr-muted); font: inherit; cursor: pointer; transition: border-color .12s ease-out, background-color .12s ease-out; }
+.npr-root .npr-diary-moodrow button:hover { border-color: var(--npr-border-strong); background: var(--npr-hover); }
+.npr-diary-moodface { font-size: 22px; line-height: 1.1; }
+.npr-diary-moodname { font-size: 10px; line-height: 1.2; letter-spacing: .02em; }
+.npr-root .npr-diary-moodrow button[aria-pressed=true] { color: var(--npr-fg); font-weight: 600; }
+.npr-root .npr-diary-moodrow button[data-tone="5"][aria-pressed=true] { border-color: #16a34a; background: #16a34a26; }
+.npr-root .npr-diary-moodrow button[data-tone="4"][aria-pressed=true] { border-color: #4ade80; background: #4ade8026; }
+.npr-root .npr-diary-moodrow button[data-tone="3"][aria-pressed=true] { border-color: #9ca3af; background: #9ca3af26; }
+.npr-root .npr-diary-moodrow button[data-tone="2"][aria-pressed=true] { border-color: #f59e0b; background: #f59e0b26; }
+.npr-root .npr-diary-moodrow button[data-tone="1"][aria-pressed=true] { border-color: #6366f1; background: #6366f126; }
+
+/* 没读完的书：说清楚为什么写不了，而不是只把输入框藏起来。 */
+.npr-diary-blocked { margin: 20px 0; padding: 14px 16px; border: 1px dashed var(--npr-border-strong); border-radius: 12px; background: color-mix(in srgb, var(--npr-fg) 4%, transparent); font-size: 13px; line-height: 1.85; color: var(--npr-muted); }
+.npr-diary-blocked p { margin: 0; }
+.npr-diary-blocked strong { color: var(--npr-fg); }
+
+/* 条目 */
+.npr-diary-blank { padding: 26px 4px; color: var(--npr-muted); font-size: 13px; line-height: 1.9; }
+.npr-diary-blank p { margin: 0; }
+.npr-diary-entry { padding: 14px 0 16px; border-top: 1px solid var(--npr-border); }
+.npr-diary-entry-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.npr-diary-time { font-size: 12px; font-weight: 600; color: var(--npr-fg); font-variant-numeric: tabular-nums; }
+.npr-diary-kind { padding: 1px 7px; border-radius: 5px; background: color-mix(in srgb, var(--npr-fg) 8%, transparent); color: var(--npr-muted); font-size: 11px; }
+.npr-diary-source-tag { min-width: 0; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--npr-muted); }
+.npr-diary-entry-actions { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+.npr-root .npr-diary-action { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; cursor: pointer; }
+.npr-root .npr-diary-action:hover:not(:disabled) { border-color: var(--npr-border-strong); color: var(--npr-fg); }
+.npr-root .npr-diary-action:disabled { opacity: .5; cursor: not-allowed; }
+/* 删除确认用「错误色描边」而不是红底：红底会盖掉 hover 语义，也压不住浅色主题。 */
+.npr-root .npr-diary-action.is-danger { border-color: var(--dsw-alias-state-error-primary); color: var(--dsw-alias-state-error-primary); }
+/* ★ 字号/行高**不吃** `--npr-font-size` / `--npr-line-height`（那是阅读设置，
+   默认 19px / 1.9），改由 `.npr-diary-sheet` 的 15px 继承下来，与写入口同一个尺寸。
+   行高取 1.85 与 `.npr-diary-input` 对齐：写的时候看到的行距，就是读的时候的行距。 */
+.npr-diary-body { margin: 8px 0 0; line-height: 1.85; color: var(--npr-fg); }
+.npr-diary-body > :first-child { margin-top: 0; }
+.npr-diary-body > :last-child { margin-bottom: 0; }
+.npr-diary-body p { margin: 0 0 .7em; }
+.npr-diary-body ul, .npr-diary-body ol { margin: 0 0 .7em; padding-left: 1.4em; }
+.npr-diary-body blockquote { margin: 0 0 .7em; padding-left: 10px; border-left: 2px solid var(--npr-border-strong); color: var(--npr-muted); }
+.npr-diary-body code { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--npr-fg) 8%, transparent); font-size: .92em; }
+.npr-diary-body a { color: var(--npr-fg); text-decoration: underline; text-underline-offset: 2px; }
+.npr-diary-body-plain { white-space: pre-wrap; }
+.npr-diary-foot { margin: 24px 0 0; font-size: 11px; color: var(--npr-faint); word-break: break-all; }
+
+/* ── 日记 0.31：情绪 / 私密 / 标签 / 时间轴 ─────────────────────────────
+   ★ 仍然只用 `--npr-*`：本文件顶部那段讲过，一个未定义的自定义属性会让整条
+     声明变成 guaranteed-invalid（空值），而且波及全部后代。
+   ★ 私密只用「一道虚线边 + 一个小胶囊」表达，不用锁形图标堆满页面：
+     视觉同级 ⇒ 语义会被读作同级（memory §〇 第 10 条）。 */
+
+/* 三个**功能模块**（灵感速记 / 私密日记 / 读后感）的分段控件。
+   ★ 它切的是「模块」，不是「条目类型」—— 0.30.0 曾把 灵感/读后感/书摘 做成
+     记录框上的类型按钮，那是错的：用户的设计里根本没有「书摘」这种条目。 */
+.npr-diary-modes { display: flex; gap: 2px; margin: 0 10px 6px; padding: 2px; border-radius: 8px; background: color-mix(in srgb, var(--npr-fg) 8%, var(--npr-bg-2)); flex-shrink: 0; }
+.npr-root .npr-diary-modes button { flex: 1; min-width: 0; height: 24px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; cursor: pointer; }
+.npr-root .npr-diary-modes button:hover { color: var(--npr-fg); }
+.npr-root .npr-diary-modes button[aria-pressed=true] { background: var(--npr-bg); color: var(--npr-fg); font-weight: 600; box-shadow: 0 0 0 1px color-mix(in srgb, var(--npr-fg) 14%, var(--npr-bg)); }
+
+/* 私密的说明文字：不能省。`mode: 'file'` 与钥匙串是**两种不同的安全等级**，
+   不写出来就等于让用户以为两者一样。
+   ★ 0.32.0 把它压成**一行**：以前是 composer 顶部一个「私密 · 本地加密」胶囊 +
+     下面三行说明，每次打开私密日记都先读一段安全声明，把写日记的地方挤掉了。 */
+.npr-diary-secret { margin: 8px 0 0; padding: 5px 9px; border-left: 2px solid var(--npr-border-strong); border-radius: 0 6px 6px 0; background: color-mix(in srgb, var(--npr-fg) 4%, transparent); font-size: 11px; line-height: 1.65; color: var(--npr-muted); }
+.npr-diary-secret.is-error { border-left-color: var(--dsw-alias-state-error-primary); color: var(--dsw-alias-state-error-primary); }
+
+/* 条目上的小标记 */
+.npr-diary-mood { font-size: 13px; line-height: 1; }
+.npr-diary-lock { padding: 1px 6px; border: 1px dashed var(--npr-border-strong); border-radius: 5px; color: var(--npr-muted); font-size: 10px; }
+.npr-diary-tagrow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.npr-root .npr-diary-tag { padding: 1px 7px; border: 1px solid var(--npr-border); border-radius: 6px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; cursor: pointer; }
+.npr-root .npr-diary-tag:hover { border-color: var(--npr-border-strong); color: var(--npr-fg); }
+
+/* 标签云（侧栏）。
+   ★ 0.31.0 有两个变体（`-top` 与默认），`-top` 是「灵感模块里那一小条」。
+     现在灵感侧栏是三块并列的检索器，标签云不再需要「压成一条」的变体 ——
+     那个类名留着没人用，check-classes 会当场报「定义未使用」。 */
+.npr-diary-cloud { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 6px; padding: 4px 14px 10px; }
+.npr-root .npr-diary-tagchip { display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 9px; border: 1px solid var(--npr-border); border-radius: 999px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; cursor: pointer; }
+.npr-root .npr-diary-tagchip:hover { border-color: var(--npr-accent); }
+.npr-diary-tagcount { font-size: 10px; color: var(--npr-faint); font-variant-numeric: tabular-nums; }
+
+/* 读后感工作台：右栏「正文 + 划线侧栏」是一行两列。
+   ★ 必须是**两个并排的独立面板**，不是一张卡切两半 —— 划线侧栏有自己的标题与
+     滚动位置，和正文不同源（memory §〇 第 29 条：外框套两张完整的卡）。 */
+.npr-diary-main { flex: 1; min-height: 0; display: flex; }
+.npr-diary-marks { flex: 0 0 auto; width: 300px; display: flex; flex-direction: column; gap: 8px; overflow: auto; overscroll-behavior: contain; padding: 10px 12px 20px; border-left: 1px solid var(--npr-border); }
+.npr-diary-marks-head { display: flex; align-items: baseline; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--npr-border); }
+.npr-diary-marks-head strong { font-size: 12px; color: var(--npr-fg); }
+.npr-diary-marks-head span { margin-left: auto; font-size: 11px; color: var(--npr-muted); }
+.npr-diary-mark { padding: 8px 0; border-bottom: 1px dashed var(--npr-border); }
+.npr-diary-mark:last-child { border-bottom: 0; }
+.npr-diary-mark-quote { margin: 0; padding-left: 8px; border-left: 2px solid var(--npr-border-strong); font-size: 12px; line-height: 1.7; color: var(--npr-fg); }
+.npr-diary-mark-note { margin: 4px 0 0; font-size: 11px; line-height: 1.6; color: var(--npr-muted); }
+.npr-diary-mark-foot { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 10px; color: var(--npr-faint); }
+.npr-diary-mark-foot .npr-diary-action { margin-left: auto; }
+
+/* 页脚里那个「连私密一起导出」：长得像链接、实际是按钮（它要两次点击）。 */
+.npr-root .npr-diary-linkish { margin-left: 8px; padding: 0; border: 0; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.npr-root .npr-diary-linkish:hover { color: var(--npr-fg); }
+
+/* ── 灵感速记浮层（快捷键 L）──────────────────────────────────────────
+   ★ z-index 80：在弹层（70）之上、提示气泡（90）之下。它必须盖住顶栏 ——
+     否则用户会一边打字一边看见下面的列表在自己动。
+   ★ 不放在 `[data-window-drag]` 里：它是模态，盖住顶栏时窗口本来就拖不动，
+     而给它 drag 会让「按住输入框边缘拖一下」变成把整个浮层拖走。 */
+.npr-quick-backdrop { position: fixed; inset: 0; z-index: 80; display: grid; place-items: start center; padding: 12vh 16px 16px; background: rgb(0 0 0 / 32%); }
+.npr-quick { display: grid; gap: 8px; width: min(560px, 92vw); max-height: 70vh; overflow: auto; padding: 12px; border: 1px solid var(--npr-border-strong); border-radius: 14px; background: var(--npr-bg); box-shadow: 0 18px 48px rgb(0 0 0 / 28%); }
+.npr-quick-head { display: flex; align-items: center; gap: 8px; }
+.npr-quick-head strong { font-size: 13px; color: var(--npr-fg); }
+.npr-quick-head .npr-icon { margin-left: auto; }
+.npr-quick-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--npr-faint); }
+/* 「会记到 《书名》· 第 N 章」—— 一行纯文本，不是控件。
+   ★ 用左侧一道竖线而不是一个底色块：底色块会被读成「可点的一条」（浮层里别的
+     底色块都是按钮），而这一行**点不动**，也不该点。 */
+.npr-quick-link { margin: 0; padding-left: 8px; border-left: 2px solid var(--npr-border-strong); font-size: 11px; line-height: 1.6; color: var(--npr-muted); word-break: break-all; }
+.npr-quick-input { width: 100%; min-height: 96px; padding: 9px 10px; border: 1px solid var(--npr-border-strong); border-radius: 9px; background: var(--npr-bg-2); color: var(--npr-fg); font: inherit; font-size: 13px; line-height: 1.75; resize: vertical; }
+.npr-quick-input::placeholder { color: var(--npr-faint); }
+.npr-quick-input:focus-visible { outline: 2px solid var(--npr-accent); outline-offset: 1px; }
+.npr-quick-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.npr-quick-foot .npr-diary-save { margin-left: auto; }
+.npr-quick-error { margin: 0; font-size: 11px; line-height: 1.7; color: var(--dsw-alias-state-error-primary); }
+
+/* 窄面板：日历与写入口都要能用（`@container` 与全文件同一套断点）。
+   ★ 只改**一个变量**，工具栏与滚动区同时收窄 —— 上一版两边各写一个数，必然漂。 */
+@container (max-width: 700px) {
+  .npr-diary-reader { --npr-diary-pad: 16px; }
+  /* 只调下边距，左右让变量管 —— 别再写一遍 16px。 */
+  .npr-diary-scroll { padding-bottom: 32px; }
+  .npr-diary-source-tag { max-width: 100%; }
+}
 

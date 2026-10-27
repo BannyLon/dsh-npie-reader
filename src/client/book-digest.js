@@ -68,6 +68,42 @@ export async function resolveOutline(doc) {
 }
 
 /**
+ * 「这一页在目录的哪一节」。
+ *
+ * 目录项的形状是 `{ title, startPage, endPage, n, source }`（宿主写出来的
+ * `outline.json`，实测长这样）。嵌套目录里外层章节的范围会盖住内层，
+ * 所以命中多个时取 **`startPage` 最大的那个**（= 最具体的一节）。
+ *
+ * ★ 兼容只有起点没有终点的目录（`resolveOutline` 抽出来的 PDF 书签就是
+ *   `{ title, page }`）：那种情况下「起点 ≤ 当前页」的**最后一条**就是当前节。
+ * ★ 页码不合法 / 目录为空 ⇒ 返回 `null`，**不猜**。调用方（灵感速记）据此决定
+ *   只记 `meta.page` 而不记 `meta.chapter` —— 记一个错的章节比不记更糟。
+ *
+ * @param {Array<{title?: string, startPage?: number, endPage?: number, page?: number, n?: number}>} outline
+ * @param {number} page 1 起的物理页码
+ * @returns {{n: number, title: string} | null}
+ */
+export function chapterAt(outline, page) {
+  const items = Array.isArray(outline) ? outline : [];
+  // ★ 页码必须是**数字**：`Number('30')` 会算成 30，于是「字符串页码」这种
+  //   上游类型错误会被静默收下，最后写进 `meta.chapter` 的是一个来路不明的章节。
+  const target = typeof page === 'number' ? page : Number.NaN;
+  if (!Number.isInteger(target) || target < 1) return null;
+  let hit = null;
+  let hitStart = -1;
+  for (const item of items) {
+    const start = Number(item?.startPage ?? item?.page);
+    if (!Number.isInteger(start) || start < 1 || target < start) continue;
+    const end = Number(item?.endPage);
+    if (Number.isInteger(end) && end >= 1 && target > end) continue;
+    if (start >= hitStart) { hit = item; hitStart = start; }
+  }
+  if (!hit) return null;
+  const n = Number(hit.n);
+  return { n: Number.isInteger(n) && n >= 0 ? n : hitStart, title: String(hit.title ?? '').trim() };
+}
+
+/**
  * 逐页抽正文，每 `batchSize` 页回调一次。
  *
  * @param options.doc - pdf.js 的文档代理（只要有 `numPages` / `getPage` 就够）。

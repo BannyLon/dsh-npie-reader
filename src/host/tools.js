@@ -85,6 +85,15 @@ export const TOOL_NAMES = {
   bookSearch: 'book_search',
   bookAnnotations: 'book_annotations',
   bookExportSkill: 'book_export_skill',
+  // ---- 日记（2026-10-26）------------------------------------------------
+  //
+  // ★ 三个工具，而不是一个「什么都能干」的：两个只读、一个只追加。
+  //   **没有**「改写」「删除」这两个动作 —— 日记是用户自己的私人文稿，让模型去改它，
+  //   最坏情况是「我明明没这么写过」，而且事后无法分辨。要改，用户自己在界面上改。
+  //   ★ 这条边界也写进了 `reading-scope.js` 的日记上下文：模型知道自己只有 append。
+  diaryToday: 'diary_today',
+  diaryAppend: 'diary_append',
+  diarySearch: 'diary_search',
 };
 
 /**
@@ -657,6 +666,123 @@ export function createToolDefinitions(service) {
         ];
         if (result.synthesisError) lines.push(`- ⚠ 跨章综合失败：${result.synthesisError}（已退回原样摘录，其余文件不受影响）`);
         lines.push('', '这是一个独立的目录，没有装进任何 agent 的 skills 目录。要用它，把整个目录拷到那个 agent 的 skills 目录下。');
+        return lines.join('\n');
+      },
+    }),
+
+    // ---- 日记 ------------------------------------------------------------
+    //
+    // ★ 三个工具的描述里都写清「只读 / 只追加」，不是客套：模型对工具的边界
+    //   是从 description 里读出来的，而它一旦以为 `diary_append` 能改旧内容，
+    //   就会把「打磨后的整篇」再追加一遍 —— 用户第二天打开会看到两篇几乎一样的
+    //   日记，且分不清哪篇是原稿。
+    //
+    // ★ **工具侧刻意没有 `vis` 参数，也刻意读不到私密日记**（2026-10-26）：
+    //   `diary_search` 不传 `includePrivate`（store 的默认值是 false），
+    //   `diary_today` 走 `read` 而不是 `readFull`，`diary_append` 没有 `vis` 参数。
+    //   这不是漏了，是边界：私密日记的内容不该经过模型。将来要「让 AI 也读私密」，
+    //   那是一个需要单独想清楚、并由用户显式打开的决定 —— 不要在这里顺手加个参数。
+    defineTool({
+      name: TOOL_NAMES.diaryToday,
+      description: 'Read the reader\'s own diary for ONE day (default: today). Each day is a single file holding several time-stamped entries; an entry has a kind (灵感 idea / 日记 journal / 读后感 reflection), an optional source (the article or book it came from) and the body the user typed. Use this when asked what the user wrote, thought or noted today or on a given date. Read-only.',
+      parameters: {
+        date: { type: 'string', description: 'YYYY-MM-DD. Omit for today (the reader\'s LOCAL date, not UTC).' },
+      },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => text(value),
+      },
+      execute: async (args) => {
+        const day = await service.diaryToday({ date: args.date });
+        if (!day.exists || day.entries.length === 0) {
+          return `「${day.date}」这一天还没有日记。\n\n日记存在 ${day.root} 。要新增一条用 diary_append。`;
+        }
+        const lines = [
+          `「${day.date}」共 ${day.entries.length} 条，${day.chars} 字：`,
+          '',
+        ];
+        day.entries.forEach((entry, index) => {
+          const head = [
+            `${index + 1}. ${entry.time}`,
+            entry.kind,
+            entry.source ? `引自 ${entry.source}` : null,
+          ].filter(Boolean).join(' · ');
+          lines.push(`### ${head}`, '', entry.body, '');
+        });
+        lines.push('以上是用户自己写的原文，不是模型生成的。引用时不要改写，也不要补写他没写过的内容。');
+        return lines.join('\n');
+      },
+    }),
+    defineTool({
+      name: TOOL_NAMES.diaryAppend,
+      description: 'Append ONE new entry to the reader\'s diary (default: today\'s file). This only ever APPENDS — it never edits or deletes what is already written, so pass just the new text, never the whole day. Use it when the user asks you to write something down, or asks you to polish an entry and keep the result (then say plainly that the polished version was added as a NEW entry and the original is still there). Max 20,000 characters per entry; a whole day is capped at 200,000.',
+      parameters: {
+        body: { type: 'string', description: 'The entry text. Markdown allowed.', required: true },
+        kind: { type: 'string', description: '灵感 (a thought) | 日记 (a journal entry) | 读后感 (a reflection after reading something). Default 灵感.' },
+        source: { type: 'string', description: 'Where this came from — an article title, or 《书名》第 3 章. It is shown in the heading, which is how the user later knows what the entry refers to.' },
+        date: { type: 'string', description: 'YYYY-MM-DD. Omit for today.' },
+        time: { type: 'string', description: 'HH:MM. Omit for now.' },
+      },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => text(value),
+      },
+      execute: async (args) => {
+        const result = await service.diaryAppend({
+          date: args.date,
+          time: args.time,
+          kind: args.kind,
+          source: args.source,
+          body: args.body,
+        });
+        return `已追加到 ${result.date} ${result.time}（这一天第 ${result.index + 1} 条，现在共 ${result.chars} 字）。\n\n文件：${result.path}`;
+      },
+    }),
+    defineTool({
+      name: TOOL_NAMES.diarySearch,
+      description: 'Search the reader\'s diary across all days. Matching is a case-insensitive SUBSTRING (Chinese needs no word segmentation, so a shorter query finds more). Use this before answering "did I ever write about X", and to gather several past entries on one theme. Read-only.',
+      parameters: {
+        query: { type: 'string', description: 'Text to look for.', required: true },
+        limit: { type: 'number', description: 'Max hits (default 30, cap 100).' },
+      },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => text(value),
+      },
+      execute: async (args) => {
+        /**
+         * ★ 空查询必须**在调用之前**就分开处理（2026-10-26 修）。
+         *
+         * `store.search('')` 会直接回 `{ hits: [], scanned: 0 }` —— 和「目录里
+         * 一篇日记都没有」长得一模一样。用它去判断「有没有日记」，就会对着一个
+         * 写了半年的日记本说「日记里还一篇都没有」，而模型会把这句话原样转述
+         * 给用户。两个不同的原因**必须**给两句不同的话。
+         */
+        const query = String(args.query ?? '').trim();
+        if (query === '') {
+          return 'diary_search 需要一个查询词：把要找的内容写进 query。中文不切词，短一点的词更容易命中。';
+        }
+        const found = await service.diarySearch({ query, limit: args.limit });
+        // ★ 三种空/触顶必须分开说，理由同 `windowNote`：合成一句「结果可能不全」，
+        //   模型会把它读成「日记里就这么多」，然后给出一个建立在缺失数据上的结论。
+        if (found.hits.length === 0) {
+          if (found.scanned === 0) return '日记里还一篇都没有（目录是空的）。';
+          return `日记里没有提到「${query}」。在最近 ${found.scanned} 天里找过${found.truncated ? '，更早的日记没有看' : ''}。`;
+        }
+        const lines = [
+          `「${query}」命中 ${found.hits.length} 条（在 ${found.scanned} 天里找过${found.truncated ? '，已达上限，更早的没有看' : ''}）：`,
+          '',
+        ];
+        for (const hit of found.hits) {
+          const head = [
+            hit.date,
+            hit.time,
+            hit.kind,
+            hit.source ? `引自 ${hit.source}` : null,
+          ].filter(Boolean).join(' · ');
+          lines.push(`- ${head}`, `  ${hit.snippet}`);
+        }
+        lines.push('', '要读某一天的全文，用 diary_today 并带上 date。');
         return lines.join('\n');
       },
     }),

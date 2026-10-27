@@ -91,7 +91,7 @@ const REMOTE_METHODS = [
   'getSettings', 'getVersionContent', 'listAiModels', 'listCatalog', 'listChannels', 'listEntries',
   'listSubscriptions', 'opmlExport', 'opmlImport', 'opmlPreview', 'prepareChat', 'probeCatalogService',
   'refresh', 'removeCatalogSource', 'removeSubscription', 'saveSettings', 'searchArticles', 'setBookContext',
-  'setCatalogHidden', 'setCatalogService', 'setFavorite', 'setRead', 'setReadingContext', 'updateSubscription',
+  'setCatalogHidden', 'setCatalogService', 'setDiaryContext', 'setFavorite', 'setRead', 'setReadingContext', 'updateSubscription',
 ];
 
 // ★ 这张表是**契约快照**，不是「大概有哪些」：多一个少一个都必须在这里改一次，
@@ -99,6 +99,8 @@ const REMOTE_METHODS = [
 //   0.20.1 才发现这里还停在 9 个 —— 说明当时的全量测试没有真跑完。
 const TOOL_NAMES = [
   'book_annotations', 'book_chapter', 'book_export_skill', 'book_list', 'book_outline', 'book_search',
+  // 2026-10-26 新增日记三件套（读今天 / 只追加 / 跨天搜）。**没有**改写与删除 —— 见 `tools.js`。
+  'diary_append', 'diary_search', 'diary_today',
   'rss_add_subscription', 'rss_digest', 'rss_generate_version', 'rss_list_articles', 'rss_list_channels',
   'rss_read_article', 'rss_refresh', 'rss_remove_subscription', 'rss_search_articles',
 ];
@@ -1928,15 +1930,102 @@ describe('电子书伴读上下文 setBookContext', () => {
   });
 });
 
-describe('书架：HTTP 路由真的挂上了', () => {
-  it('注册了两条 prefix 路由，路径取自共用常量', async () => {
+describe('日记伴读上下文 setDiaryContext', () => {
+  it('写进同一个落点，注入里能读到这一天与那条内容', async () => {
     const { service, state } = boot();
     await service.ready;
+    await service.diary.append({ date: '2026-10-26', time: '09:31', kind: '灵感', body: '所谓自由，就是被别人讨厌的勇气。' });
+    const result = await service.setDiaryContext({ sessionId: 'd1', date: '2026-10-26', target: 0 });
+    assert.equal(result.ok, true);
+    assert.equal(result.total, 1);
+
+    // 三条阅读路径共用**同一个**贡献点：模型眼里都是「你现在在看的这份东西」。
+    assert.equal(state.systemPromptContributions.length, 1);
+    const text = state.systemPromptContributions[0].text({ agent: { session: { id: 'd1' } } });
+    assert.match(text, /<diary_context>/);
+    assert.match(text, /2026-10-26/);
+    assert.match(text, /被别人讨厌的勇气/);
+    assert.match(text, /本轮处理对象/);
+    assert.equal(state.systemPromptContributions[0].text({ agent: { session: { id: 'other' } } }), '');
+  });
+
+  it('★ 权限说明与工具集一致：只有 append，没有改写/删除', async () => {
+    const { service, state } = boot();
+    await service.ready;
+    await service.diary.append({ date: '2026-10-26', body: '一条' });
+    await service.setDiaryContext({ sessionId: 'd2', date: '2026-10-26' });
+    const text = state.systemPromptContributions[0].text({ agent: { session: { id: 'd2' } } });
+    assert.match(text, /diary_append/);
+    assert.match(text, /没有.*改写或删除/);
+    // ★ 反向对照：绝不能带上阅读那句「默认不修改文件」—— 模型会因此拒绝追加。
+    assert.equal(text.includes('默认不修改文件'), false);
+  });
+
+  it('★ 一天超过 8 条时只带 8 条，但序号是**绝对**的', async () => {
+    // 切片之后还按数组下标写「第 1 条」的话，模型会照着假序号跟用户说话
+    // （「你第 1 条写的是…」而它其实是第 11 条）。
+    const { service, state } = boot();
+    await service.ready;
+    for (let index = 0; index < 12; index += 1) {
+      await service.diary.append({ date: '2026-10-27', time: `0${Math.floor(index / 6) + 9}:0${index % 6}`, body: `第${index + 1}条内容` });
+    }
+    const result = await service.setDiaryContext({ sessionId: 'd3', date: '2026-10-27', target: 10 });
+    assert.equal(result.sent, 8);
+    assert.equal(result.total, 12);
+    assert.ok(result.offset > 0, '切片没有偏移 —— 那么目标那条根本不在里面');
+
+    const text = state.systemPromptContributions[0].text({ agent: { session: { id: 'd3' } } });
+    assert.match(text, /第 11 条/, '序号必须是绝对下标');
+    assert.match(text, /本轮处理对象/);
+    assert.match(text, /还有 4 条没有带进来/);
+    // 而且真的没把 12 条全塞进去
+    assert.equal((text.match(/【第 /g) ?? []).length, 8);
+  });
+
+  it('★ 越界 target 抛错（而不是静默给一份没有处理对象的上下文）', async () => {
+    const { service } = boot();
+    await service.ready;
+    await service.diary.append({ date: '2026-10-28', body: '只有一条' });
+    for (const target of [5, -1, 1.5]) {
+      await assert.rejects(() => service.setDiaryContext({ sessionId: 'd4', date: '2026-10-28', target }), /刷新一下再试/);
+    }
+  });
+
+  it('空的一天也写上下文，并明说「还没有内容」', async () => {
+    const { service, state } = boot();
+    await service.ready;
+    const result = await service.setDiaryContext({ sessionId: 'd5', date: '2026-10-29' });
+    assert.equal(result.total, 0);
+    const text = state.systemPromptContributions[0].text({ agent: { session: { id: 'd5' } } });
+    assert.match(text, /这一天还没有内容/);
+    assert.match(text, /不要凭空写出/);
+  });
+
+  it('只 touch 不 flush（data.json 已 9.6MB，注入读内存）', async () => {
+    const { service } = boot();
+    await service.ready;
+    await service.diary.append({ date: '2026-10-30', body: '一条' });
+    await service.setDiaryContext({ sessionId: 'd6', date: '2026-10-30' });
+    assert.notEqual(service.store.saveTimer, undefined);
+    clearTimeout(service.store.saveTimer);
+    service.store.saveTimer = undefined;
+    assert.match(service.store.data.companionContexts.d6.text, /<diary_context>/);
+  });
+});
+
+describe('书架：HTTP 路由真的挂上了', () => {
+  it('注册了三条 prefix 路由，路径取自共用常量', async () => {
+    const { service, state } = boot();
+    await service.ready;
+    // ★ 顺序就是源码里的注册顺序：书架 → vendor → 日记。
+    //   日记**单独一条前缀**（2026-10-26）：两条通道的风险面不同（书架能读配置过的书源目录，
+    //   日记只碰自己的一个子目录），分开之后「日记挂了但书架还在」是可诊断的。
     assert.deepEqual(state.webRoutes.map((entry) => entry.route.path), [
       '/api/dsh-npie-reader/library',
       '/vendor/npie-reader/pdfjs',
+      '/api/dsh-npie-reader/diary',
     ]);
-    assert.deepEqual(state.webRoutes.map((entry) => entry.route.kind), ['prefix', 'prefix']);
+    assert.deepEqual(state.webRoutes.map((entry) => entry.route.kind), ['prefix', 'prefix', 'prefix']);
   });
 
   it('★ 路由对不可信请求回 403（这条链路上唯一的防线）', async () => {

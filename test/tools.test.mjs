@@ -25,7 +25,8 @@ describe('工具契约', () => {
     //   0.20.0 加了五个 `book_*` 而这两处都没跟着改 ⇒ 全量测试红了两条，
     //   但当时只跑了子集、没人看见。工具数量变化必须是一次显式改动。
     //   0.27.0 加了 `book_annotations`（读用户自己的划线）：14 → 15。
-    assert.equal(tools.size, 15);
+    //   2026-10-26 加了日记三件套（`diary_today` / `diary_append` / `diary_search`）：15 → 18。
+    assert.equal(tools.size, 18);
     for (const [name, tool] of tools) {
       assert.equal(typeof tool.execute, 'function', `${name} 缺 execute`);
       assert.equal(typeof tool.output?.render, 'function', `${name} 缺 output.render`);

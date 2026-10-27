@@ -248,7 +248,14 @@ export const BookRow = memo(function BookRow({
   );
 });
 
-export function LibraryApp({ reading, onExit, notify, api, SessionProvider, renderSlot }) {
+/**
+ * 书架 / 阅读页。
+ *
+ * ★ `onWriteReflection` 只是**转交**：书里那颗「写读后感」要跳到日记那个 tab，
+ *   而 tab 是 `ReaderPage` 的状态 —— 这里只把书原样往上递，不自己切视图
+ *   （切走之后本组件就卸载了，自己调自己的出口没有意义）。
+ */
+export function LibraryApp({ reading, onExit, notify, api, SessionProvider, renderSlot, onWriteReflection, onReadingContext }) {
   const [books, setBooks] = useState([]);
   const [source, setSource] = useState(null);
   /** 电子书伴读里点「+」要打开设置页的快捷提示词；模式与 ReaderPage 的 settingsEntry 相同。 */
@@ -604,6 +611,38 @@ export function LibraryApp({ reading, onExit, notify, api, SessionProvider, rend
   const readingStats = useMemo(() => libraryStats(readingList, states), [readingList, states]);
   const selected = books.find((book) => book.id === selectedId);
 
+  /**
+   * 当前这一章（`{ n, title } | null`）。**由阅读器上报**，本组件不自己算 ——
+   * 目录只活在 `BookReader` / `BookEbook` 里，在这儿再算一份就是两份会漂开的实现。
+   */
+  const [chapter, setChapter] = useState(null);
+
+  /**
+   * 把「正在读哪本书、第几页、第几章」报给外层，最后落到灵感速记的 `meta`。
+   *
+   * ★ 传 `page` 而不只是 `bookId`：一条灵感挂到「第 5 章」和挂到「第 168 页」是
+   *   两件事 —— 章节会随版本变，页码不会；两个都记下来，将来按书反查才有东西可对。
+   * ★ `states` 在依赖里：翻页是去抖落盘的，进度一变这条就跟着重报，外层拿到的
+   *   永远是「最后读到的位置」，不是打开这本书时的位置。
+   */
+  useEffect(() => {
+    if (!selected) { onReadingContext?.(null); return; }
+    const state = stateOf(states, selected.id);
+    onReadingContext?.({
+      bookId: selected.id,
+      bookTitle: selected.title ?? '',
+      page: Number.isInteger(state.page) ? state.page : 1,
+      chapter,
+    });
+  }, [selected, states, chapter, onReadingContext]);
+
+  /**
+   * 离开书架（切去订阅 / 日记）时把上下文**清掉**。
+   * ★ 不清的后果：在书里记了一条灵感，切回订阅读文章，再按 L —— 那条灵感会被挂到
+   *   上一本书上，而界面上没有任何东西提示「你正在关联某本书」。
+   */
+  useEffect(() => () => onReadingContext?.(null), [onReadingContext]);
+
   const startDrag = (event) => {
     event.preventDefault();
     const startX = event.clientX;
@@ -659,7 +698,10 @@ export function LibraryApp({ reading, onExit, notify, api, SessionProvider, rend
     <div className={`npr-workarea${immersive ? ' is-book-immersive' : ''}`}><div className="npr-layout" style={{ '--npr-list-width': `${listWidth}px` }}>
       <aside className="npr-sidebar">
         <div className="npr-sidebar-toolbar" data-window-drag>
-          <ViewSwitch mode="library" onChange={(next) => { if (next === 'feeds') onExit?.(); }} showLibrary />
+          {/* ★ 0.30.0 起有三个视图：这里必须把**目标模式**转出去（`next !== 'library'`），
+              不能再只判 `next === 'feeds'` —— 否则从书架点「日记」会被当成「什么都不做」，
+              按钮点了没反应，而代码看起来完全正常。 */}
+          <ViewSwitch mode="library" onChange={(next) => { if (next !== 'library') onExit?.(next); }} showLibrary />
           {/* ★ 搜索框 0.9.3 搬去了下面（见 `.npr-lib-controls`）：它和「全部分类 +
               按书名」是**同一个动作的三个参数**，挂在工具栏里反而紧挨着「重新读取
               书单」—— 那是**重新取数**，跟筛当前列表不是一回事。
@@ -884,6 +926,8 @@ export function LibraryApp({ reading, onExit, notify, api, SessionProvider, rend
               onImmersiveChange={setImmersive}
               api={api} SessionProvider={SessionProvider} renderSlot={renderSlot}
               onManagePrompts={() => setSettingsEntry({ open: true, tab: 'prompts', addPrompt: false })}
+              onWriteReflection={onWriteReflection}
+              onChapter={setChapter}
               onFinished={() => void persist(selected.id, { state: 'read' })} />
           ) : (
             <BookReader key={selected.id} book={selected} reading={reading} states={states}
@@ -896,6 +940,8 @@ export function LibraryApp({ reading, onExit, notify, api, SessionProvider, rend
               }))}
               api={api} SessionProvider={SessionProvider} renderSlot={renderSlot}
               onManagePrompts={() => setSettingsEntry({ open: true, tab: 'prompts', addPrompt: false })}
+              onWriteReflection={onWriteReflection}
+              onChapter={setChapter}
               onFinished={() => void persist(selected.id, { state: 'read' })} />
           )
         ) : (

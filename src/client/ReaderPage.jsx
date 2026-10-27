@@ -29,6 +29,8 @@ import { staleNotice } from './source-health.js';
 import { AddFeedDialog } from './dialogs.jsx';
 import { groupNamesOf } from './groups.js';
 import { LibraryApp } from './LibraryApp.jsx';
+import { DiaryApp } from './DiaryApp.jsx';
+import { QuickCapture } from './QuickCapture.jsx';
 import { ViewSwitch } from './ViewSwitch.jsx';
 import REFINEMENTS from './refinements.css';
 
@@ -580,12 +582,19 @@ export function ReaderIcon({ size = 18, active = false }) {
 
 export function ReaderPage({ api, SessionProvider, renderSlot }) {
   /**
-   * 视图模式：`feeds`（订阅）或 `library`（书架）。
+   * 主视图：`feeds`（订阅）/ `library`（书）/ `diary`（日记）。
    *
    * 记在 localStorage 里：用户切到书架往往就是「接下来一段时间都读书」，
    * 每次重开面板都掉回订阅会很难受。书架被设置关掉时强制回 `feeds`。
+   *
+   * ★ 白名单而不是三元：`'diary'` 混进来时，写 `=== 'library' ? 'library' : 'feeds'`
+   *   会把它静默吞成订阅 —— 用户下次打开发现「日记 tab 又回到订阅了」，而没有任何
+   *   报错。未知值一律回落 `feeds` 是对的，但**已知值**必须逐个列出。
    */
-  const [mode, setMode] = useState(() => (localStorage.getItem('npr.mode') === 'library' ? 'library' : 'feeds'));
+  const [mode, setMode] = useState(() => {
+    const saved = localStorage.getItem('npr.mode');
+    return saved === 'library' || saved === 'diary' ? saved : 'feeds';
+  });
   const [channels, setChannels] = useState([]);
   const [channel, setChannel] = useState(() => localStorage.getItem('npr.channel') || 'feeds:all');
   const [filter, setFilter] = useState('all');
@@ -613,6 +622,45 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   // （要先粘一个目录外的地址才会冒出来），用户根本不知道有这个能力。
   const [addMenu, setAddMenu] = useState(null);
   const [showAddFeed, setShowAddFeed] = useState(false);
+  /** 灵感浮层（`L` 键）。挂在 ReaderPage 而不是日记页：订阅与书架两种阅读场景共用一份。 */
+  const [quickOpen, setQuickOpen] = useState(false);
+  /**
+   * 书架正在读的那本书 / 第几页 / 第几章 —— 灵感速记用它写 `meta`（「灵感流转」）。
+   *
+   * ★ 由 `LibraryApp` 上报、离开书架时由它清空（见那边的两条 effect）。
+   *   在这里自己从 `localStorage` 之类的地方推是推不出来的：章节只有阅读器知道。
+   */
+  const [readingCtx, setReadingCtx] = useState(null);
+  /**
+   * 「带着某本书进日记」的一次性意图（书里点「写读后感」）。
+   *
+   * ★ 为什么状态放在这一层：切 tab 的权力只在这里（`mode`）。书架与日记都只是
+   *   它的子视图，谁都不能把另一个子视图挂上去。
+   * ★ 对象里带 `at`：目前 `DiaryApp` 每次切回来都会**重新挂载**，所以严格说不需要它；
+   *   留着是因为将来若把日记改成常驻（不卸载），只比 `bookId` 的话「同一本书再点
+   *   一次」是一个相同的值 ⇒ effect 不跑 ⇒ 点了没反应，而且不会有任何报错。
+   */
+  const [diaryIntent, setDiaryIntent] = useState(null);
+  /**
+   * 书里点「写读后感」。
+   *
+   * ★ **先记意图、再切视图**：反过来的话 `DiaryApp` 挂载那一刻 `intent` 还是
+   *   `null`，它会落在默认的灵感模块上；而那条 effect 的依赖是 `intent?.bookId`，
+   *   挂载后不会再变 ⇒ 用户点了「写读后感」却停在灵感速记，且没有任何提示。
+   * ★ 只往上传 id / 书名 / 后缀三样：书名是给 `DiaryApp` 在书单被截断（2634 本）
+   *   时拼一个最小 book 对象用的，不是用来在书单里找它。
+   */
+  const writeReflection = (book) => {
+    if (!book?.id) return;
+    setDiaryIntent({
+      module: 'reflection',
+      bookId: book.id,
+      bookTitle: book.title ?? '',
+      ext: book.ext ?? '',
+      at: Date.now(),
+    });
+    setMode('diary');
+  };
   useEffect(() => { if (dialog) { setPickerOpen(false); setAddMenu(null); } }, [dialog]);
   const openPicker = (event) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -1053,9 +1101,9 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   };
 
   useEffect(() => {
-    // 书架模式下这些快捷键不该生效：j/k 在那边是翻页而不是「上/下一篇文章」，
+    // 非订阅视图里这些快捷键不该生效：j/k 在书里是翻页、在日记里是「切到上/下一天」，
     // 让它们同时响应两套语义，用户会看到列表在他看不见的地方被选中。
-    if (mode === 'library') return undefined;
+    if (mode !== 'feeds') return undefined;
     const onKey = (event) => {
       if (dialog || pickerOpen || askContext || appearanceOpen || menuOpen || event.ctrlKey || event.metaKey || event.altKey) return;
       if (event.target?.closest?.('input,textarea,select,[contenteditable="true"]')) return;
@@ -1068,6 +1116,31 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dialog, pickerOpen, askContext, appearanceOpen, menuOpen, page.entries, selected?.article?.key, mode]);
+
+  /**
+   * `L` = 灵感速记浮层（2026-10-26，用户明确要的「读 RSS 或电子书时随时按 L」）。
+   *
+   * ★ **独立于上面那个快捷键 effect**：那一条在 `mode !== 'feeds'` 时直接返回，
+   *   而 `L` 在书架里也要能用。合在一起写会让「书里按 L 没反应」变成一个只有
+   *   真机才发现的洞。
+   * ★ 书架里也不交给 `readerCommand`：那个函数是「书页的翻页/缩放」表，
+   *   把 `l` 加进去会顺带 `preventDefault()`，而这里要的正是让它继续冒泡到 window。
+   * ★ 日记页不响应：那儿本来就有一个输入框，再弹一层浮层只会挡住它。
+   * ★ 任何弹层打开时都不响应：用户正在跟那个弹层交互，突然多一层盖上来 = 丢失输入。
+   */
+  useEffect(() => {
+    const onKey = (event) => {
+      if (event.key !== 'l' && event.key !== 'L') return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (mode === 'diary') return;
+      if (dialog || pickerOpen || askContext || appearanceOpen || menuOpen || addMenu || showAddFeed) return;
+      if (event.target?.closest?.('input,textarea,select,[contenteditable="true"]')) return;
+      event.preventDefault();
+      setQuickOpen(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mode, dialog, pickerOpen, askContext, appearanceOpen, menuOpen, addMenu, showAddFeed]);
 
   // 模式落盘 + 书架被设置关掉时强制回订阅。
   // ★ 关掉书架必须**同时**把用户从书架里请出去：只把入口按钮藏掉的话，
@@ -1100,7 +1173,7 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
    * ★ 同一处还要**取消选中**（2026-10-26 用户报）：读到一半切去书架、再切回来，
    *   阅读区会直接落在上一篇文章上；那篇是英文时会连带把译文也摆出来 ——
    *   用户的原话是「这不是我想的」。切模式回来应当是**初始态**：
-   *   右侧是「订阅你关注的作者」那张欢迎页，列表里没有任何一行被选中。
+   *   右侧是「只读你选的，读懂每一篇」那张欢迎页，列表里没有任何一行被选中。
    *
    *   `selected` 挂在 ReaderPage 上（不是订阅页那棵子树），所以切走再回来它**还在** ——
    *   这才是「自动选中第一条」的真身；恢复上次阅读只发生在面板挂载，与此无关。
@@ -1110,6 +1183,11 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
    */
   useEffect(() => {
     if (mode === 'library') setFocused(false);
+    // ★ 日记页同样要复位（2026-10-26）。它也不带订阅那一列，专注状态留着只有一个后果：
+    //   从日记切回订阅时莫名「专注」一次。★ 这一行必须**另起**，不能并进上面那条 ——
+    //   `test/reader-focus-scope.test.mjs` 逐字守着 `if (mode === 'library') setFocused(false)`
+    //   那一句（并进去会让它红，而它守的正是「书架页的书单被藏掉」那次真机事故）。
+    if (mode === 'diary') setFocused(false);
     if (mode !== 'library') return;
     // 还在路上的正文请求要作废：它回来时会把刚清掉的 selected 又填上。
     articleRequest.current += 1;
@@ -1191,8 +1269,16 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
         // 书架整块换掉工作区。它自带同构的 `.npr-workarea > .npr-layout` 骨架，
         // 所以布局 CSS 与窗口拖动区（`.npr-sidebar-toolbar[data-window-drag]`）
         // 两边完全共用，不需要在这里额外铺一套。
-        <LibraryApp reading={reading} onExit={() => setMode('feeds')} notify={notify}
-          api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} />
+        <LibraryApp reading={reading} onExit={(next) => setMode(next === 'diary' ? 'diary' : 'feeds')} notify={notify}
+          api={api} SessionProvider={SessionProvider} renderSlot={renderSlot}
+          onWriteReflection={writeReflection} onReadingContext={setReadingCtx} />
+      ) : mode === 'diary' ? (
+        // 日记同理：自带同一套骨架 + 自己的 `[data-window-drag]` 顶栏。
+        // ★ 它**不**接收 `onExit={() => setMode('feeds')}` 那种无参回调 —— 三个视图之后，
+        //   「离开」有两个方向，回调必须带目标。
+        <DiaryApp reading={reading} onExit={(next) => setMode(next === 'library' ? 'library' : 'feeds')} notify={notify}
+          api={api} SessionProvider={SessionProvider} renderSlot={renderSlot}
+          intent={diaryIntent} />
       ) : (
       <div ref={workareaRef} style={{ '--npr-companion-width': `${companionWidth}%` }} className={`npr-workarea${askContext ? ' has-companion' : ''}`}><div className="npr-layout">
         <aside className="npr-sidebar">
@@ -1299,18 +1385,33 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
           ) : selected?.error ? (
             <div className="npr-article-load-error" role="alert"><Icon name="file-check" size={22} /><h2>文章暂时无法打开</h2><p>请重试读取这篇文章。</p><button type="button" onClick={() => void openArticle(selected.key)}>重新加载</button></div>
           ) : !activeArticle ? (
-            <div className="npr-welcome">
-              <div className="npr-welcome-brand">NPIE READER</div>
-              <h2>订阅你关注的作者</h2>
-              <p className="npr-welcome-intro">
-                左侧是频道与文章列表：全部、未读、收藏可切换；点击标题开始阅读。译文与改写缺失时，用 Harness 当前模型补全。
-              </p>
-              <div className="npr-welcome-keys">
-                {[['J / K', '上一篇 / 下一篇'], ['[', '专注阅读'], ['/', '搜索文章']].map(([key, label]) => (
-                  <span key={key}><kbd>{key}</kbd><span>{label}</span></span>
-                ))}
+            <>
+              {/* ★ 没选中文章时也要有一条窗口拖动行（0.28.3）：选中文章时顶部是
+                  `.npr-reader-toolbar`，而欢迎页这个分支里**一个拖动行都没有** ——
+                  面板右侧整块（约 68% 宽）在空白处按住鼠标，窗口纹丝不动
+                  （用户 2026-10-26 报的「在 rss 阅读界面不能鼠标移动窗口」）。
+                  侧栏那条 44px 工具栏远在另一头，且中间被按钮切成几段，踩不准。
+                  类名与高度跟书架欢迎页（LibraryApp 0.9.8）**完全一致**，所以选中 /
+                  未选中两种状态下，面板顶部都是同一条 44px 的线。 */}
+              <div className="npr-book-toolbar" data-window-drag />
+              <div className="npr-welcome">
+                <div className="npr-welcome-brand">NPIE READER</div>
+                <h2>只读你选的，读懂每一篇</h2>
+                {/* 两段按「怎么读」/「怎么读懂」分：第一段只讲这一屏能看到的操作，
+                    第二段讲模型补什么。合成一段会有五个分句、三处转折，读起来像说明书。 */}
+                <p className="npr-welcome-intro">
+                  左侧只有你订阅的源与分组，全部 / 未读 / 收藏随时筛；点标题开始读。
+                </p>
+                <p className="npr-welcome-intro">
+                  英文原文可自动配译文，缺的版本按需生成；选中一段能唤起 AI 伴读，读的就是这一篇。
+                </p>
+                <div className="npr-welcome-keys">
+                  {[['J / K', '上一篇 / 下一篇'], ['[', '专注阅读'], ['/', '搜索文章']].map(([key, label]) => (
+                    <span key={key}><kbd>{key}</kbd><span>{label}</span></span>
+                  ))}
+                </div>
               </div>
-            </div>
+            </>
           ) : (
             <>
               <div className="npr-reader-toolbar" data-window-drag>
@@ -1472,6 +1573,9 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
         </>
       )}
       {dialog === 'settings' && <SettingsPage api={api} initialTab={settingsEntry.tab} startAddingPrompt={settingsEntry.addPrompt} onSubscriptionsChanged={onSubscriptionAdded} onClose={() => { setDialog(undefined); setSettingsEntry({ tab: 'reading', addPrompt: false }); void loadChannels(); }} notify={notify} />}
+      {/* 灵感浮层：订阅页与书架页共用一份。日记页不挂（那儿本来就有一个输入框）。 */}
+      {mode !== 'diary' && <QuickCapture open={quickOpen} onClose={() => setQuickOpen(false)} notify={notify}
+        context={mode === 'library' ? readingCtx : null} />}
       {toast && <div role="status" aria-live="polite" className={`npr-toast${toast.isError ? ' is-error' : ''}`}>{toast.message}</div>}
     </div>
   );

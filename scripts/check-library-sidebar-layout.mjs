@@ -116,7 +116,10 @@ const HOST = `:root, body {
  */
 const VIEWSWITCH = '<div class="npr-viewswitch">'
   + '<button type="button" aria-pressed="false">R</button>'
-  + '<button type="button" aria-pressed="true">B</button></div>';
+  + '<button type="button" aria-pressed="true">B</button>'
+  // ★ 2026-10-26 加了第三个（日记）。夹具必须跟着长：这一条量的正是「工具栏还剩多少
+  //   宽度给频道名」，少画一个按钮就等于按一个更宽松的世界去判「放得下」。
+  + '<button type="button" aria-pressed="false">D</button></div>';
 const TABS = '<div class="npr-libtabs" role="group">'
   + '<button type="button" aria-pressed="false">阅读</button>'
   + '<button type="button" aria-pressed="true">书架</button></div>';

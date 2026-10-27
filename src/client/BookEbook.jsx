@@ -169,6 +169,10 @@ function clampSection(value, total) {
 export function BookEbook({
   book, states, onPageChange, onFinished, notify,
   api, SessionProvider, renderSlot, onManagePrompts, onImmersiveChange,
+  /** 与 `BookReader` 同义：带着这本书跳到日记的「读后感」模块。没传就不画那颗按钮。 */
+  onWriteReflection,
+  /** 与 `BookReader` 同义：报「当前在第几节」，落到灵感速记的 `meta.chapter`。 */
+  onChapter,
 }) {
   const [status, setStatus] = useState('loading');
   const [error, setError] = useState('');
@@ -898,6 +902,17 @@ export function BookEbook({
   }, [index, page, pageTitle]);
 
   /**
+   * 把「当前在第几节」报给外层（灵感速记的 `meta.chapter`）。
+   *
+   * ★ 电子书里 **`page` 就是节号** —— 它就是目录节点，不需要再拿目录去反查
+   *   （PDF 那边要，见 `chapterAt`）。标题可能为空（这本书没有可用的目录），
+   *   但节号一定对，所以照样上报。
+   */
+  useEffect(() => {
+    onChapter?.(index === null ? null : { n: page, title: chapterTitle });
+  }, [index, page, chapterTitle, onChapter]);
+
+  /**
    * 「问伴读」：把这一句交给伴读的上下文，并把面板打开。
    *
    * ★ 与 PDF 同一个口子（`BookCompanion` 的 `context.quote`），行为也对齐：
@@ -1024,6 +1039,18 @@ export function BookEbook({
             <Icon name="highlighter" size={14} />
             <span>{annotations.length > 0 ? `划线 ${annotations.length}` : '划线'}</span>
           </button>
+          {/* 与 `BookReader` 同一套规则：没标记读完就禁用（读后感只对读完的书开放）。 */}
+          {onWriteReflection && (
+            <button type="button" className="npr-book-pill-item"
+              disabled={current.state !== 'read'}
+              title={current.state === 'read'
+                ? '写读后感：跳到日记的「读后感」模块，这本书已经选好'
+                : '标记读完才能写读后感'}
+              onClick={() => onWriteReflection(book)}>
+              <Icon name="pencil" size={14} />
+              <span>写读后感</span>
+            </button>
+          )}
           <button type="button" className={`npr-book-pill-item${findOpen ? ' is-on' : ''}`}
             title="书内搜索（⌘F）：在整本正文里找，回车 / ↓ 上下条跳转" aria-pressed={findOpen}
             onClick={toggleFind}>

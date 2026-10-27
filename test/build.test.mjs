@@ -193,3 +193,57 @@ describe('书架（电子书）的接线', () => {
     }
   });
 });
+
+describe('日记（第三个 tab）的接线', () => {
+  it('Host 半区带上了存储、路由、三个工具与上下文注入', () => {
+    const text = hostBundle();
+    for (const name of ['makeDiaryRoutes', 'createDiaryStore', 'diaryRoot', 'setDiaryContext', 'diaryToday', 'diaryAppend', 'diarySearch']) {
+      assert.ok(text.includes(name), `Host 产物里找不到 ${name}`);
+    }
+    // 前缀是**共用常量**（客户端按它拼 URL、宿主按它注册），两边都必须在。
+    assert.ok(text.includes('/api/dsh-npie-reader/diary'), 'Host 产物里找不到日记路由前缀');
+    // 三个工具名是给模型看的**稳定标识符**，改名等于换接口。
+    for (const tool of ['diary_today', 'diary_append', 'diary_search']) {
+      assert.ok(text.includes(tool), `Host 产物里找不到工具名 ${tool}`);
+    }
+  });
+
+  it('Client 半区带上了日记界面、日历与路由前缀', () => {
+    const text = clientBundle();
+    for (const token of [
+      'npr-diary-reader', 'npr-diary-scroll', 'npr-diary-cal', 'npr-diary-write',
+      'npr-diary-sheet', 'npr-diary-moodrow', 'npr-diary-entry', 'npr-diary-dayrow', 'npr-diary-hit',
+      '/api/dsh-npie-reader/diary',
+    ]) {
+      assert.ok(text.includes(token), `Client 产物里找不到 ${token}`);
+    }
+  });
+
+  it('★ 日记的样式类**定义**也在产物里（模板串写错只有这一步抓得到）', () => {
+    // 与书架那条同源：CSS 是塞在模板串里一起打包的，注释里一个反引号就能让它
+    // 提前闭合 —— 而那种错误是**语法合法**的减法链，用例全绿、App 起不来。
+    const text = clientBundle();
+    for (const cls of ['npr-diary-reader', 'npr-diary-cal-day', 'npr-diary-write', 'npr-diary-body']) {
+      assert.ok(text.includes(`.${cls}`), `产物里找不到 .${cls} 的样式定义`);
+    }
+  });
+
+  it('★ Client 半区没有被拖进日记的宿主实现（它跑在浏览器里）', () => {
+    const text = clientBundle();
+    for (const forbidden of ['createDiaryStore', 'diaryRoot', 'makeDiaryRoutes']) {
+      assert.ok(!text.includes(forbidden), `Client 产物里出现了 ${forbidden} —— 宿主半区的东西漏进浏览器了`);
+    }
+  });
+
+  it('★ 第三个按钮本身真的打进了产物（零件齐了但入口没画出来 = 功能不存在）', () => {
+    // 上面几条都在查「日记的零件在不在」，而**入口**是另一件事。
+    // ★ esbuild 会把单引号统一成双引号、中文转成 `\uXXXX`，所以这里只能查
+    //   双引号形态的 ASCII 片段 —— 查单引号形态会得到一个「永远查不到」的假红。
+    const text = clientBundle();
+    assert.ok(text.includes('"aria-pressed": mode === "diary"'),
+      '产物里找不到日记按钮的选中态绑定 —— 第三个 tab 没打进去');
+    // 日历图标是那个按钮唯一的视觉标识（`icons.jsx` 里的 path 起点）。
+    assert.ok(text.includes('M8 2v4'), '产物里找不到日历图标的路径 —— 第三个按钮可能换了图标或没打进去');
+  });
+});
+

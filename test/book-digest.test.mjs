@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { extractPageLines } from '../src/client/book-view.js';
-import { estimateDigestCost, extractBookPages, planDigestRun, planSelection, resolveOutline } from '../src/client/book-digest.js';
+import { estimateDigestCost, extractBookPages, planDigestRun, planSelection, resolveOutline, chapterAt } from '../src/client/book-digest.js';
 
 /** 造一个 pdf.js 的文本项。 */
 const run = (str, eol = false) => ({ str, hasEOL: eol });
@@ -293,5 +293,63 @@ describe('planSelection：按勾选算这一次的代价', () => {
   it('缺 meta / 缺 chars 时不产生 NaN', () => {
     assert.equal(planSelection(null, [1]).count, 0);
     assert.equal(planSelection({ chapters: [{ n: 1, status: 'pending' }] }, [1]).chars, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// chapterAt：页码 → 目录节点（灵感速记的 `meta.chapter` 靠它）
+//
+// ★ 目录项是宿主写出来的 `outline.json`：`{ title, startPage, endPage, n }`。
+//   判据里必须有一条「**猜不出来就返回 null**」—— 记一个错的章节，等于把一条灵感
+//   挂到别的章节上，而界面上看起来完全正常。
+// ---------------------------------------------------------------------------
+
+/** 一份典型的、带嵌套的目录（内层范围落在外层里面）。 */
+const OUTLINE = [
+  { n: 1, title: '第1章 影响力的武器', startPage: 24, endPage: 27 },
+  { n: 2, title: '按一下就播放', startPage: 28, endPage: 40 },
+  { n: 3, title: '第2章 互惠', startPage: 41, endPage: 90 },
+];
+
+describe('chapterAt：这一页属于哪一节', () => {
+  it('范围内命中', () => {
+    assert.deepEqual(chapterAt(OUTLINE, 30), { n: 2, title: '按一下就播放' });
+    assert.deepEqual(chapterAt(OUTLINE, 24), { n: 1, title: '第1章 影响力的武器' });
+    assert.deepEqual(chapterAt(OUTLINE, 90), { n: 3, title: '第2章 互惠' });
+  });
+
+  it('★ 落在第一个章节之前 ⇒ null（不拿第一章冒充）', () => {
+    assert.equal(chapterAt(OUTLINE, 3), null);
+    // 反向对照：如果把「找不到就取第一条」写成兜底，这里会变成第 1 章。
+    assert.notDeepEqual(chapterAt(OUTLINE, 3), { n: 1, title: '第1章 影响力的武器' });
+  });
+
+  it('★ 嵌套目录取**最具体**的那一条（startPage 最大）', () => {
+    const nested = [
+      { n: 1, title: '第1章', startPage: 10, endPage: 60 },
+      { n: 2, title: '1.1 小节', startPage: 20, endPage: 30 },
+    ];
+    assert.deepEqual(chapterAt(nested, 25), { n: 2, title: '1.1 小节' });
+    // 小节之外、大章之内，仍然是大章。
+    assert.deepEqual(chapterAt(nested, 40), { n: 1, title: '第1章' });
+  });
+
+  it('只有起点没有终点（PDF 书签那种 `{ title, page }`）也能用', () => {
+    const bookmarks = [
+      { title: '序', page: 5 },
+      { title: '前言', page: 15 },
+      { title: '第一章', page: 24 },
+    ];
+    assert.deepEqual(chapterAt(bookmarks, 20), { n: 15, title: '前言' });
+    assert.deepEqual(chapterAt(bookmarks, 5), { n: 5, title: '序' });
+    assert.equal(chapterAt(bookmarks, 4), null);
+  });
+
+  it('脏输入不抛：空目录 / 非数组 / 非法页码', () => {
+    assert.equal(chapterAt([], 1), null);
+    assert.equal(chapterAt(null, 1), null);
+    assert.equal(chapterAt(OUTLINE, 0), null);
+    assert.equal(chapterAt(OUTLINE, NaN), null);
+    assert.equal(chapterAt(OUTLINE, '30'), null, '字符串页码不该被当成数字收下');
   });
 });

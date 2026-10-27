@@ -10,6 +10,9 @@ const PATHS = {
   'arrow-up-right': ['M7 7h10v10', 'M7 17 17 7'],
   'book-open': ['M12 7v14', 'M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z'],
   bookmark: ['m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z'],
+  /* lucide `calendar`。日记那个 tab 用它 —— 用 `file-text` 会和「文章」撞语义，
+     用户会以为第三个 tab 是「另一份订阅列表」。 */
+  calendar: ['M8 2v4', 'M16 2v4', 'M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z', 'M3 10h18'],
   'chevron-down': ['m6 9 6 6 6-6'],
   'chevron-left': ['m15 18-6-6 6-6'],
   'chevron-right': ['m9 18 6-6-6-6'],

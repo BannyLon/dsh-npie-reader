@@ -62,7 +62,7 @@ const TYPERT_REMOTE = {
     method('saveSettings'),
     method('listAiModels', false),
     method('aiModelInfo', false),
-    ...['prepareChat', 'setReadingContext', 'setBookContext'].map(name => method(name)),
+    ...['prepareChat', 'setReadingContext', 'setBookContext', 'setDiaryContext'].map(name => method(name)),
   ],
 };
 
@@ -101,6 +101,7 @@ function registerReader(ctx) {
     prepareChat: (params) => call('prepareChat', params),
     setReadingContext: (params) => call('setReadingContext', params),
     setBookContext: (params) => call('setBookContext', params),
+    setDiaryContext: (params) => call('setDiaryContext', params),
     listChannels: () => call('listChannels'),
     listEntries: (params) => call('listEntries', params),
     searchArticles: (params) => call('searchArticles', params),

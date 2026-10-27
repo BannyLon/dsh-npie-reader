@@ -6,7 +6,9 @@
  *
  * 本插件是自包含的：不连接任何第三方后端。译文与改写只由 Harness 当前模型生成。
  */
+import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import { dirname as dirName, join as joinPath, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Remote, bindTypertRemote } from './typert-lite.js';
@@ -18,7 +20,9 @@ import { firstImageUrl, htmlToText, sanitizeHtml } from './sanitize.js';
 import { extractMainHtml } from './fulltext.js';
 import { chooseReadingContextVersion } from './reading-context-version.js';
 import {
-  BOOK_QUOTE_LIMIT, READING_CONTEXT_INTRO, bookReadingContext, readingMaterial, readingScopeInstruction,
+  BOOK_QUOTE_LIMIT, DIARY_CONTEXT_DAY_CHARS, DIARY_CONTEXT_DAY_ENTRY_COUNT, DIARY_CONTEXT_ENTRY_COUNT,
+  READING_CONTEXT_INTRO, bookReadingContext, diaryContext,
+  readingMaterial, readingScopeInstruction,
 } from '../reading-scope.js';
 import { aiModelInUse, createGenerationGuard, generateBookSynthesis, generateChapterDigest, generateRewrite, generateStructuredTranslation, listAiModels } from './ai.js';
 import { isValidAiModel } from '../ai-model.js';
@@ -34,6 +38,9 @@ import { createOcrRunner } from './ocr.js';
 import { createEbookStore } from './ebook/store.js';
 import { isEbookExtension, parseEbook } from './ebook/index.js';
 import { createAnnotationStore } from './annotation-store.js';
+import { dateKey } from '../diary-format.js';
+import { createDiaryStore } from './diary-store.js';
+import { DIARY_API_PREFIX, makeDiaryRoutes } from './diary-routes.js';
 import { createPanAuth } from './pan-auth.js';
 import { createLocalReader } from './local-books.js';
 import { buildPreviousIds, scanLocalRoots, scanPanRoots } from './book-source.js';
@@ -304,6 +311,18 @@ export class RssService {
      */
     this.annotationStore = createAnnotationStore({ rootDir: pluginDataDir(), log: message => ctx.logger.info(message) });
     /**
+     * 日记。
+     *
+     * ★ 和 `data.json` **完全分开**：那份是全量重写，日记正文进去等于每写一句话
+     *   重写 9.6 MB（见 `diary-store.js` 文件头）。
+     * ★ 和 Obsidian 库**零关系**（用户 2026-10-26 拍板）：库那边有自己的写入者，
+     *   两边都能改就必然分叉。日记只有这一个真相，想搬出去走「导出」。
+     * ★ `now` 不注入：日记的日期就是**本机当前时间**，没有「用户所在时区」这回事
+     *   —— `dateKey()` 用的是本地时区，绝不用 `toISOString()`（那会把东八区
+     *   凌晨 7 点前写成前一天）。
+     */
+    this.diary = createDiaryStore({ log: message => ctx.logger.info(message) });
+    /**
      * 正在跑逐章解读的书：`bookId → { controller, promise }`。
      *
      * ★ 生成必须**跑在宿主、而且脱离 HTTP 请求**：一本 30 章的书要几分钟，
@@ -372,6 +391,36 @@ export class RssService {
       });
       const disposers = routes.map(route => scope.webServer.register(route));
       ctx.logger.info(`dsh-npie-reader: 书架路由已挂载 ${LIBRARY_API_PREFIX}`);
+      /**
+       * 日记路由**单独一条前缀**，与书架并列，而不是塞进 `LIBRARY_API_PREFIX`。
+       *
+       * ★ 分开的理由不是洁癖：两条通道的风险面完全不同（书架能读整台机器上配置过
+       *   的书源目录，日记只碰自己的一个子目录），前缀分开之后「日记挂了但书架还在」
+       *   是**可能且可诊断**的；塞进同一个 handler 里则一处抛错两条一起 500。
+       * ★ 传函数、不传 `this.diary`：路由层拿不到整个 store，也就没有办法绕过
+       *   「按文件串行队列」去直接写盘。形状与上面书架那一段一致。
+       */
+      const diaryRoute = makeDiaryRoutes({
+        read: date => this.diary.read(date),
+        readFull: date => this.diary.readFull(date),
+        append: entry => this.diary.append(entry),
+        removeEntry: entry => this.diary.removeEntry(entry),
+        listMonth: month => this.diary.listMonth(month),
+        search: options => this.diary.search(options),
+        // ★ 必须把 `options` 透传下去：路由层靠 `includePrivate: true` 才看得到
+        //   私密标签，写成 `tags: () => this.diary.tags()` 会把那个参数悄悄丢掉，
+        //   症状是「标签云里少了几个标签」，而没有任何报错。
+        tags: options => this.diary.tags(options),
+        timeline: options => this.diary.timeline(options),
+        byBook: bookId => this.diary.byBook(bookId),
+        exportAll: options => this.diary.exportAll(options),
+        stats: () => this.diary.stats(),
+        secretStatus: () => this.diary.secret.status(),
+        reveal: () => this.revealDiaryDir(),
+        log: message => ctx.logger.info(message),
+      });
+      disposers.push(scope.webServer.register(diaryRoute));
+      ctx.logger.info(`dsh-npie-reader: 日记路由已挂载 ${DIARY_API_PREFIX}`);
       return () => { for (const dispose of disposers) dispose(); };
     });
 
@@ -1509,6 +1558,149 @@ export class RssService {
     this.putCompanionContext(sessionId, bookReadingContext({ title, page, pages, text, quote }), `book:${bookId}`);
     this.store.touch();
     return { ok: true, hasText: text.trim().length > 0, hasQuote: quote.trim().length > 0 };
+  }
+
+  /**
+   * 日记的伴读上下文（界面上的「AI 整理」）。
+   *
+   * 与 `setReadingContext` / `setBookContext` 落在**同一个字段**
+   * （`companionContexts[sessionId].text`），所以宿主那条 systemPrompt 注入通道
+   * 一个字都不用改 —— 三条路径在模型眼里都是「你现在在看的这份东西」。
+   *
+   * ★ **正文由宿主自己从 store 读**，不接受客户端传进来的文本（这一点与
+   *   `setBookContext` 相反，那边页文本只有客户端有）。理由是这里**读得到**：
+   *   让客户端传，就会出现「界面上是旧的那一版、模型看到的是新的那一版」这种
+   *   两边不一致，而且无法判断谁对。
+   *
+   * ★ `target` 是**绝对下标**，切片之后靠 `offset` 把序号还原回去。不做这一步的话，
+   *   一天 30 条时只带中间 8 条，模型会看到「第 1 条」而它其实是第 12 条，
+   *   然后照着这个假序号跟用户说话。
+   *
+   * ★ 只 `touch()` 不 `flush()`：同 `setBookContext`（`data.json` 已 9.6 MB，
+   *   而注入读的是内存）。
+   */
+  async setDiaryContext(request = {}) {
+    await this.ready;
+    const { sessionId, date, target } = request ?? {};
+    assertSessionId(sessionId);
+    const day = await this.diary.read(date ?? dateKey());
+    const total = day.entries.length;
+    const hasTarget = target !== null && target !== undefined;
+    if (hasTarget && (!Number.isInteger(target) || target < 0 || target >= total)) {
+      // 越界多半是「另一个窗口刚删掉一条」，所以文案要指向「刷新」而不是「重输」。
+      throw new Error('这一条已经不在原位了（可能刚被删掉），刷新一下再试');
+    }
+    let offset = 0;
+    let slice = day.entries;
+    if (hasTarget && total > DIARY_CONTEXT_ENTRY_COUNT) {
+      // 光标那条尽量放在切片的第 4 位：前面留几条给「它在说什么」，后面留几条给「后来怎么想」。
+      const center = target;
+      offset = Math.max(0, Math.min(center - 3, total - DIARY_CONTEXT_ENTRY_COUNT));
+      slice = day.entries.slice(offset, offset + DIARY_CONTEXT_ENTRY_COUNT);
+    } else if (!hasTarget && total > DIARY_CONTEXT_ENTRY_COUNT) {
+      /*
+       * 整天模式（用户 2026-10-27：「AI 整理是整理当天的全部记录，不是一条记录一个」）。
+       *
+       * ★ 必须**从第 1 条开始顺序取**，不能沿用上面那套「以光标为中心」的切片 ——
+       *   整天模式没有光标，`center = 0` 会让 offset 恒为 0、只取前 8 条，
+       *   于是「整理今天」实际整理的是「今天的前 8 条」，而模型不知道自己漏了。
+       * ★ 条数之外还要按**字数**封顶：40 条 × 6000 字能到 24 万字。超了就从后面截，
+       *   截了多少由 `diaryContext` 的 `total > entries.length` 如实说出来。
+       */
+      const take = [];
+      let used = 0;
+      for (const entry of day.entries) {
+        const length = typeof entry.body === 'string' ? entry.body.length : 0;
+        if (take.length > 0 && used + length > DIARY_CONTEXT_DAY_CHARS) break;
+        take.push(entry);
+        used += length;
+        if (take.length >= DIARY_CONTEXT_DAY_ENTRY_COUNT) break;
+      }
+      slice = take;
+    }
+    this.putCompanionContext(sessionId, diaryContext({
+      date: day.date,
+      entries: slice,
+      offset,
+      target: hasTarget ? target : null,
+      total,
+      dayChars: day.chars,
+    }), `diary:${day.date}`);
+    this.store.touch();
+    return { ok: true, date: day.date, total, sent: slice.length, offset };
+  }
+
+  // ------------------------------------------------------------------
+  // 日记（2026-10-26）
+  // ------------------------------------------------------------------
+
+  /**
+   * 在系统文件管理器里打开日记目录。
+   *
+   * ★ 这个能力必须有，不是锦上添花：取消「移入 Obsidian」之后，日记**没有第二个
+   *   副本**。用户要知道东西在哪、要能自己拖走 / 备份，就得有一个「带我去看」的
+   *   入口。不给的话，日记就成了「存在某个看不见的地方」—— 而那个地方是
+   *   `~/.dsh/storages/`，不是任何人会主动去翻的目录。
+   *
+   * ★ 用 `spawn` + 参数数组，不用 `exec` + 拼字符串：路径里带空格或中文（用户名
+   *   是中文的机器很常见）时，拼进 shell 就得自己负责转义，而数组不需要。
+   * ★ `detached` + `unref()`：`open` 通常立刻返回，但万一它挂住（Finder 忙），
+   *   不该把宿主的子进程表一起拖住。
+   * ★ 目录不存在时先建出来：用户第一次点「打开文件夹」很可能一篇日记都还没写，
+   *   这时 Finder 会弹「找不到」—— 那是**我们**该先建，不是让他自己去猜。
+   */
+  async revealDiaryDir() {
+    // ★ 打开的是 `diary/` 而不是 `diary/daily/`（2026-10-26 加私密那半边时改的）：
+    //   `private/` 与 `daily/` 是**平级**的，只打开 `daily/` 会让用户以为私密日记
+    //   不存在 —— 而「东西在哪」正是他点这个按钮时唯一想知道的事。
+    const dir = this.diary.root();
+    await mkdir(dir, { recursive: true });
+    const [command, args] = process.platform === 'darwin'
+      ? ['open', [dir]]
+      : process.platform === 'win32'
+        ? ['explorer', [dir]]
+        : ['xdg-open', [dir]];
+    const child = spawn(command, args, { detached: true, stdio: 'ignore' });
+    child.unref();
+    return { dir };
+  }
+
+  /**
+   * 读一天（缺省今天）。
+   *
+   * ★ `date` 缺省走 `dateKey()`（本地时区），**不接受**客户端传 `Date` 或时间戳：
+   *   跨时区/跨零点时两种写法会给出不同的日子，而「今天」只有一个答案。
+   */
+  async diaryToday(request = {}) {
+    await this.ready;
+    const date = request?.date ?? dateKey();
+    const day = await this.diary.read(date);
+    return { ...day, root: this.diary.root() };
+  }
+
+  /**
+   * 追加一条。
+   *
+   * ★ 校验全在 store 里（`assertEntryInput` + 日上限），这里不重复判 ——
+   *   两处各写一份迟早漂移，而漂移的表现是「界面能存、工具不能存」这种
+   *   最难查的不一致。
+   */
+  async diaryAppend(request = {}) {
+    await this.ready;
+    const result = await this.diary.append({
+      date: request?.date ?? dateKey(),
+      time: request?.time,
+      kind: request?.kind,
+      source: request?.source,
+      body: request?.body,
+    });
+    return result;
+  }
+
+  /** 跨天搜（判据与 `rss_search_articles` / `book_search` 同一条）。 */
+  async diarySearch(request = {}) {
+    await this.ready;
+    return await this.diary.search({ query: request?.query, limit: request?.limit });
   }
 
   /**
@@ -2776,7 +2968,7 @@ export class RssService {
     'listCatalog', 'addCatalogSource', 'removeCatalogSource', 'setCatalogHidden',
     'setCatalogService', 'probeCatalogService',
     'setRead', 'setFavorite', 'getSettings', 'saveSettings', 'listAiModels', 'aiModelInfo',
-    'prepareChat', 'setReadingContext', 'setBookContext',
+    'prepareChat', 'setReadingContext', 'setBookContext', 'setDiaryContext',
   ];
   const prototype = RssService.prototype;
   for (const name of names) {

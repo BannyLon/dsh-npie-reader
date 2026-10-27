@@ -47,7 +47,7 @@ import {
   anchorOfRange, annotationsOnPage, coveringAnnotation, normalizeAnnotations,
   rangeOfAnchor, rectsOfRange, textNodesOf,
 } from './annotations.js';
-import { extractBookPages, planDigestRun, resolveOutline } from './book-digest.js';
+import { extractBookPages, planDigestRun, resolveOutline, chapterAt } from './book-digest.js';
 import {
   BOOK_BRIGHTNESS, BOOK_TINTS, nextBookTint, normalizeBookBrightness, normalizeBookTint,
 } from '../reading-settings.js';
@@ -137,6 +137,24 @@ export function BookReader({
    * 而左边第二列在**本组件的祖先**里，只有外层改得动。
    */
   onImmersiveChange,
+  /**
+   * 「写读后感」：带着**这本书**跳到日记那个 tab 的「读后感」模块。
+   *
+   * ★ 为什么是往外交给外层、而不是在书里弹一个输入框：读后感写在日记的 Markdown
+   *   文件里（`日记/YYYY-MM-DD.md`，`meta.book` 记着是哪本），书里再放一个输入框
+   *   就会变成**第二条写日记的路**，两条路的格式早晚漂开。所以这里只负责「跳过去，
+   *   书已经选好」，写作面只有一份。
+   * ★ 可选：没传就**不画这颗按钮**（`LibraryApp` 之外的夹具、以及将来别的宿主
+   *   外壳不会看到一颗点了没反应的按钮）。
+   */
+  onWriteReflection,
+  /**
+   * 「当前在第几章」—— 报给外层，最后落到灵感速记的 `meta.chapter`。
+   *
+   * ★ 契约是 `{ n, title } | null`，**不许猜**：目录还没抽出来时就是 `null`，
+   *   宁可只记页码，也不要记一个错的章节（错的章节会把一条灵感挂到别的书上）。
+   */
+  onChapter,
 }) {
   const [status, setStatus] = useState('loading');
   const [error, setError] = useState('');
@@ -208,6 +226,18 @@ export function BookReader({
   const [digestOpen, setDigestOpen] = useState(false);
   const [digestMeta, setDigestMeta] = useState(null);
   const [digestOutline, setDigestOutline] = useState([]);
+  /**
+   * 把「当前在第几章」报给外层（`LibraryApp` → `ReaderPage` → 灵感速记浮层）。
+   *
+   * ★ 为什么由**本组件**算：目录 `digestOutline` 只活在这里。外层只有页码，
+   *   没有页码→章节的映射，让它自己算就等于把 `outline.json` 的形状复制一份到
+   *   第二个地方 —— 两份迟早漂开（`chapterAt` 的注释里写了嵌套目录的判法）。
+   * ★ 依赖里放 `digestOutline`：目录是**异步**从盘上读回来的。只依赖 `page` 的话，
+   *   「打开书、还没翻页就按 L」会拿到 `null` 章节 —— 而这恰恰是最常见的时机。
+   */
+  useEffect(() => {
+    onChapter?.(chapterAt(digestOutline, page));
+  }, [digestOutline, page, onChapter]);
   /** 抽取任务：`{ running, done, total, phase, error }`。null = 没在跑。 */
   const [digestJob, setDigestJob] = useState(null);
   const digestAbort = useRef(null);
@@ -2292,6 +2322,21 @@ export function BookReader({
             <Icon name="highlighter" size={14} />
             <span>{annotations.length > 0 ? `划线 ${annotations.length}` : '划线'}</span>
           </button>
+          {/* 只在外部给了回调时才画（见 `onWriteReflection` 的注释）。
+              ★ 但**没读完就禁用**：用户 2026-10-27 定的规则是「只有读完的书才可以写
+                读后感」。禁用一个看得见、hover 有解释的按钮，比让它消失或让它点进去
+                再报错都好 —— 消失会让人以为功能没了，报错会让人白跑一趟。 */}
+          {onWriteReflection && (
+            <button type="button" className="npr-book-pill-item"
+              disabled={current.state !== 'read'}
+              title={current.state === 'read'
+                ? '写读后感：跳到日记的「读后感」模块，这本书已经选好'
+                : '标记读完才能写读后感'}
+              onClick={() => onWriteReflection(book)}>
+              <Icon name="pencil" size={14} />
+              <span>写读后感</span>
+            </button>
+          )}
           <button type="button" className={`npr-book-pill-item${findOpen ? ' is-on' : ''}`}
             title="书内搜索（⌘F）：在整本正文里找，回车 / ↓ 上下条跳转" aria-pressed={findOpen}
             onClick={toggleFind}>

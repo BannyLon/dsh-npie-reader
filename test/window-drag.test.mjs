@@ -59,6 +59,10 @@ const reader = readFileSync(join(clientDir, 'ReaderPage.jsx'), 'utf8');
 // 「书架里新加的祖先带了 tabindex」完全测不到。
 const library = readFileSync(join(clientDir, 'LibraryApp.jsx'), 'utf8');
 const bookReader = readFileSync(join(clientDir, 'BookReader.jsx'), 'utf8');
+// 日记（第三个 tab）是**第三个半边**：它自己渲染一整块 `npr-workarea`，
+// 两条拖动行也都在它自己的文件里。不加进来，日记页「窗口拖不动」这条
+// 历史故障（0.9.8 / 0.28.3 各踩一次）在新增的第三个 tab 上会**完全没有守卫**。
+const diary = readFileSync(join(clientDir, 'DiaryApp.jsx'), 'utf8');
 
 const ASAR = '/Applications/DeepSeek Harness.app/Contents/Resources/app.asar';
 
@@ -66,6 +70,7 @@ const ASAR = '/Applications/DeepSeek Harness.app/Contents/Resources/app.asar';
 const code = stripComments(reader);
 const libraryCode = stripComments(library);
 const bookCode = stripComments(bookReader);
+const diaryCode = stripComments(diary);
 
 /**
  * 宿主 `:is(...)` no-drag 选择器里的**元素名**与**属性**。
@@ -99,11 +104,12 @@ const NO_DRAG_ATTRS = [
  * 压在窗口顶部的拖动行，以及它们**必须干净**的祖先链（由内向外）。
  *
  * ★ 每条都带上是**哪个文件**里的那个 class：订阅那半边两条在 `ReaderPage.jsx`，
- *   书架那半边两条分别落在 `LibraryApp.jsx` 与 `BookReader.jsx`。`openTagOf` 按
- *   源码文本定位，所以同名 class 出现在两个文件里时必须指名道姓，否则断言会去查
- *   另一个文件里的同名元素 —— 那是一条「查了但查错了地方」的假绿。
+ *   书架那半边两条分别落在 `LibraryApp.jsx` 与 `BookReader.jsx`，日记那半边两条
+ *   都在 `DiaryApp.jsx`。`openTagOf` 按源码文本定位，所以同名 class 出现在两个
+ *   文件里时必须指名道姓，否则断言会去查另一个文件里的同名元素 —— 那是一条
+ *   「查了但查错了地方」的假绿。
  *
- * ★ `npr-root` 只有一个（在 `ReaderPage.jsx`），两个半边共用它，所以它永远指向 `code`。
+ * ★ `npr-root` 只有一个（在 `ReaderPage.jsx`），三个半边共用它，所以它永远指向 `code`。
  */
 const DRAG_ROWS = [
   {
@@ -113,6 +119,15 @@ const DRAG_ROWS = [
   },
   {
     row: 'npr-reader-toolbar（订阅）',
+    source: code,
+    ancestors: [['npr-reader', code], ['npr-layout', code], ['npr-workarea', code], ['npr-root', code]],
+  },
+  {
+    // ★ 0.28.3 补：订阅页**没选中文章**时压在窗口顶部的那条。它和上面那条是
+    //   二选一渲染的（`!activeArticle ? 欢迎页 : 工具栏`），所以两条要各查一次 ——
+    //   只查 `.npr-reader-toolbar` 会让「欢迎页拖不动」这个状态完全测不到，
+    //   而那正是用户报的那个状态。
+    row: 'npr-book-toolbar（订阅欢迎页）',
     source: code,
     ancestors: [['npr-reader', code], ['npr-layout', code], ['npr-workarea', code], ['npr-root', code]],
   },
@@ -148,6 +163,23 @@ const DRAG_ROWS = [
       ['npr-workarea', libraryCode],
       ['npr-root', code],
     ],
+  },
+  {
+    // 日记（第三个 tab）。它自己渲染一整块 `npr-workarea`，两条拖动行都在自己文件里，
+    // 所以 `source` 全部指向 `diaryCode`；只有 `npr-root` 仍然是 ReaderPage 那一份。
+    // ★ 左侧这一条不是「可有可无的装饰」：日记页左栏顶部的日历上方就是窗口顶部那条线，
+    //   少了它，在日记页按住左上角空白处拖不动窗口。
+    row: 'npr-sidebar-toolbar（日记）',
+    source: diaryCode,
+    ancestors: [['npr-sidebar', diaryCode], ['npr-layout', diaryCode], ['npr-workarea', diaryCode], ['npr-root', code]],
+  },
+  {
+    // 日记右侧是**单一分支**（不像订阅/书架那样「选中 / 未选中」二选一渲染），
+    // 所以一条就够。`.npr-reader` 在这里的写法是 `className="npr-reader npr-diary-reader"`,
+    // `openTagOf` 的多类名回退分支会正确取到那个 `<section>`。
+    row: 'npr-book-toolbar（日记）',
+    source: diaryCode,
+    ancestors: [['npr-reader', diaryCode], ['npr-layout', diaryCode], ['npr-workarea', diaryCode], ['npr-root', code]],
   },
 ];
 
@@ -201,10 +233,14 @@ function openTagOf(source, className) {
 }
 
 describe('窗口拖动区', () => {
-  test('五条顶部工具栏都打了 data-window-drag（订阅两条 + 书架三条）', () => {
+  test('八条顶部工具栏都打了 data-window-drag（订阅三条 + 书架三条 + 日记两条）', () => {
     // 这两行分别是「频道 + 添加/搜索/刷新」和「版本 / 原文 + 工具图标」，都压在窗口顶部。
     assert.match(code, /className="npr-sidebar-toolbar" data-window-drag/);
     assert.match(code, /className="npr-reader-toolbar" data-window-drag/);
+    // ★ 0.28.3 补：订阅页**没选中文章**时（欢迎页）右侧整块没有拖动区 ——
+    //   `.npr-reader-toolbar` 是跟着选中文章一起出现的。用户 2026-10-26 报的
+    //   「在 rss 阅读界面不能鼠标移动窗口」就是它。与书架欢迎页同一条 44px 的线。
+    assert.match(code, /className="npr-book-toolbar" data-window-drag/);
     // 书架那半边：侧栏工具栏 + 阅读区顶部。阅读区顶部**有两条来源**，缺一不可：
     //   选中书时 BookReader 渲染它，没选中书时 LibraryApp 补一条（0.9.8）。
     //   只查 BookReader 那份会让「一本都没点开」的状态完全测不到 —— 那正是
@@ -212,6 +248,10 @@ describe('窗口拖动区', () => {
     assert.match(libraryCode, /className="npr-sidebar-toolbar" data-window-drag/);
     assert.match(libraryCode, /className="npr-book-toolbar" data-window-drag/);
     assert.match(bookCode, /className="npr-book-toolbar" data-window-drag/);
+    // 日记（第三个 tab）：左栏顶部与右侧顶部各一条。日记右侧是单一分支，
+    //   所以这里两条就覆盖了全部状态（不像书架那样还要多一条欢迎页）。
+    assert.match(diaryCode, /className="npr-sidebar-toolbar" data-window-drag/);
+    assert.match(diaryCode, /className="npr-book-toolbar" data-window-drag/);
   });
 
   test('CSS 里也显式声明了 drag（不单靠宿主那条全局规则）', () => {
@@ -227,7 +267,7 @@ describe('窗口拖动区', () => {
   });
 
   test('反向对照：绝不能误用 data-window-drag-recall（那个是 no-drag）', () => {
-    for (const [name, source] of [['ReaderPage', code], ['LibraryApp', libraryCode], ['BookReader', bookCode]]) {
+    for (const [name, source] of [['ReaderPage', code], ['LibraryApp', libraryCode], ['BookReader', bookCode], ['DiaryApp', diaryCode]]) {
       assert.doesNotMatch(source, /data-window-drag-recall/, `${name} 里出现了 data-window-drag-recall`);
     }
   });
@@ -240,7 +280,7 @@ describe('窗口拖动区', () => {
 });
 
 describe('拖动区的祖先必须干净（no-drag 矩形会被做差减掉）', () => {
-  test('四条拖动行的整条祖先链都不命中宿主 no-drag 选择器', () => {
+  test('八条拖动行的整条祖先链都不命中宿主 no-drag 选择器', () => {
     const violations = [];
     for (const { row, source, ancestors } of DRAG_ROWS) {
       // 先确认这条行**真的在**这个文件里（否则「祖先干净」是在查一个不存在的元素）。
@@ -262,11 +302,11 @@ describe('拖动区的祖先必须干净（no-drag 矩形会被做差减掉）',
     assert.doesNotMatch(openTagOf(bookCode, 'npr-book'), /tabindex/i, '.npr-book 带了 tabindex');
   });
 
-  test('★ 书架两个文件里**一个** tabindex 都没有（新加的祖先最容易顺手带上）', () => {
-    // 键盘操作在书架里走 window 级监听（方向键翻页、j/k 翻页），任何容器都不需要 tabindex。
-    // 一旦有人给书架列表加个 `tabIndex={0}` 想让它「可聚焦」，拖动区会整块失效，
+  test('★ 书架与日记的文件里**一个** tabindex 都没有（新加的祖先最容易顺手带上）', () => {
+    // 键盘操作在书架/日记里走 window 级监听（方向键翻页、j/k 翻页），任何容器都不需要
+    // tabindex。一旦有人给列表加个 `tabIndex={0}` 想让它「可聚焦」，拖动区会整块失效，
     // 而源码里 data-window-drag 一个不少 —— 正是那种只在真机上看得出来的假绿。
-    for (const [name, source] of [['LibraryApp', libraryCode], ['BookReader', bookCode]]) {
+    for (const [name, source] of [['LibraryApp', libraryCode], ['BookReader', bookCode], ['DiaryApp', diaryCode]]) {
       assert.equal([...source.matchAll(/tabIndex=/g)].length, 0, `${name} 里出现了 tabIndex`);
     }
   });
@@ -280,6 +320,22 @@ describe('拖动区的祖先必须干净（no-drag 矩形会被做差减掉）',
     assert.match(divider, /tabIndex=\{0\}/, '唯一那处 tabIndex 不在伴读分隔条上');
     // 分隔条本身被宿主判成 no-drag 是**无害**的：它是一条 6px 竖条，不与任何拖动行重叠。
     assert.doesNotMatch(divider, /data-window-drag/, '分隔条既想当拖动行又想当键盘可聚焦控件，语义冲突');
+  });
+
+  test('★ 日记那两条的祖先确实是**日记自己的** DOM（多类名 / 模板串都定位对了）', () => {
+    // 为什么单列一条：日记那半边有两个容易「查错地方」的坑，而查错之后断言**依然是绿的**
+    // （它查到的是一段干净但无关的标签）：
+    //   ① `.npr-reader` 在这里写成 `className="npr-reader npr-diary-reader"`，
+    //      只有 `openTagOf` 的第三个回退分支（`"npr-reader `）能命中；
+    //   ② `.npr-workarea` 是模板串 `className={`npr-workarea${...}`}`，
+    //      只有第二个回退分支（`npr-workarea${`）能命中。
+    // 两条都靠「取到的标签里含有**只有日记才有**的那个类名」来自证。
+    assert.match(openTagOf(diaryCode, 'npr-reader'), /npr-diary-reader/, '.npr-reader 定位到的不是日记那个 section');
+    assert.match(openTagOf(diaryCode, 'npr-workarea'), /npr-workarea/, 'npr-workarea 没定位到');
+    // 日记的祖先链是**自己文件里的**那一份，不是订阅/书架的同名元素。
+    assert.match(openTagOf(diaryCode, 'npr-sidebar'), /^<aside/, '日记的 .npr-sidebar 不是 <aside>');
+    // 反向对照：同一个类名在 ReaderPage 里是另一份标签，两者不能混。
+    assert.doesNotMatch(openTagOf(code, 'npr-reader'), /npr-diary-reader/, 'ReaderPage 的 .npr-reader 混进了日记的类名');
   });
 
   test('★ 反向对照：书架那半边的祖先链真的被判据看过（喂一个已知会坏的样本）', () => {
@@ -456,5 +512,98 @@ describe('书架页未选中书时，阅读区那条拖动行真的渲染得出�
     });
     assert.doesNotMatch(html, DRAG_ROW_RE,
       '条件反了居然还渲染出拖动行 —— 说明这条断言根本没在看那个条件（假绿）');
+  });
+});
+
+/**
+ * 与 build.mjs 同配置地打一份 `ReaderPage`；`mutate` 可改真源码。
+ *
+ * ★ `.css` 必须给 `empty` loader：`ReaderPage.jsx` 顶部 `import './refinements.css'`，
+ *   不配这一项 esbuild 会以「Cannot import ... without an output path」**直接失败**
+ *   （不是警告）—— 而报错长在 esbuild 内部，读起来跟本测试毫无关系。
+ */
+async function bundleReaderPage(mutate) {
+  const plugins = mutate ? [{
+    name: 'mutate-reader-page',
+    setup(build) {
+      build.onLoad({ filter: /ReaderPage\.jsx$/ }, (args) => {
+        const before = readFileSync(args.path, 'utf8');
+        const contents = before.replace(mutate.from, mutate.to);
+        if (contents === before) throw new Error(`变异没有生效（锚点没命中）：${mutate.from}`);
+        return { contents, loader: 'jsx' };
+      });
+    },
+  }] : [];
+  const result = await esbuild.build({
+    stdin: {
+      contents: `export { ReaderPage } from ${JSON.stringify(join(clientDir, 'ReaderPage.jsx'))};`,
+      loader: 'js',
+      resolveDir: join(here, '..'),
+    },
+    plugins,
+    bundle: true,
+    external: ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/*'],
+    platform: 'browser',
+    loader: { '.css': 'empty' },
+    format: 'cjs',
+    target: 'chrome120',
+    jsx: 'automatic',
+    jsxImportSource: 'react',
+    define: { __NPIE_READER_VERSION__: JSON.stringify(PLUGIN_VERSION) },
+    sourcemap: false,
+    logLevel: 'silent',
+    legalComments: 'none',
+    write: false,
+  });
+  return result.outputFiles[0].text;
+}
+
+/** 渲染 `ReaderPage` 并返回 HTML。SSR 下 effect 不跑、`selected` 为空 ⇒ 正好是欢迎页。 */
+async function renderReaderPage(mutate) {
+  const code = await bundleReaderPage(mutate);
+  const module = { exports: {} };
+  const noop = () => {};
+  const context = createContext({
+    console, setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask,
+    URL, URLSearchParams, TextEncoder, TextDecoder, AbortController,
+    localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
+    navigator: { userAgent: 'node' },
+    fetch: async () => ({ ok: false, status: 500, headers: { get: () => null }, json: async () => ({}), text: async () => '' }),
+    window: {
+      addEventListener: noop,
+      removeEventListener: noop,
+      localStorage: { getItem: () => null },
+      matchMedia: () => ({ matches: false, addEventListener: noop, removeEventListener: noop }),
+    },
+    document: { addEventListener: noop, removeEventListener: noop, documentElement: { dataset: {} } },
+    module,
+    exports: module.exports,
+    require: makeRequire(),
+  });
+  runInContext(code, context, { filename: 'reader-page.cjs' });
+  const { ReaderPage } = module.exports;
+  assert.equal(typeof ReaderPage, 'function', 'ReaderPage 没导出 —— 装置失效');
+  return renderToStaticMarkup(React.createElement(ReaderPage, { api: {}, SessionProvider: undefined, renderSlot: undefined }));
+}
+
+describe('订阅页没选中文章时，阅读区那条拖动行真的渲染得出来（0.28.3）', () => {
+  test('欢迎页里就有 `.npr-book-toolbar[data-window-drag]`', async () => {
+    const html = await renderReaderPage();
+    // 先自证测的是哪个状态：反过来的话，下面那条失败时分不清是「拖动行没渲染」
+    // 还是「根本渲染了文章工具栏那一支」。
+    assert.match(html, /class="npr-welcome"/, '渲染出来的不是欢迎页 —— 测的不是「没选中文章」这个状态');
+    assert.doesNotMatch(html, /class="npr-reader-toolbar"/, '渲染出了文章工具栏 —— 测的不是「没选中文章」这个状态');
+    assert.match(html, DRAG_ROW_RE,
+      '欢迎页没有拖动行 —— 面板右侧那一整块又变成拖不动了（用户 2026-10-26 报的症状）');
+  });
+
+  test('★ 反向对照：把那条拖动行删掉必须渲染不出来（证明这条断言有牙）', async () => {
+    const html = await renderReaderPage({
+      from: '<div className="npr-book-toolbar" data-window-drag />',
+      to: '',
+    });
+    assert.match(html, /class="npr-welcome"/, '变异后连欢迎页都没了 —— 对照样本本身失效');
+    assert.doesNotMatch(html, DRAG_ROW_RE,
+      '拖动行删掉了居然还在 —— 说明这条断言根本没在看那个位置（假绿）');
   });
 });
