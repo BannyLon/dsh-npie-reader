@@ -2694,8 +2694,10 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
      用户 2026-10-27 的结论是「点了没有任何标注」。现在是**留到下一条被点或换天**。
    ★ 用左侧竖线而不是整块底色：底色会把这一条读成「被选中的卡片」，而它只是「刚才在这里」。 */
 .npr-diary-entry.is-focus { margin-inline: -10px; padding-inline: 10px; border-radius: 8px; background: color-mix(in srgb, var(--npr-accent) 7%, transparent); box-shadow: inset 2px 0 0 var(--npr-accent); }
-/* `padding-right` 是给绝对定位的按钮让位：head 行左半边只有时间，右半边本来就是空的。 */
-.npr-diary-entry-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 18px; padding-right: 74px; }
+/* `padding-right` 是给绝对定位的按钮让位：head 行左半边只有时间 / 日期，右半边本来就是空的。
+   取 124px 是因为**读后感**那一路的按钮多一个文字按钮「AI 整理这一篇」（约 90px + 删除 26px），
+   74px 只够灵感侧一个图标按钮。 */
+.npr-diary-entry-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 18px; padding-right: 124px; }
 .npr-diary-time { font-size: 12px; font-weight: 600; color: var(--npr-fg); font-variant-numeric: tabular-nums; }
 .npr-diary-kind { padding: 1px 7px; border-radius: 5px; background: color-mix(in srgb, var(--npr-fg) 8%, transparent); color: var(--npr-muted); font-size: 11px; }
 .npr-diary-source-tag { min-width: 0; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--npr-muted); }
