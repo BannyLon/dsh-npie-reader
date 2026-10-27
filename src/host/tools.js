@@ -85,14 +85,22 @@ export const TOOL_NAMES = {
   bookSearch: 'book_search',
   bookAnnotations: 'book_annotations',
   bookExportSkill: 'book_export_skill',
-  // ---- 日记（2026-10-26）------------------------------------------------
+  // ---- 日记（2026-10-26；2026-10-27 补 update / delete）------------------
   //
-  // ★ 三个工具，而不是一个「什么都能干」的：两个只读、一个只追加。
-  //   **没有**「改写」「删除」这两个动作 —— 日记是用户自己的私人文稿，让模型去改它，
-  //   最坏情况是「我明明没这么写过」，而且事后无法分辨。要改，用户自己在界面上改。
-  //   ★ 这条边界也写进了 `reading-scope.js` 的日记上下文：模型知道自己只有 append。
+  // ★ 五个工具，而不是一个「什么都能干」的：三个只读、一个追加、一个改写、一个删除。
+  // ★ 0.34 之前**故意没有**「改写」「删除」，理由是「日记是用户的私人文稿，让模型改它，
+  //   最坏情况是『我明明没这么写过』」。这条理由在 2026-10-27 被用户推翻了：
+  //   「AI 整理为什么只能往灵感里追加新条目，不能改也不能删。我需要的是能改能删」。
+  //   真实的失败模式反过来了 —— 只有 append 时，模型把「压成三条」执行成「再追加三条」，
+  //   原稿留在原地，用户得到的是**重复**，而不是「被改过的稿子」。
+  // ⇒ 保留的护栏不是「不给能力」，而是三件事：
+  //   ① 改与删都必须先 `diary_today` 拿到编号，模型不能自己数；
+  //   ② 私密日记仍然读不到、也改不到（`scope` 固定 public，不开放给模型）；
+  //   ③ 删除的描述里写明「不可撤销、含糊时先问」，把「自作主张整理」挡在提示层。
   diaryToday: 'diary_today',
   diaryAppend: 'diary_append',
+  diaryUpdate: 'diary_update',
+  diaryDelete: 'diary_delete',
   diarySearch: 'diary_search',
 };
 
@@ -672,14 +680,17 @@ export function createToolDefinitions(service) {
 
     // ---- 日记 ------------------------------------------------------------
     //
-    // ★ 三个工具的描述里都写清「只读 / 只追加」，不是客套：模型对工具的边界
-    //   是从 description 里读出来的，而它一旦以为 `diary_append` 能改旧内容，
-    //   就会把「打磨后的整篇」再追加一遍 —— 用户第二天打开会看到两篇几乎一样的
-    //   日记，且分不清哪篇是原稿。
+    // ★ 五个工具的描述里都写清「只读 / 只追加 / 改写 / 删除」，不是客套：模型对工具的
+    //   边界是从 description 里读出来的。0.34 之前只有 append，于是「把今天这五条压成
+    //   三条」只能靠**再追加三条**实现 —— 用户 2026-10-27 的原话是「AI 整理为什么只能
+    //   往灵感里追加新条目，不能改也不能删。我需要的是能改能删」。现在有了
+    //   `diary_update` / `diary_delete`，`diary_append` 的描述也必须跟着改掉那句
+    //   「这是一条只能追加的路」：描述不改，模型会继续按老边界办事。
     //
     // ★ **工具侧刻意没有 `vis` 参数，也刻意读不到私密日记**（2026-10-26）：
     //   `diary_search` 不传 `includePrivate`（store 的默认值是 false），
-    //   `diary_today` 走 `read` 而不是 `readFull`，`diary_append` 没有 `vis` 参数。
+    //   `diary_today` 走 `read` 而不是 `readFull`，`diary_append` 没有 `vis` 参数，
+    //   `diary_update` / `diary_delete` 的 `scope` 也**不开放给模型**（固定 public）。
     //   这不是漏了，是边界：私密日记的内容不该经过模型。将来要「让 AI 也读私密」，
     //   那是一个需要单独想清楚、并由用户显式打开的决定 —— 不要在这里顺手加个参数。
     defineTool({
@@ -700,10 +711,16 @@ export function createToolDefinitions(service) {
         const lines = [
           `「${day.date}」共 ${day.entries.length} 条，${day.chars} 字：`,
           '',
+          // ★ 编号从 0 开始、而且要**显式写在每一行开头**：`diary_update` /
+          //   `diary_delete` 的 `index` 就是它。写成「1.」会让人（和模型）拿 1 去传，
+          //   而 0 号条目永远改不到 —— 这种差一位的错，报告里看不出来。
+          '（下面的编号从 0 开始，改写 / 删除时把它原样传给 index）',
+          '',
         ];
         day.entries.forEach((entry, index) => {
           const head = [
-            `${index + 1}. ${entry.time}`,
+            `[${index}]`,
+            entry.time,
             entry.kind,
             entry.source ? `引自 ${entry.source}` : null,
           ].filter(Boolean).join(' · ');
@@ -715,7 +732,7 @@ export function createToolDefinitions(service) {
     }),
     defineTool({
       name: TOOL_NAMES.diaryAppend,
-      description: 'Append ONE new entry to the reader\'s diary (default: today\'s file). This only ever APPENDS — it never edits or deletes what is already written, so pass just the new text, never the whole day. Use it when the user asks you to write something down, or asks you to polish an entry and keep the result (then say plainly that the polished version was added as a NEW entry and the original is still there). Max 20,000 characters per entry; a whole day is capped at 200,000.',
+      description: 'Append ONE new entry to the reader\'s diary (default: today\'s file). This ONLY appends; it never edits or deletes what is already written. If the user asks you to rewrite, shorten or merge existing entries, use diary_update (same entry) or diary_delete (remove one) instead of appending a second copy — appending the polished version leaves the original in place, and the user then has two entries saying almost the same thing. Max 20,000 characters per entry; a whole day is capped at 200,000.',
       parameters: {
         body: { type: 'string', description: 'The entry text. Markdown allowed.', required: true },
         kind: { type: 'string', description: '灵感 (a thought) | 日记 (a journal entry) | 读后感 (a reflection after reading something). Default 灵感.' },
@@ -736,6 +753,54 @@ export function createToolDefinitions(service) {
           body: args.body,
         });
         return `已追加到 ${result.date} ${result.time}（这一天第 ${result.index + 1} 条，现在共 ${result.chars} 字）。\n\n文件：${result.path}`;
+      },
+    }),
+    defineTool({
+      name: TOOL_NAMES.diaryUpdate,
+      description: 'Rewrite ONE existing diary entry IN PLACE (the entry keeps its position, time and kind unless you change them). Use this whenever the user says "把这条改成…", "这一条压缩一下", "把今天这几条合并成一条" — i.e. the result should REPLACE what is there, not sit next to it. Get the index from diary_today first; the index is the [n] shown in front of each entry and is 0-based. Rewriting is destructive: the previous text is gone. If the user only wants an alternative version to look at, append instead and say so.',
+      parameters: {
+        date: { type: 'string', description: 'YYYY-MM-DD of the day that holds the entry. Omit for today.' },
+        index: { type: 'number', description: 'Which entry, as the [n] printed by diary_today (0-based).', required: true },
+        body: { type: 'string', description: 'The new full text of THIS entry (not the whole day). Markdown allowed. Must not be empty — to remove an entry use diary_delete.', required: true },
+        time: { type: 'string', description: 'HH:MM. Only pass it if the user wants the time changed too; otherwise the original time is kept.' },
+        kind: { type: 'string', description: 'Only pass it to change the kind. Otherwise the original kind is kept.' },
+        source: { type: 'string', description: 'Only pass it to change what this entry refers to.' },
+      },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => text(value),
+      },
+      execute: async (args) => {
+        if (String(args.body ?? '').trim() === '') {
+          return '改写后的正文是空的。要删掉这一条，请用 diary_delete。';
+        }
+        const result = await service.diaryUpdate({
+          date: args.date,
+          index: args.index,
+          // ★ 工具侧固定 public：模型读不到私密日记，也就不该改得到它。
+          scope: 'public',
+          body: args.body,
+          time: args.time,
+          kind: args.kind,
+          source: args.source,
+        });
+        return `已改写 ${result.date} 的第 ${result.index} 条（${result.time} · ${result.kind}），这一天现在 ${result.chars} 字。原文已被替换。`;
+      },
+    }),
+    defineTool({
+      name: TOOL_NAMES.diaryDelete,
+      description: 'Delete ONE diary entry permanently. Use it when the user says "删掉这条", or as the second half of a merge ("把这几条合并成一条" = update one, delete the rest — delete the survivors-by-accident only after the merged text is written). Get the index from diary_today first (0-based). This cannot be undone, so never call it on your own initiative to "tidy up": ask first if the request is ambiguous about which entry.',
+      parameters: {
+        date: { type: 'string', description: 'YYYY-MM-DD of the day that holds the entry. Omit for today.' },
+        index: { type: 'number', description: 'Which entry, as the [n] printed by diary_today (0-based).', required: true },
+      },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => text(value),
+      },
+      execute: async (args) => {
+        const result = await service.diaryRemove({ date: args.date, index: args.index, scope: 'public' });
+        return `已删掉 ${result.date} 的第 ${result.index} 条（${result.kind} · ${result.time}）。这一天还剩 ${result.entries} 条、${result.chars} 字。`;
       },
     }),
     defineTool({

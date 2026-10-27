@@ -5,6 +5,10 @@ coverage/
 .cache/
 # 构建产物（`npm run build` 生成；`prepack` 会重建，不进版本库）
 lib/
+# 日记编辑器的 vendor 产物（build.mjs 第三段从 src/vendor/editor-entry.js 打出来）。
+# 与 lib/ 同理：`files` 白名单里有 vendor/**/*，prepack 会重建，所以不入库 ——
+# 否则每次升级 Milkdown 都是一份 373 KB 的压缩产物 diff。
+vendor/editor/
 # 测试用的构建产物（`test/helpers/host-bundle.mjs` 每次重新生成，不该进版本库）
 test/.build/
 # 测试临时目录（`mkdtemp` 落在 test/.tmp 下，跑完不保证清干净）

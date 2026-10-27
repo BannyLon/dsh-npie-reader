@@ -375,8 +375,33 @@ export function removeEntryText(text, index) {
   return { key, entries: kept, text: buildDay(key, kept) };
 }
 
-/** 一天的总字数。★ 口径：**去掉所有空白后的字符数**，与界面上显示的那个数字同源。 */
-export function dayCharCount(entries) {
+/**
+ * 按序号改写一条，返回新全文。
+ *
+ * ★ 只改**这一条**：时间、类型、来源、元数据都沿用原来的，除非 `patch` 里显式给了。
+ *   「改写正文」不该顺手把 09:30 变成现在的时刻 —— 那会让时间轴上的位置说谎。
+ * ★ 与 `removeEntryText` 一样走 `buildDay` 重排：改写本来就是一次结构性编辑。
+ * ★ `patch.body` 允许为空串以外的一切；空串视为「不合法」由调用方（store）拦，
+ *   否则一次误调用就会把一条日记悄悄清空 —— 删除有 `removeEntry`，不该用改写代替。
+ */
+export function updateEntryText(text, index, patch = {}) {
+  const { entries } = parseDay(text);
+  if (!Number.isInteger(index) || index < 0 || index >= entries.length) return null;
+  const before = entries[index];
+  const next = {
+    ...before,
+    ...(typeof patch.body === 'string' ? { body: patch.body } : {}),
+    ...(typeof patch.time === 'string' && patch.time !== '' ? { time: patch.time } : {}),
+    ...(typeof patch.kind === 'string' && patch.kind !== '' ? { kind: patch.kind } : {}),
+    ...(patch.source !== undefined ? { source: patch.source } : {}),
+    ...(patch.meta !== undefined ? { meta: patch.meta } : {}),
+  };
+  const entries2 = entries.map((entry, at) => (at === index ? next : entry));
+  const key = (splitFrontmatter(text).front.match(/^date:\s*(\S+)/m) ?? [])[1] ?? '';
+  return { key, before, entry: next, entries: entries2, text: buildDay(key, entries2) };
+}
+
+/** 一天的总字数。★ 口径：**去掉所有空白后的字符数**，与界面上显示的那个数字同源。 */export function dayCharCount(entries) {
   return entries.reduce((sum, entry) => sum + (entry.body ?? '').replace(/\s/g, '').length, 0);
 }
 

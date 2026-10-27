@@ -2477,7 +2477,7 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
      四个汉字被拉开字距、压成 10.5px 之后，读起来像一排**工具栏的机器标签**，
      而它其实是内容分组。现在按内容来排：字重 600、颜色退一档、下面留 6px。 */
 .npr-diary-sect-head { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; padding: 0 14px; font-size: 11px; font-weight: 600; letter-spacing: 0; color: var(--npr-muted); text-transform: none; }
-.npr-diary-sect-badge { padding: 0 5px; border-radius: 999px; background: color-mix(in srgb, var(--npr-fg) 8%, transparent); color: var(--npr-faint); font-size: 10px; font-weight: 500; letter-spacing: 0; }
+.npr-diary-sect-badge { padding: 0 5px; border-radius: 999px; background: color-mix(in srgb, var(--npr-fg) 8%, transparent); color: var(--npr-faint); font-size: 11px; font-weight: 500; letter-spacing: 0; font-variant-numeric: tabular-nums; }
 .npr-diary-sect-note { margin: 2px 0 6px; padding: 0 14px; font-size: 11.5px; line-height: 1.65; color: var(--npr-faint); }
 .npr-diary-sect-note.is-error { color: var(--dsw-alias-state-error-primary); }
 
@@ -2508,6 +2508,10 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-diary-daylist { margin: 0 6px 2px 16px; padding: 2px 0 2px 10px; border-left: 1px solid var(--npr-border); list-style: none; }
 .npr-root button.npr-diary-dayitem { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 4px 6px; border: 0; border-radius: 5px; background: transparent; color: var(--npr-muted); font: inherit; text-align: left; cursor: pointer; }
 .npr-root button.npr-diary-dayitem:hover { background: var(--npr-hover); color: var(--npr-fg); }
+/* 「刚点过的那一条」。右侧正文里同一条也在高亮（`.npr-diary-entry.is-focus`）——
+   两处同时亮，用户才不用自己在一屏里找哪一个对应哪一个。 */
+.npr-root button.npr-diary-dayitem.is-focus { background: color-mix(in srgb, var(--npr-accent) 12%, transparent); color: var(--npr-fg); box-shadow: inset 2px 0 0 var(--npr-accent); }
+.npr-root button.npr-diary-dayitem.is-focus .npr-diary-dayitem-time { color: var(--npr-fg); }
 /* 时间轴上的时刻是功能性文本（用户靠它定位到那一条），11px 是下限。 */
 .npr-diary-dayitem-time { flex: 0 0 auto; font-size: 11px; color: var(--npr-faint); font-variant-numeric: tabular-nums; }
 .npr-diary-dayitem-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
@@ -2553,6 +2557,45 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
    用 fg/bg 混到 65%：实测 4.6:1 达标，仍明显弱于输入正文（100% fg），深浅主题各自成立。 */
 .npr-write-input::placeholder { color: color-mix(in srgb, var(--npr-fg) 65%, var(--npr-bg)); }
 .npr-write-input:disabled { opacity: .6; }
+/* ---- 富文本编辑器（Milkdown / ProseMirror）--------------------------------
+   第三方底座的**外观**全部归我们管：Milkdown 只负责「文档模型 + 编辑行为」，
+   样式一行都没带过来（它自带的 theme 包是 sass 源码，也没法在这里用）。
+   所以这里要把它渲染出来的 HTML 逐个元素接回 `--npr-*` 这套变量上。
+   ★ 编辑器没就绪（`data-ready="no"`）时整块收掉，让 textarea 顶上：
+     两者是同一个值的两个视图，不是并存的两个输入框。 */
+.npr-write-rich { display: none; }
+.npr-write-rich[data-ready="yes"] { display: block; }
+.npr-write-rich .ProseMirror { min-height: 76px; max-height: 320px; overflow: auto; padding: 2px 0 6px; outline: none; color: var(--npr-fg); font-size: 15px; line-height: 1.85; }
+.npr-write[data-variant=reflection] .npr-write-rich .ProseMirror { min-height: 140px; }
+.npr-write[data-variant=private] .npr-write-rich .ProseMirror { min-height: 96px; }
+.npr-write-rich .ProseMirror > * { margin: 0 0 .6em; }
+.npr-write-rich .ProseMirror > :last-child { margin-bottom: 0; }
+/* 占位提示。
+   ★ 不走 `.ProseMirror:empty::before` 那条路：ProseMirror 的空文档是一个**只含
+     `<br class="ProseMirror-trailingBreak">` 的 `<p>`**，不是空节点；用 `:has()` 去认
+     它，在预览图里实测没渲染出来（判据太脆）。改成在编辑器上盖一层真实的 `<span>`，
+     有字就整层不渲染、聚焦时 CSS 收掉 —— 两种方式都行，这条是确定的。 */
+.npr-write-ph { position: absolute; top: 10px; left: 0; right: 0; pointer-events: none; color: color-mix(in srgb, var(--npr-fg) 65%, var(--npr-bg)); font-size: 15px; line-height: 1.85; }
+.npr-write:focus-within .npr-write-ph { display: none; }
+.npr-write-rich .ProseMirror h1,
+.npr-write-rich .ProseMirror h2,
+.npr-write-rich .ProseMirror h3 { font-size: 16px; font-weight: 600; line-height: 1.6; margin: .9em 0 .45em; }
+.npr-write-rich .ProseMirror h1:first-child,
+.npr-write-rich .ProseMirror h2:first-child,
+.npr-write-rich .ProseMirror h3:first-child { margin-top: 0; }
+.npr-write-rich .ProseMirror ul,
+.npr-write-rich .ProseMirror ol { padding-left: 1.4em; }
+.npr-write-rich .ProseMirror li { margin: .18em 0; }
+.npr-write-rich .ProseMirror li > p { margin: 0; }
+.npr-write-rich .ProseMirror blockquote { margin: .7em 0; padding: 2px 0 2px 12px; border-left: 2px solid var(--npr-border-strong); color: var(--npr-muted); }
+.npr-write-rich .ProseMirror hr { margin: 1.1em 0; border: 0; border-top: 1px solid var(--npr-border); }
+.npr-write-rich .ProseMirror a { color: var(--npr-accent-strong); text-decoration: underline; }
+.npr-write-rich .ProseMirror code { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--npr-fg) 7%, transparent); font-size: .92em; }
+.npr-write-rich .ProseMirror pre { margin: .7em 0; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--npr-fg) 6%, transparent); overflow: auto; }
+.npr-write-rich .ProseMirror pre code { padding: 0; background: transparent; font-size: .9em; }
+/* 选中态与光标：不引入品牌色描边，只让选区自己说话。 */
+.npr-write-rich .ProseMirror ::selection { background: color-mix(in srgb, var(--npr-accent) 26%, transparent); }
+.npr-write-rich .ProseMirror-gapcursor::after { border-top-color: var(--npr-fg); }
 /* 预览态：与正文同一套排版（markdown → sanitize 后的 HTML），只是更紧凑。 */
 .npr-write-preview { min-height: 76px; padding: 2px 0 6px; font-size: 15px; line-height: 1.85; color: var(--npr-fg); }
 .npr-write-preview > :first-child { margin-top: 0; }
@@ -2640,15 +2683,26 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 /* 条目 */
 .npr-diary-blank { padding: 26px 4px; color: var(--npr-muted); font-size: 13px; line-height: 1.9; }
 .npr-diary-blank p { margin: 0; }
-.npr-diary-entry { padding: 14px 0 16px; border-top: 1px solid var(--npr-border); }
-/* 从侧栏时间轴点进来的那一条：淡底 + 左侧一道竖线，1.8 秒后自己褪掉（见 DiaryApp 的 effect）。
+/* ★ 0.36：密度。0.35 的 `14px 0 16px` 让「时间 + 一行字」占 93px，其中 42% 是空白 ——
+   一屏（572px）只放得下 6 条，一天 20 条就要滚 3 屏。用户 2026-10-27 的原话是
+   「是不是会拉长页面很长，要滚动好久，从使用体验上这是不是失败的设计」。
+   现在上下 9/10、头部行 18px、正文间距 6，同一条降到约 72px，一屏 8 条。
+   ★ `position: relative` 是给下面那个绝对定位的操作按钮留的锚。 */
+.npr-diary-entry { position: relative; padding: 9px 0 10px; border-top: 1px solid var(--npr-border); }
+/* 从侧栏时间轴点进来的那一条：左侧一道竖线 + 淡底。
+   ★ 0.33–0.35 这里是「1.8 秒后自己褪掉」——平滑滚动还没落位，标注就开始消失，
+     用户 2026-10-27 的结论是「点了没有任何标注」。现在是**留到下一条被点或换天**。
    ★ 用左侧竖线而不是整块底色：底色会把这一条读成「被选中的卡片」，而它只是「刚才在这里」。 */
 .npr-diary-entry.is-focus { margin-inline: -10px; padding-inline: 10px; border-radius: 8px; background: color-mix(in srgb, var(--npr-accent) 7%, transparent); box-shadow: inset 2px 0 0 var(--npr-accent); }
-.npr-diary-entry-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* `padding-right` 是给绝对定位的按钮让位：head 行左半边只有时间，右半边本来就是空的。 */
+.npr-diary-entry-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 18px; padding-right: 74px; }
 .npr-diary-time { font-size: 12px; font-weight: 600; color: var(--npr-fg); font-variant-numeric: tabular-nums; }
 .npr-diary-kind { padding: 1px 7px; border-radius: 5px; background: color-mix(in srgb, var(--npr-fg) 8%, transparent); color: var(--npr-muted); font-size: 11px; }
 .npr-diary-source-tag { min-width: 0; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--npr-muted); }
-.npr-diary-entry-actions { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+/* ★ 按钮**脱离文档流**：它落在 head 行的右端，而那一行右半边是空的 ——
+   绝对定位不会盖住任何字，却能让 head 的高度只由「时间」决定。
+   留在流里的话，26px 的按钮会把 head 从 18px 撑到 26px，每条白占 8px。 */
+.npr-diary-entry-actions { position: absolute; top: 5px; right: 0; display: inline-flex; align-items: center; gap: 4px; }
 .npr-root .npr-diary-action { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 26px; padding: 0 8px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; cursor: pointer; }
 .npr-root .npr-diary-action:hover:not(:disabled) { border-color: var(--npr-border-strong); color: var(--npr-fg); }
 .npr-root .npr-diary-action:disabled { opacity: .5; cursor: not-allowed; }
@@ -2657,7 +2711,7 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 /* ★ 字号/行高**不吃** `--npr-font-size` / `--npr-line-height`（那是阅读设置，
    默认 19px / 1.9），改由 `.npr-diary-sheet` 的 15px 继承下来，与写入口同一个尺寸。
    行高取 1.85 与 `.npr-write-input` 对齐：写的时候看到的行距，就是读的时候的行距。 */
-.npr-diary-body { margin: 8px 0 0; line-height: 1.85; color: var(--npr-fg); }
+.npr-diary-body { margin: 6px 0 0; line-height: 1.85; color: var(--npr-fg); }
 .npr-diary-body > :first-child { margin-top: 0; }
 .npr-diary-body > :last-child { margin-bottom: 0; }
 .npr-diary-body p { margin: 0 0 .7em; }
@@ -2666,6 +2720,15 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-diary-body code { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--npr-fg) 8%, transparent); font-size: .92em; }
 .npr-diary-body a { color: var(--npr-fg); text-decoration: underline; text-underline-offset: 2px; }
 .npr-diary-body-plain { white-space: pre-wrap; }
+/* 私密条目「收着」的样子。虚线边框是有意的：它说的是「这里有一个洞，
+   不是一段文字」，实线加底色会被读成一张内容卡。
+   ★ 收着的时候 DOM 里**没有**正文节点 —— 这不是 CSS 遮蔽，是没渲染。 */
+.npr-diary-veil { display: flex; align-items: baseline; gap: 8px; width: 100%; margin: 10px 0 0; padding: 11px 13px; border: 1px dashed var(--npr-border-strong); border-radius: 8px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
+.npr-diary-veil:hover { border-color: var(--npr-accent); color: var(--npr-fg); }
+.npr-diary-veil:focus-visible { outline: 2px solid var(--npr-accent); outline-offset: 1px; }
+.npr-diary-veil-meta { margin-left: auto; font-size: 11px; color: var(--npr-faint); font-variant-numeric: tabular-nums; }
+.npr-diary-veil-close { display: block; margin: 8px 0 0; padding: 0; border: 0; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11.5px; cursor: pointer; }
+.npr-diary-veil-close:hover { color: var(--npr-fg); text-decoration: underline; }
 .npr-diary-foot { margin: 24px 0 0; font-size: 11px; color: var(--npr-faint); word-break: break-all; }
 
 /* ── 日记 0.31：情绪 / 私密 / 标签 / 时间轴 ─────────────────────────────
@@ -2741,8 +2804,8 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 
 /* 条目上的小标记 */
 .npr-diary-mood { font-size: 13px; line-height: 1; }
-.npr-diary-lock { padding: 1px 6px; border: 1px dashed var(--npr-border-strong); border-radius: 5px; color: var(--npr-muted); font-size: 10px; }
-.npr-diary-tagrow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.npr-diary-lock { padding: 1px 6px; border: 1px dashed var(--npr-border-strong); border-radius: 5px; color: var(--npr-muted); font-size: 11px; }
+.npr-diary-tagrow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .npr-root .npr-diary-tag { padding: 1px 7px; border: 1px solid var(--npr-border); border-radius: 6px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; cursor: pointer; }
 .npr-root .npr-diary-tag:hover { border-color: var(--npr-border-strong); color: var(--npr-fg); }
 
@@ -2754,6 +2817,34 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-root .npr-diary-tagchip { display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 9px; border: 1px solid var(--npr-border); border-radius: 999px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; cursor: pointer; }
 .npr-root .npr-diary-tagchip:hover { border-color: var(--npr-accent); }
 .npr-diary-tagcount { font-size: 11px; color: var(--npr-faint); font-variant-numeric: tabular-nums; }
+/* 「全部 N 个 ›」：标签云的**页脚入口**，左右 14px 与区块其它内容对齐。
+   ★ 不用胶囊、不用底色 —— 它属于标签云的页脚，不该长成第 N+1 个标签。
+   ★ 0.36 起它不再是「还有 N 个 / 收起」的展开开关，而是打开**全量浮层**：
+     268px 的侧栏在任何阈值下都装不下几千个标签（见 DiaryApp 里 TAG_SIDE 的注释）。 */
+.npr-diary-tagmore { display: block; margin: 0 14px 8px; padding: 0; border: 0; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11.5px; cursor: pointer; text-align: left; }
+.npr-diary-tagmore:hover { color: var(--npr-fg); text-decoration: underline; }
+
+/* 「更早还有 N 条 · 展开」：一天的记录默认只铺最近 DAY_PREVIEW 条。
+   ★ 它是「一条分割线 + 一个按钮」，不是又一条记录 —— 所以没有时间、没有正文间距。
+   ★ 必须印数字：没有数字的折叠等于把内容藏起来，用户会以为记录丢了。 */
+.npr-root button.npr-diary-daymore { display: block; width: 100%; margin: 0; padding: 9px 0; border: 0; border-top: 1px solid var(--npr-border); background: transparent; color: var(--npr-muted); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.npr-root button.npr-diary-daymore:hover { color: var(--npr-fg); }
+.npr-root button.npr-diary-daymore::before { content: '↑ '; }
+/* 「更早还有」自己带一条上边线，紧跟着的第一条不要再画一条 —— 那会变成 2px 的双线。 */
+.npr-root button.npr-diary-daymore + .npr-diary-entry { border-top: 0; }
+
+/* ── 标签浮层（`全部 N 个 ›`） ─────────────────────────────────────────
+   盖住整个滚动区，而不是跳去另一页：关掉要能回到原来的滚动位置。
+   用阅读区的完整面积装「全量」，因为 268px 的侧栏装不下几千个 —— 这才是问题的解法。 */
+.npr-tagsheet { position: absolute; inset: 0; z-index: 30; display: flex; flex-direction: column; min-height: 0; padding: 14px 0 0; background: var(--npr-bg); }
+.npr-tagsheet-head { display: flex; align-items: center; gap: 8px; padding: 0 14px 10px; }
+.npr-tagsheet-title { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; font-weight: 600; color: var(--npr-fg); }
+.npr-root .npr-tagsheet-close { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; margin-left: auto; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--npr-muted); cursor: pointer; }
+.npr-root .npr-tagsheet-close:hover { border-color: var(--npr-border-strong); color: var(--npr-fg); }
+.npr-tagsheet-find { display: block; margin: 0 14px 8px; padding: 6px 0; border: 0; border-bottom: 1px solid var(--npr-border); border-radius: 0; background: transparent; color: var(--npr-fg); font: inherit; font-size: 13px; }
+.npr-tagsheet-find::placeholder { color: color-mix(in srgb, var(--npr-fg) 60%, var(--npr-bg)); }
+.npr-tagsheet-find:focus { border-bottom-color: var(--npr-border-strong); outline: none; }
+.npr-tagsheet-cloud { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 6px; padding: 4px 14px 20px; }
 
 /* 读后感工作台：右栏「正文 + 划线侧栏」是一行两列。
    ★ 必须是**两个并排的独立面板**，不是一张卡切两半 —— 划线侧栏有自己的标题与
@@ -2761,7 +2852,9 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-diary-main { flex: 1; min-height: 0; display: flex; }
 /* `.npr-diary-main` 是行方向（正文 + 划线侧栏并排），而失败横幅要压在正文**上方**，
    所以正文这一侧再包一层纵向容器。少了它，横幅会被当成第三个列项。 */
-.npr-diary-flow { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+/* `position: relative` 是给标签浮层（`.npr-tagsheet`）的锚：那一层盖住整个滚动区，
+   而不是跳去另一页 —— 关掉它要能回到原来的滚动位置。 */
+.npr-diary-flow { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .npr-diary-marks { flex: 0 0 auto; width: 300px; display: flex; flex-direction: column; gap: 8px; overflow: auto; overscroll-behavior: contain; padding: 10px 12px 20px; border-left: 1px solid var(--npr-border); }
 .npr-diary-marks-head { display: flex; align-items: baseline; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--npr-border); }
 .npr-diary-marks-head strong { font-size: 12px; color: var(--npr-fg); }

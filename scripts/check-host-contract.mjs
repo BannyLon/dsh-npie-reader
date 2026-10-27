@@ -97,6 +97,10 @@ const OWNED_ATTRS = new Set([
   // 三者都是本插件自己的选择器依据，**不是宿主锚点** —— 登记进 HOST_ANCHORS 会被
   // 下面那条「宿主产物里必须命中」的反向检查判红。
   'data-block', 'data-theme', 'data-depth',
+  // 富文本编辑器（0.35.0）自己写的一个：
+  //   `data-ready` —— 编辑器挂载点上的 `yes`/`no`，自有 CSS 靠它决定「显示编辑器还是
+  //     退回 textarea」（两者是同一个值的两个视图，不能同时可见）。
+  'data-ready',
   // 书内搜索（0.26.0）自己写的一个：
   //   `data-current` —— 当前这一处命中（`true` / `false`），跳转后给它加个描边。
   //   仍然只是自有 CSS 的选择器依据，不是宿主锚点。

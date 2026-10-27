@@ -65,6 +65,28 @@ await esbuild.build({
   },
 });
 
+// ---- vendor: 日记编辑器（Milkdown）-----------------------------------------
+//
+// ★ 单独打一个文件，不进 `lib/client.js`：373 KB 的第三方代码内联进去会直接撞破
+//   「非第一方字节数为 0」那道闸，而那道闸守的正是这件事。客户端按需 `import()`
+//   宿主托管的这个文件（前缀见 `src/library.js` 的 `EDITOR_VENDOR_PREFIX`）。
+// ★ 这里**开 minify**（与主 bundle 相反）：主 bundle 不压缩是为了真机读懂调用栈，
+//   而这一份是第三方代码，读它也没用；压缩后 373 KB。
+// ★ react 不进来：用的是 Milkdown 的 vanilla API，所以产物是一个自足的 ESM，
+//   宿主那边直接按 URL import 就行。
+await esbuild.build({
+  entryPoints: [join(here, 'src/vendor/editor-entry.js')],
+  bundle: true,
+  platform: 'browser',
+  format: 'esm',
+  target: 'chrome120',
+  outfile: join(here, 'vendor/editor/editor.mjs'),
+  minify: true,
+  sourcemap: false,
+  logLevel: 'info',
+  legalComments: 'none',
+});
+
 // ---- client ----------------------------------------------------------------
 
 const banner = `window.__ModuleLoader__.load({

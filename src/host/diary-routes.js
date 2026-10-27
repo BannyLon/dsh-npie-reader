@@ -12,6 +12,7 @@
  *   GET    /days?month=YYYY-MM        某月哪几天有日记、各有几条
  *   GET    /day/:date                 某一天的全部条目（公开 + 私密）
  *   POST   /day/:date/append          追加一条（body: { time?, kind?, source?, meta?, vis?, body }）
+ *   PATCH  /day/:date/entry/:index?scope=private   改写某一条（body 里给要改的字段）
  *   DELETE /day/:date/entry/:index?scope=private   删掉某一条（按序号 + 归属哪一半）
  *   GET    /tags                      标签索引（带次数与最后使用日期）
  *   GET    /timeline?limit=&before=   时间轴（最近的 N 天 + 条目预览）
@@ -151,6 +152,7 @@ function segment(value) {
  *   可选；给了就用它（合并公开 + 私密）。没给则退回 `read`，行为与 0.30.0 一致。
  * @param handlers.append - `async ({ date, time, kind, source, meta, vis, body }) => { date, time, index, chars, path, scope }`
  * @param handlers.removeEntry - `async ({ date, index, scope }) => { date, entries, chars, scope }`
+ * @param handlers.updateEntry - 可选，`async ({ date, index, scope, body, time, kind, source, meta }) => { date, index, time, kind, chars, scope }`
  * @param handlers.listMonth - `async (month) => { month, days, total }`
  * @param handlers.search - `async ({ query, limit, includePrivate }) => { query, hits, scanned, truncated }`
  * @param handlers.tags - 可选，`async ({ includePrivate }) => { tags, scanned, truncated }`
@@ -172,7 +174,7 @@ function segment(value) {
  */
 export function makeDiaryRoutes(handlers = {}) {
   const {
-    read, readFull, append, removeEntry, listMonth, search, tags, timeline, byBook,
+    read, readFull, append, updateEntry, removeEntry, listMonth, search, tags, timeline, byBook,
     exportAll, stats, secretStatus, reveal, gate,
     log = () => {},
   } = handlers;
@@ -485,21 +487,51 @@ export function makeDiaryRoutes(handlers = {}) {
           }
         }
 
-        // DELETE /day/:date/entry/:index?scope=private
+        // PATCH / DELETE /day/:date/entry/:index?scope=private
         if (parts.length === 4 && parts[2] === 'entry') {
-          if (method !== 'DELETE') return methodNotAllowed(res);
           const index = Number(segment(parts[3]));
           if (!Number.isInteger(index) || index < 0) {
             return sendJson(res, 400, { ok: false, error: '无效的条目序号' });
           }
-          // ★ `scope` 必须显式说明删的是哪一半：两个文件各有自己的序号，
-          //   只给一个数字就必然要靠「合并后的下标」反查，反查错一次就是删错一条。
+          // ★ `scope` 必须显式说明动的是哪一半：两个文件各有自己的序号，
+          //   只给一个数字就必然要靠「合并后的下标」反查，反查错一次就是改错 / 删错一条。
           const scope = url.searchParams.get('scope') === 'private' ? 'private' : 'public';
-          // ★ 删除是**破坏性**动作，锁着时必须先解锁：否则拿到本机端口的人可以
-          //   在没有口令的情况下一天一条地把私密日记删空（读不到、也删得掉最坏）。
+          // ★ 改写与删除都是**破坏性**动作，锁着时必须先解锁：否则拿到本机端口的人
+          //   可以在没有口令的情况下一天一条地把私密日记改空、删空。
           if (scope === 'private' && !gateAllow()) {
-            return sendJson(res, 403, { ok: false, error: '私密日记还是锁着的，解锁后才能删', code: 'GATE_LOCKED' });
+            return sendJson(res, 403, { ok: false, error: '私密日记还是锁着的，解锁后才能改', code: 'GATE_LOCKED' });
           }
+
+          // PATCH：改写这一条（正文 / 时间 / 类型 / 来源 / 元数据）
+          if (method === 'PATCH') {
+            if (typeof updateEntry !== 'function') {
+              return sendJson(res, 501, { ok: false, error: '改写日记没有接上' });
+            }
+            if (!(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
+              return sendJson(res, 415, { ok: false, error: '需要 JSON body' });
+            }
+            let patchBody;
+            try {
+              patchBody = await readBody(req);
+            } catch (error) {
+              return fail(res, error);
+            }
+            try {
+              const result = await updateEntry({
+                date, index, scope,
+                body: patchBody.body,
+                time: patchBody.time,
+                kind: patchBody.kind,
+                source: patchBody.source,
+                meta: patchBody.meta,
+              });
+              return sendJson(res, 200, { ok: true, ...result });
+            } catch (error) {
+              return fail(res, error);
+            }
+          }
+
+          if (method !== 'DELETE') return methodNotAllowed(res);
           try {
             return sendJson(res, 200, { ok: true, ...(await removeEntry({ date, index, scope })) });
           } catch (error) {

@@ -140,6 +140,23 @@ export function resolvePdfjsRoot() {
 }
 
 /**
+ * 找内置日记编辑器（Milkdown 构建产物）的绝对路径。
+ *
+ * ★ 与 `resolvePdfjsRoot` 同一条纪律：**按标记文件探测，不猜层级**。
+ *   未打包时 `here` 是 `<plugin>/src/host`，打包后是 `<plugin>/lib` —— 两种都要试。
+ * ★ 找不到时返回空串（不是抛错）：编辑器是**增强**，没有它日记照样能写
+ *   （客户端会退回 textarea）。为一个可选资源让整个插件起不来，不值得。
+ */
+export function resolveEditorRoot() {
+  const here = dirName(fileURLToPath(import.meta.url));
+  const candidates = [joinPath(here, '..', 'vendor', 'editor'), joinPath(here, '..', '..', 'vendor', 'editor')];
+  for (const candidate of candidates) {
+    if (existsSync(joinPath(candidate, 'editor.mjs'))) return resolvePath(candidate);
+  }
+  return '';
+}
+
+/**
  * 找本地 OCR 那个 JXA 脚本的绝对路径。
  *
  * ★ 与 `resolvePdfjsRoot` 同一条纪律：**按标记文件探测，不猜层级**。
@@ -333,6 +350,8 @@ export class RssService {
      */
     this.digestRuns = new Map();
     this.pdfjsRoot = resolvePdfjsRoot();
+    /** 日记编辑器（Milkdown）的构建产物目录；空串 = 没打进来，客户端会退回 textarea。 */
+    this.editorRoot = resolveEditorRoot();
     /**
      * 本地 OCR（扫描页 → 文字）。
      *
@@ -387,6 +406,7 @@ export class RssService {
         cacheUsage: () => this.cacheUsage(),
         cleanCache: () => this.cleanCache(),
         vendorRoot: this.pdfjsRoot,
+        editorRoot: this.editorRoot,
         log: message => ctx.logger.info(message),
       });
       const disposers = routes.map(route => scope.webServer.register(route));
@@ -404,6 +424,7 @@ export class RssService {
         read: date => this.diary.read(date),
         readFull: date => this.diary.readFull(date),
         append: entry => this.diary.append(entry),
+        updateEntry: entry => this.diary.updateEntry(entry),
         removeEntry: entry => this.diary.removeEntry(entry),
         listMonth: month => this.diary.listMonth(month),
         search: options => this.diary.search(options),
@@ -1705,6 +1726,46 @@ export class RssService {
       body: request?.body,
     });
     return result;
+  }
+
+  /**
+   * 改写某一天的一条。
+   *
+   * ★ 与 `diaryAppend` 同一个原则：校验只在 store 里做一遍。
+   * ★ `index` 是**它自己那一半**里的序号（`scope: 'private'` 时是私密文件里的序号）。
+   *   工具层必须先 `diary_today` 拿到带 `index` / `scope` 的条目再改，不允许模型自己数。
+   */
+  async diaryUpdate(request = {}) {
+    await this.ready;
+    return await this.diary.updateEntry({
+      date: request?.date ?? dateKey(),
+      index: request?.index,
+      scope: request?.scope,
+      body: request?.body,
+      time: request?.time,
+      kind: request?.kind,
+      source: request?.source,
+      meta: request?.meta,
+    });
+  }
+
+  /**
+   * 删掉某一天的一条。
+   *
+   * ★ 日期缺省是**今天**（与 `diaryAppend` 一致）：工具调用里 `date` 是可选的，
+   *   而「删掉今天第 2 条」是最常见的说法。
+   * ★ 但 `index` **没有默认值**：删除不可撤销，靠猜一个 0 就能把用户的开头一条删掉。
+   */
+  async diaryRemove(request = {}) {
+    await this.ready;
+    if (!Number.isInteger(request?.index)) {
+      throw new Error('要删这一天的第几条？先读一次那一天，再按它的 index 给（从 0 开始）。');
+    }
+    return await this.diary.removeEntry({
+      date: request?.date ?? dateKey(),
+      index: request.index,
+      scope: request?.scope,
+    });
   }
 
   /** 跨天搜（判据与 `rss_search_articles` / `book_search` 同一条）。 */

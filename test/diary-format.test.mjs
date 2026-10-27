@@ -15,6 +15,7 @@ import {
   buildFrontmatter, dateKey, dayCharCount, dayFileName, entryAt, entryBlock, entryHeading,
   isValidDateKey, isValidMonthKey, metaLine, monthGrid, monthKeyOf, moodScore, normalizeMeta,
   parseDay, parseMetaLine, parseMonthKey, parseTags, removeEntryText, shiftMonth, splitFrontmatter,
+  updateEntryText,
   timeKey,
 } from '../src/diary-format.js';
 
@@ -232,6 +233,49 @@ describe('appendEntryText', () => {
     let text = appendEntryText('', { ...entry({ body: '甲' }), date: '2026-10-26' });
     text = appendEntryText(text, entry({ body: '乙' }));
     assert.ok(!text.includes('\n\n\n'), `出现了三连空行：${JSON.stringify(text)}`);
+  });
+});
+
+describe('updateEntryText', () => {
+  const three = () => {
+    let text = appendEntryText('', { ...entry({ time: '09:00', body: '甲' }), date: '2026-10-26' });
+    text = appendEntryText(text, entry({ time: '10:00', body: '乙' }));
+    text = appendEntryText(text, entry({ time: '11:00', body: '丙' }));
+    return text;
+  };
+
+  it('只改指定的那一条，其余逐字不动', () => {
+    const result = updateEntryText(three(), 1, { body: '乙改' });
+    assert.ok(result);
+    assert.deepEqual(result.entries.map(item => item.body), ['甲', '乙改', '丙']);
+    assert.deepEqual(parseDay(result.text).entries.map(item => item.body), ['甲', '乙改', '丙']);
+  });
+
+  it('★ 时间沿用原来的：改写不该把 10:00 变成「现在」', () => {
+    // 一旦时间被改成当前时刻，时间轴上的位置就在说谎 —— 用户看到的是「我 14:32 写的」，
+    // 而那句话其实是上午十点写的。
+    const result = updateEntryText(three(), 1, { body: '乙改' });
+    assert.equal(result.entries[1].time, '10:00');
+    assert.equal(result.before.time, '10:00');
+  });
+
+  it('显式给了 time / kind 才覆盖（其余字段保住原值）', () => {
+    const result = updateEntryText(three(), 0, { body: '甲改', time: '23:05' });
+    assert.equal(result.entries[0].time, '23:05');
+    assert.equal(result.entries[0].kind, entry().kind);
+  });
+
+  it('★ 越界返回 null（与 removeEntryText 同一套判据）', () => {
+    assert.equal(updateEntryText(three(), 3, { body: 'x' }), null);
+    assert.equal(updateEntryText(three(), -1, { body: 'x' }), null);
+    assert.equal(updateEntryText('', 0, { body: 'x' }), null);
+    assert.equal(updateEntryText('随便一段没有条目的文字', 0, { body: 'x' }), null);
+  });
+
+  it('★ 条数不变（改写不是「再加一条」）', () => {
+    const result = updateEntryText(three(), 0, { body: '全新的甲' });
+    assert.equal(result.entries.length, 3);
+    assert.equal(parseDay(result.text).entries.length, 3);
   });
 });
 

@@ -104,6 +104,17 @@ export const LIBRARY_API_PREFIX = '/api/dsh-npie-reader/library';
 export const PDFJS_VENDOR_PREFIX = '/vendor/npie-reader/pdfjs';
 
 /**
+ * 日记编辑器的静态资源前缀。
+ *
+ * ★ 为什么编辑器要**单独发一份文件**、而不是打进 client bundle：它是第三方代码
+ *   （Milkdown 7，markdown 原生），打包后约 373 KB。内联会把 `lib/client.js`
+ *   顶过体积闸，而那道闸守的正是「有整个依赖被内联进来了」。pdf.js 走的是同一条路
+ *   （动态 `import()` 一个宿主托管的文件），这里照抄，理由一致。
+ * ★ 好处不只是体积：日记页不开就不下载，打开也是**按需**一次。
+ */
+export const EDITOR_VENDOR_PREFIX = '/vendor/npie-reader/editor';
+
+/**
  * 书单索引文件的默认位置：**空串** = 用插件自己数据目录里的 `books.json`。
  *
  * ★ 这里刻意**不写死绝对路径**。0.7.1 之前它指向作者本机那份 ebook-sorter 书单

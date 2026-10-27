@@ -66,6 +66,7 @@ import {
 import { fetchAnnotations, fetchBooks, fetchStates } from './library-api.js';
 import { DiaryCalendar } from './DiaryCalendar.jsx';
 import { DiaryComposer } from './DiaryComposer.jsx';
+import { ensureStyles } from './ReaderPage.jsx';
 import { ViewSwitch } from './ViewSwitch.jsx';
 import { Icon } from './icons.jsx';
 
@@ -112,17 +113,21 @@ function firstMood(...candidates) {
 /**
  * 「AI 整理这一天」的提示词。
  *
- * ★ **不追加回去**（0.32.0 改的）。旧提示词让模型 `diary_append` 一条整理稿到
+ * ★ **不要闷头写回**（0.32.0 的教训）。旧提示词让模型 `diary_append` 一条整理稿到
  *   **同一天**，于是下一次「整理今天」会把上一次的整理稿当成原材料再整理一遍 ——
  *   越滚越不像自己写的，而且原文与整理稿在同一个文件里长得一样，用户分不清哪条是
- *   自己写的。整理稿只在这里给用户看，要不要留由他自己决定。
+ *   自己写的。
+ * ★ 但「不能写回」也是错的（2026-10-27 用户：「AI 整理为什么只能往灵感里追加新条目，
+ *   不能改也不能删。我需要的是能改能删」）。现在工具侧有了 `diary_update` /
+ *   `diary_delete`，所以这里改成**两步**：先给整理稿，等我点头再原地改。
+ *   一句话说清「改哪几条、删哪几条」，不要追加一份副本。
  */
 const AI_DAY_PROMPT = [
   '帮我整理**今天这一整天**的记录（上下文里给了这一天所有的条目，不是某一条）。',
   '保留我的原意和语气，把没说清的地方说清楚，不要编我没写过的事。',
   '几条说的是同一件事就并成一条；只有半句的碎片可以只留一句更准的话。',
-  '整理稿直接给我看，**不要**写回日记 —— 我自己决定要不要留。',
-  '原文不要动。',
+  '先把整理稿给我看，并写清打算怎么落到日记里：哪一条用 diary_update 改写、哪几条用 diary_delete 删掉。',
+  '我说「就这样」你再动手；不要追加一份新的副本 —— 原文要么被改，要么被删，不要在旁边多出一条。',
 ].join('\n');
 
 /**
@@ -131,6 +136,43 @@ const AI_DAY_PROMPT = [
  * ★ 第一条就是原来「AI 整理这一天」自动发出去的那句，所以「点按钮」这个动作
  *   并没有丢：只是从「打开就发」变成「看得见才发」。
  */
+/**
+ * 侧栏里**内联**铺几个标签。
+ *
+ * ★ 6 个是「一眼扫完、不用滚」的量：侧栏 268px 宽，三行 chips 就到头了。
+ *   用户 2026-10-27 第三次追问「几千个标签怎么办」，问的其实不是「铺几个」——
+ *   268px 的栏在任何阈值下都装不下几千个。所以内联只负责「最近在用的几个」，
+ *   完整清单走 `全部 N 个 ›` 打开浮层（阅读区那么大，才放得下搜索 + 分组）。
+ */
+const TAG_SIDE = 6;
+
+/**
+ * 浮层里**不搜索时**最多铺多少个。
+ *
+ * 浮层是阅读区大小（约 900×600），一屏能放七十来个。3000 个全铺出来会让 DOM 变重、
+ * 滚动变黏，而「找某一个」的正确路径是搜索框 —— 不是滚四十屏。搜索时不受这个上限约束：
+ * 关键词已经把范围缩小了，再截断就等于「搜到了却不给你看」。
+ */
+const TAG_SHEET_MAX = 240;
+
+/**
+ * 一天的记录默认铺几条。
+ *
+ * ★ 一天 20 条按 93px/条 就是 3.2 屏，50 条是 8 屏。用户 2026-10-27 的原话：
+ *   「如果记录的过多，是不是会拉长页面很长，要滚动好久，从使用体验上这是不是失败的设计」。
+ *   10 条是「今天大概发生了什么」的量；更早的要专门去翻，所以给一条
+ *   「更早还有 X 条」的显式入口，而不是让人一路滚到底。
+ */
+const DAY_PREVIEW = 10;
+
+/**
+ * 私密条目「看一次」多久之后自己收回。
+ *
+ * 30 秒：够读完一条（一条私密日记通常几行到十几行），又不至于长到「以为它一直开着」。
+ * 这不是权限，是**遮挡的复位**：真正决定能不能看的仍然是口令闸门。
+ */
+const PEEK_MS = 30_000;
+
 const AI_ENTRY_CHIPS = [
   { id: 'entry', title: '整理这一篇', body: AI_ENTRY_PROMPT },
   { id: 'cut', title: '砍掉一半', body: '这一篇里哪些话可以删掉而不损失信息？直接给删完的版本。' },
@@ -234,6 +276,19 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
 
   const [search, setSearch] = useState({ open: false, query: '', hits: [], scanned: 0, truncated: false, busy: false });
   const [tagIndex, setTagIndex] = useState({ tags: [], busy: false });
+  /**
+   * 标签浮层（`全部 N 个 ›` 打开的那一层）。
+   *
+   * ★ 0.35 的方案是「侧栏内联筛选 + 展开到 300」——用户 2026-10-27 又追问了一次，
+   *   而且当时他只有 4 个标签，那套东西在 4 个时**完全不可见**，他根本没法验证它对不对。
+   *   这本身就是信号：标签的「全量浏览」不该挤在 268px 的侧栏里等数据长大再出现。
+   *   现在侧栏只留最近 `TAG_SIDE` 个，其余全部进浮层 —— 4 个和 4000 个，界面一模一样。
+   */
+  const [tagSheet, setTagSheet] = useState(false);
+  /** 浮层里的搜索词。与侧栏无关，是**这一层**的缩小范围。 */
+  const [tagSheetFind, setTagSheetFind] = useState('');
+  /** 这一天的记录是不是展开了「更早的」那几条。换天要收回（见 `pick`）。 */
+  const [dayAll, setDayAll] = useState(false);
   const [timeline, setTimeline] = useState({ days: [], truncated: false, busy: false });
 
   // ---- 读后感工作台 -------------------------------------------------------
@@ -270,8 +325,21 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
    *   这个状态渲染在正文区顶部，**与伴读面板是否打开无关**。
    */
   const [aiError, setAiError] = useState('');
-  /** 时间轴上点了某一条之后要定位到的那条（`date-scope-index`），闪一下再褪。 */
+  /**
+   * 时间轴上点了某一条之后要定位到的那一条（`date-scope-index`）。
+   *
+   * ★ 这个标记是**持续**的，不是「闪一下」：0.33 起它是 1.8 秒后自动褪掉，
+   *   于是「滚过去」和「高亮消失」几乎同时发生 —— 用户在 2026-10-27 的截图里
+   *   点完时间轴什么标注都看不到。现在它保留到下一条被点、或换天为止。
+   */
   const [focusKey, setFocusKey] = useState('');
+  /**
+   * 同一条被**再次**点击时的序号。
+   *
+   * ★ 为什么需要它：`setFocusKey(same)` 是 no-op（React 对同值 bail out），
+   *   于是「滚上去看了看、再点同一行想回来」什么都不会发生。序号变化才会重跑效果。
+   */
+  const [focusSeq, setFocusSeq] = useState(0);
   /**
    * 私密日记的口令闸门。
    *
@@ -281,6 +349,19 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
    *   用户 2026-10-27：「私密日记点击就能查看还有什么私密，一定是只能本人查看啊。」
    */
   const [gate, setGate] = useState({ set: false, unlocked: false, available: true, busy: false, error: '', draft: '', confirm: '' });
+  /**
+   * 「解锁」与「摊开」是两件事。
+   *
+   * ★ 口令回答的是「你有没有权利看这一页」；它回答不了「此刻旁边有没有人」。
+   *   所以解锁之后每条正文**仍然收着**，点「看这一条」才渲染，而且看完会自己收回去。
+   *   用户 2026-10-27：「即使输入口令解锁后，展示在面板上的日记应该还不是明码，
+   *   点击查看才可以明码，查看完就又不是明码。」
+   * ★ 收起这件事不只靠计时器：切到别的条目、切模块、上锁，都要立刻收 —— 计时器
+   *   只是最后一道保险，不该指望它。
+   */
+  const [peek, setPeek] = useState('');
+  /** 正在看的那一条的计时器。用 ref 而不是 state：它不参与渲染。 */
+  const peekTimer = useRef(0);
   /** 侧栏时间轴里展开的那一天（同一次只展开一天）。 */
   const [openDay, setOpenDay] = useState('');
   const [stats, setStats] = useState(null);
@@ -454,23 +535,48 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
     if (moduleValue === 'inspiration') { void loadTags(); void loadTimeline(); }
     if (moduleValue === 'private') void loadMonth(monthKey);
     if (moduleValue === 'reflection') void loadBooks();
+    // 切模块 = 换了一页，正在「看一次」的那条必须立刻收回，不能跟着用户走。
+    hidePeek();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moduleValue]);
+
+  // 组件卸载时把计时器收掉，别让它去 setState 一个已经不在的组件。
+  useEffect(() => () => { if (peekTimer.current) clearTimeout(peekTimer.current); }, []);
+
+  // 直接落到日记 tab 时，ReaderPage 可能还没挂载过 ⇒ 那份注入表还没进文档。
+  // 读后感的空状态借用了其中的 `.npr-welcome*`，所以这里补一次（幂等）。
+  useEffect(() => { ensureStyles(); }, []);
+
+  /* 标签浮层开着时，Esc 关掉它 —— 与搜索框、伴读面板的 Esc 行为保持一致。 */
+  useEffect(() => {
+    if (!tagSheet) return undefined;
+    const onKey = (event) => { if (event.key === 'Escape') setTagSheet(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tagSheet]);
 
   // 关掉面板时把会话还回去，否则它会一直挂着一个 retain。
   useEffect(() => () => { chatRef.current?.release?.(); }, []);
 
   /**
-   * 时间轴上点了某一条：等这一天的条目渲染完之后滚到它，再让高亮褪掉。
-   * `focusKey` 依赖 `day` —— 同一天里换条目时 `day` 不变，所以还要看 key 本身。
+   * 时间轴上点了某一条：等这一天的条目渲染完之后滚到它。
+   *
+   * ★ 高亮**不在这里褪**。0.33–0.35 写的是 `setTimeout(() => setFocusKey(''), 1800)`，
+   *   平滑滚动还没落位、标注就开始消失了 —— 用户看到的就是「点了没有任何反应」。
+   *   现在标注留到下一条被点或换天（`pick()` 里清）。
+   * ★ 目标可能正被「更早还有 X 条」收着（默认只铺 `DAY_PREVIEW` 条），
+   *   这时 DOM 里根本没有它 —— 先展开这一天，等下一次渲染再滚，否则会静默滚不动。
    */
   useEffect(() => {
     if (!focusKey) return undefined;
     const node = document.querySelector(`[data-diary-key="${focusKey}"]`);
-    if (node) node.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    const timer = setTimeout(() => setFocusKey(''), 1800);
-    return () => clearTimeout(timer);
-  }, [focusKey, day]);
+    if (!node) {
+      if (!dayAll) setDayAll(true);
+      return undefined;
+    }
+    node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    return undefined;
+  }, [focusKey, focusSeq, day, dayAll]);
 
   async function refresh() {
     await loadDay(selected);
@@ -487,6 +593,11 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
   const pick = (date) => {
     setSelected(date);
     setConfirmKey('');
+    /* 换一天时把「刚才定位到哪一条」和「展开了更早的」都收回：
+       这两件事都是**对这一页**的临时状态，带到下一页只会让人以为没点对。
+       `jump()` 是 pick + setFocusKey，同一个事件里后者生效（React 批处理，顺序即结果）。 */
+    setFocusKey('');
+    setDayAll(false);
     // 换一天**不**重新上锁：锁是「这个人现在在这台机器前」这件事，不是「这一天」。
     // 换了天就掉锁会让连续翻阅十天的日记变成输十次口令。
     const parsed = parseMonthKey(date.slice(0, 7));
@@ -503,7 +614,11 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
    */
   const jump = (date, key = '') => {
     pick(date);
-    if (key) setFocusKey(key);
+    if (key) {
+      setFocusKey(key);
+      // 序号每次都动：同一条再点一次也要滚回去（`setFocusKey` 同值是 no-op）。
+      setFocusSeq((count) => count + 1);
+    }
   };
 
   /** 三个模块共用一个保存动作，差别只有 `kind` / `vis` / 正文来源。 */
@@ -739,10 +854,37 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
   }
 
   /** 手动上锁（离开模块时也会自动锁，这颗按钮是「我现在要起身了」）。 */
+  /** 收掉正在看的那一条。幂等：没在看不做任何事。 */
+  function hidePeek() {
+    if (peekTimer.current) {
+      clearTimeout(peekTimer.current);
+      peekTimer.current = 0;
+    }
+    setPeek((current) => (current === '' ? current : ''));
+  }
+
+  /** 点开一条；再点同一条就是收起。开别的条目会先把上一条收掉。 */
+  function peekEntry(key) {
+    if (peekTimer.current) {
+      clearTimeout(peekTimer.current);
+      peekTimer.current = 0;
+    }
+    if (peek === key) {
+      setPeek('');
+      return;
+    }
+    setPeek(key);
+    peekTimer.current = setTimeout(() => {
+      peekTimer.current = 0;
+      setPeek('');
+    }, PEEK_MS);
+  }
+
   async function lockNow() {
     try {
       await lockDiaryGate();
     } catch { /* 宿主没接上闸门时不需要报错：本来就锁不住 */ }
+    hidePeek();
     setGate((current) => ({ ...current, unlocked: false, draft: '', confirm: '' }));
     setDraft('');
     notify?.('私密日记已上锁');
@@ -930,6 +1072,36 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
    */
   const showSearchResults = search.query.trim() !== '';
 
+  /**
+   * 侧栏里内联的那几个标签，与浮层里的「全量」。
+   *
+   * ★ 两者是**同一份数据**的两种取法，不是两套索引：侧栏取头部 `TAG_SIDE` 个
+   *   （`tagIndex.tags` 本身已按「最后使用日期」倒序，见宿主的标签索引），浮层取全部。
+   * ★ 浮层里**先搜再分页**：关键词命中时不受 `TAG_SHEET_MAX` 约束 ——
+   *   搜到了却不给你看，比不搜更糟。
+   * ★ 匹配用 `includes`（不区分大小写的子串）：中文标签不需要分词，而 `#` 不参与
+   *   匹配 —— 用户输入 `灵感` 和 `#灵感` 应该是一回事。
+   */
+  const tagSide = tagIndex.tags.slice(0, TAG_SIDE);
+  const tagSheetNeedle = tagSheetFind.trim().replace(/^#+/, '').toLowerCase();
+  const tagSheetMatched = tagSheetNeedle === ''
+    ? tagIndex.tags
+    : tagIndex.tags.filter((item) => String(item.tag).toLowerCase().includes(tagSheetNeedle));
+  const tagSheetShown = tagSheetNeedle === ''
+    ? tagSheetMatched.slice(0, TAG_SHEET_MAX)
+    : tagSheetMatched;
+  const tagSheetHidden = Math.max(0, tagSheetMatched.length - tagSheetShown.length);
+
+  /**
+   * 这一天默认只铺最近 `DAY_PREVIEW` 条。
+   *
+   * ★ 取**尾部**（最近的）而不是头部：日记里绝大多数时候是「看看刚才写了什么」，
+   *   早上的那条下午不需要一直占着屏幕。顺序本身不变 —— 展开不该让内容换个方向。
+   * ★ 条数不够时 `slice(-n)` 返回全部，不需要额外的 if。
+   */
+  const entriesShown = dayAll ? visibleEntries : visibleEntries.slice(-DAY_PREVIEW);
+  const entriesHidden = Math.max(0, visibleEntries.length - entriesShown.length);
+
   return (
     <div className={`npr-workarea${chat ? ' has-companion' : ''}`}>
       <div className="npr-layout" style={{ '--npr-list-width': `${listWidth}px` }}>
@@ -1002,21 +1174,39 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
              */
             <div className="npr-diary-panel">
               <section className="npr-diary-sect">
-                <h2 className="npr-diary-sect-head">标签</h2>
+                <h2 className="npr-diary-sect-head">标签
+                  {tagIndex.tags.length > 0 && (
+                    <span className="npr-diary-sect-badge">{tagIndex.tags.length}</span>
+                  )}
+                </h2>
                 {tagIndex.busy && <p className="npr-diary-sect-note">正在数标签…</p>}
                 {!tagIndex.busy && tagIndex.tags.length === 0 && (
                   <p className="npr-diary-sect-note">正文里写 #灵感 这样的词，它就会出现在这里。</p>
                 )}
-                <div className="npr-diary-cloud">
-                  {tagIndex.tags.slice(0, 24).map((item) => (
-                    <button key={item.tag} type="button" className="npr-diary-tagchip"
-                      title={`${item.count} 次，最后用在 ${item.last}`}
-                      onClick={() => searchTag(item.tag)}>
-                      <span>#{item.tag}</span>
-                      <span className="npr-diary-tagcount">{item.count}</span>
-                    </button>
-                  ))}
-                </div>
+                {tagSide.length > 0 && (
+                  <div className="npr-diary-cloud">
+                    {tagSide.map((item) => (
+                      <button key={item.tag} type="button" className="npr-diary-tagchip"
+                        title={`${item.count} 次，最后用在 ${item.last}`}
+                        onClick={() => searchTag(item.tag)}>
+                        <span>#{item.tag}</span>
+                        <span className="npr-diary-tagcount">{item.count}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {/*
+                 * ★ 侧栏**永远**只铺 `TAG_SIDE` 个，多的全在这个入口后面。
+                 *   268px 宽在任何阈值下都装不下几千个标签 —— 0.35 的「内联筛选 + 展开 300」
+                 *   是在往侧栏里塞更多东西，而用户 2026-10-27 第三次问的正是「这栏装不下」。
+                 *   超过就出现入口；标签少时它不出现，因为那时根本没有什么可展开的。
+                 */}
+                {tagIndex.tags.length > TAG_SIDE && (
+                  <button type="button" className="npr-diary-tagmore"
+                    onClick={() => { setTagSheetFind(''); setTagSheet(true); }}>
+                    全部 {tagIndex.tags.length} 个 ›
+                  </button>
+                )}
               </section>
 
               <section className="npr-diary-sect">
@@ -1048,7 +1238,11 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                           <ul className="npr-diary-daylist">
                             {item.entries.map((entry) => (
                               <li key={entryKey(entry)}>
-                                <button type="button" className="npr-diary-dayitem"
+                                {/* 这一项是不是「刚被点过的那一条」——右侧正文里同一条也在高亮，
+                                    两处同时亮才叫「对应」。只亮右边的话，用户得自己在一屏里找。 */}
+                                <button type="button"
+                                  className={`npr-diary-dayitem${focusKey === entryKey(entry) ? ' is-focus' : ''}`}
+                                  aria-current={focusKey === entryKey(entry) ? 'true' : undefined}
                                   title={`${entry.time} ${entry.preview}`}
                                   onClick={() => jump(item.date, entryKey(entry))}>
                                   <span className="npr-diary-dayitem-time">{entry.time}</span>
@@ -1184,6 +1378,50 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                   <button type="button" className="npr-diary-alert-close" onClick={() => setAiError('')} aria-label="关闭提示"><Icon name="x" size={13} /></button>
                 </div>
               )}
+              {/*
+                * 标签浮层：侧栏 `全部 N 个 ›` 打开的**全量**视图。
+                *
+                * ★ 为什么是浮层而不是「展开侧栏」：268px 的栏铺不出几千个标签，
+                *   而这里用的是阅读区的整个面积（约 900×600）—— 一屏七十来个，
+                *   加上搜索框，才算真的「装得下」。用户 2026-10-27 第三次追问的就是这件事。
+                * ★ 点一个标签 = 筛选 + 关闭：浮层是「挑一个然后走」，不是「停在这里浏览」。
+                */}
+              {tagSheet && (
+                <div className="npr-tagsheet" role="dialog" aria-modal="true" aria-label="全部标签">
+                  <div className="npr-tagsheet-head">
+                    <h3 className="npr-tagsheet-title">
+                      全部标签
+                      <span className="npr-diary-sect-badge">{tagIndex.tags.length}</span>
+                    </h3>
+                    <button type="button" className="npr-tagsheet-close" onClick={() => setTagSheet(false)}
+                      aria-label="关闭标签面板"><Icon name="x" size={14} /></button>
+                  </div>
+                  <input className="npr-tagsheet-find" type="search" value={tagSheetFind}
+                    autoFocus
+                    placeholder={`在 ${tagIndex.tags.length} 个标签里找`}
+                    aria-label="找标签"
+                    onChange={(event) => setTagSheetFind(event.target.value)} />
+                  {tagSheetNeedle !== '' && tagSheetMatched.length === 0 && (
+                    <p className="npr-diary-sect-note">没有带「{tagSheetFind.trim()}」的标签。</p>
+                  )}
+                  <div className="npr-tagsheet-cloud">
+                    {tagSheetShown.map((item) => (
+                      <button key={item.tag} type="button" className="npr-diary-tagchip"
+                        title={`${item.count} 次，最后用在 ${item.last}`}
+                        onClick={() => { searchTag(item.tag); setTagSheet(false); }}>
+                        <span>#{item.tag}</span>
+                        <span className="npr-diary-tagcount">{item.count}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {/* 截断了就要说：没搜索时最多铺 `TAG_SHEET_MAX` 个。 */}
+                  {tagSheetHidden > 0 && (
+                    <p className="npr-diary-sect-note">
+                      还有 {tagSheetHidden} 个没铺开 —— 用上面的框缩小范围。
+                    </p>
+                  )}
+                </div>
+              )}
               <div className="npr-diary-scroll">
               {/* 正文宽度约束：一行 70 个汉字没人读得下去。40em ≈ 600px ≈ 40 个汉字。 */}
               <div className="npr-diary-sheet">
@@ -1289,10 +1527,32 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                       </div>
                     )
                   ) : (
-                    <div className="npr-diary-blank">
-                      <p>先在左边选一本书。</p>
-                      <p>只列<strong>读完</strong>的书 —— 没读完的不会出现在左边。</p>
-                      <p>也可以反过来：在书里读着读着，点顶部那颗「写读后感」，直接带着这本书落到这一页。</p>
+                    /*
+                     * ★ 空状态照抄「阅读」那一页的版式（`.npr-welcome` 那一组类，
+                     *   样式来自 ReaderPage 的 PANEL_CSS，同一份注入表）。
+                     *   用户 2026-10-27：「读后感这个页面的设计与阅读的风格统一」——
+                     *   原来这里是三行等宽的说明文字，从左边缘一路铺过去，既没有标题
+                     *   也没有落点，看起来像一条系统提示，而不是「一页还没开始的稿纸」。
+                     */
+                    <div className="npr-welcome">
+                      <div className="npr-welcome-brand">NPIE REFLECTION</div>
+                      <h2>读完的书，值得留一句</h2>
+                      <p className="npr-welcome-intro">
+                        左边只列<strong>读完</strong>的书。没读完的不在里面 ——
+                        读后感是读完之后的事，不是阅读进度的一部分。
+                      </p>
+                      <p className="npr-welcome-intro">
+                        点左边任意一本，右边就是写给它的地方。写下的这一页会记住书名、
+                        章节和页码，以后翻这本，还找得到当时写在哪里。
+                      </p>
+                      <p className="npr-welcome-intro">
+                        也可以反过来：在书里读着读着，点顶部那颗「<strong>写读后感</strong>」，
+                        直接带着这本书落到这一页。
+                      </p>
+                      <div className="npr-welcome-keys">
+                        <span>读完 {readBooks.length} 本</span>
+                        <span>书架共 {books.total} 本</span>
+                      </div>
                     </div>
                   )
                 )}
@@ -1358,7 +1618,19 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                           : '上面写一句就行 —— 灵感多半是半句话。'}</p>
                       </div>
                     )}
-                    {visibleEntries.map((entry) => {
+                    {/*
+                      * ★ 默认只铺最近 `DAY_PREVIEW` 条，更早的收在这一行后面。
+                      *   用户 2026-10-27：「如果记录的过多，是不是会拉长页面很长，
+                      *   要滚动好久，从使用体验上这是不是失败的设计」—— 是的。
+                      *   但「这一天写了 27 条」这件事本身要说出来，所以这里印的是**还差多少**，
+                      *   不是一句「展开更多」：没有数字的折叠等于把内容藏起来。
+                      */}
+                    {entriesHidden > 0 && (
+                      <button type="button" className="npr-diary-daymore" onClick={() => setDayAll(true)}>
+                        更早还有 {entriesHidden} 条 · 展开
+                      </button>
+                    )}
+                    {entriesShown.map((entry) => {
                       const html = renderBody(entry.body);
                       const tags = parseTags(entry.body);
                       const privateSide = entry.scope === 'private';
@@ -1372,9 +1644,17 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                        *   所以这里不再有 veiled：锁着时这一整块根本不会渲染（上面画的是解锁卡）。
                        */
                       const empty = privateSide && entry.body === '';
+                      /*
+                       * ★ 解锁了也不摊开。`privateSide` 的正文要先被点开才渲染 ——
+                       *   渲染 = 把明文放进 DOM，而「看一眼就走」的场合（同事站在旁边）
+                       *   需要的正是「默认不渲染」。收起有四个触发点：再点一次、切到
+                       *   别的条目、切模块、上锁，外加 30 秒计时器兜底。
+                       */
+                      const veiled = privateSide && !empty && peek !== key;
                       return (
-                        <article className={`npr-diary-entry${focusKey === key && privateSide ? ' is-focus' : ''}`}
-                          key={key} data-diary-key={key}>
+                        <article className={`npr-diary-entry${focusKey === key ? ' is-focus' : ''}`}
+                          key={key} data-diary-key={key}
+                          aria-current={focusKey === key ? 'true' : undefined}>
                           <header className="npr-diary-entry-head">
                             <span className="npr-diary-time">{entry.time}</span>
                             {/* 只在**类型与模块不一致**时标出来：0.30 写过「书摘」的老条目
@@ -1399,10 +1679,22 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                           </header>
                           {empty
                             ? <p className="npr-diary-body npr-diary-body-plain">这一条还在锁里。</p>
-                            : (html
-                              ? <div className="npr-diary-body" dangerouslySetInnerHTML={{ __html: html }} />
-                              : <p className="npr-diary-body npr-diary-body-plain">{entry.body}</p>)}
-                          {!empty && tags.length > 0 && (
+                            : veiled
+                              ? (
+                                <button type="button" className="npr-diary-veil" onClick={() => peekEntry(key)}>
+                                  <Icon name="eye-off" size={14} />
+                                  <span>点开看这一条</span>
+                                  <span className="npr-diary-veil-meta">{entry.body.length} 字 · 看完自己收起</span>
+                                </button>
+                              )
+                              : (html
+                                ? <div className="npr-diary-body" dangerouslySetInnerHTML={{ __html: html }} />
+                                : <p className="npr-diary-body npr-diary-body-plain">{entry.body}</p>)}
+                          {privateSide && !empty && !veiled && (
+                            <button type="button" className="npr-diary-veil-close" onClick={hidePeek}>收起</button>
+                          )}
+                          {/* 标签是从正文里抽的 —— 收着的时候它同样是明文，必须一起藏。 */}
+                          {!empty && !veiled && tags.length > 0 && (
                             <div className="npr-diary-tagrow">
                               {tags.map((tag) => (
                                 <button key={tag} type="button" className="npr-diary-tag"

@@ -43,7 +43,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import { FIND_QUERY_MAX } from '../book-find.js';
-import { BOOKS_PAGE_LIMIT, LIBRARY_API_PREFIX, PDFJS_VENDOR_PREFIX, isBookId, isReadable } from '../library.js';
+import { BOOKS_PAGE_LIMIT, EDITOR_VENDOR_PREFIX, LIBRARY_API_PREFIX, PDFJS_VENDOR_PREFIX, isBookId, isReadable } from '../library.js';
 import { contentRange, formatRange, mimeForExtension, parseRange, unsatisfiedContentRange } from '../range.js';
 import { segmentBook } from './segment.js';
 import { overlayOcrPages } from './page-text.js';
@@ -221,7 +221,7 @@ export function vendorRelativePath(pathname, prefix = PDFJS_VENDOR_PREFIX) {
 export function makeLibraryRoutes(handlers) {
   const {
     listBooks, bookById, readBytes, getStates, setState, reload,
-    vendorRoot, log = () => {},
+    vendorRoot, editorRoot = '', log = () => {},
     getSources, setSources, setLoadedLists, scanSources,
     panAuth, listPanDirs,
     verifyReadable,
@@ -452,10 +452,17 @@ export function makeLibraryRoutes(handlers) {
     return undefined;
   };
 
-  const vendor = async (res, relPath) => {
-    const absolute = join(vendorRoot, relPath);
-    // 二次确认：`vendorRelativePath` 已经拒过越界，这里再确认落点在 vendorRoot 之内。
-    if (!absolute.startsWith(vendorRoot + sep)) return sendJson(res, 404, { ok: false, error: 'not found' });
+  /**
+   * 发一个 vendor 目录下的文件。
+   *
+   * ★ 0.34.0 之前这里叫 `vendor`、只认 pdf.js 那一个 `vendorRoot`。日记编辑器
+   *   （Milkdown）要走同一条路，所以把「根目录」提升成参数，两个前缀共用一套
+   *   「越界二次确认 + MIME + no-store」—— 各写一份迟早有一份漏掉 nosniff。
+   */
+  const serveVendorFile = async (res, root, relPath) => {
+    const absolute = join(root, relPath);
+    // 二次确认：`vendorRelativePath` 已经拒过越界，这里再确认落点在 root 之内。
+    if (!absolute.startsWith(root + sep)) return sendJson(res, 404, { ok: false, error: 'not found' });
     let info;
     try {
       info = await stat(absolute);
@@ -1224,11 +1231,32 @@ export function makeLibraryRoutes(handlers) {
       const pathname = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
       const relPath = vendorRelativePath(pathname);
       if (relPath === undefined) return sendJson(res, 404, { ok: false, error: 'not found' });
-      return vendor(res, relPath);
+      return serveVendorFile(res, vendorRoot, relPath);
     },
   };
 
-  return [api, staticVendor];
+  /**
+   * 日记编辑器（Milkdown）的静态资源。
+   *
+   * ★ 日记页用不上时不会请求它 —— 客户端是动态 `import()`，这是「按需」而不是「启动就下」。
+   * ★ `editorRoot` 缺省时**不挂这条路由**：测试里造 `makeLibraryRoutes` 常常只给一半
+   *   handler，缺一个就多一条永远 404 的路由，会让「前缀被占用了」这类冲突变难查。
+   */
+  const editorVendor = typeof editorRoot === 'string' && editorRoot !== ''
+    ? {
+      kind: 'prefix',
+      path: EDITOR_VENDOR_PREFIX,
+      handler: async (req, res) => {
+        if (!isTrustedLocalRequest(req)) return forbidden(res);
+        const pathname = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
+        const relPath = vendorRelativePath(pathname, EDITOR_VENDOR_PREFIX);
+        if (relPath === undefined) return sendJson(res, 404, { ok: false, error: 'not found' });
+        return serveVendorFile(res, editorRoot, relPath);
+      },
+    }
+    : null;
+
+  return editorVendor === null ? [api, staticVendor] : [api, staticVendor, editorVendor];
 }
 
 /** 让测试与客户端共用一份 Range 拼法。 */

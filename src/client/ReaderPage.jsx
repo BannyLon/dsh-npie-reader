@@ -562,7 +562,15 @@ export function attachMenuDismiss(doc, { menu, trigger, close }) {
 }
 
 let stylesReady = false;
-function ensureStyles() {
+/**
+ * 把 `PANEL_CSS + REFINEMENTS` 注入一次。
+ *
+ * ★ 0.35.0 起 **导出**它：日记页的空状态借用了 `.npr-welcome*` 那一组类（版式与
+ *   「阅读」页统一），而它们定义在 `PANEL_CSS` 里。如果用户直接落到日记 tab、
+ *   ReaderPage 还没挂载过，那组样式就不在文档里 —— 空状态会退化成一堆无样式的文字，
+ *   而且**不报错**。所以日记页自己也要保证一次注入。
+ */
+export function ensureStyles() {
   if (stylesReady) return;
   stylesReady = true;
   const style = document.createElement('style');

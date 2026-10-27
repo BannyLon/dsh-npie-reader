@@ -20,7 +20,7 @@ import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:
 import { join, sep } from 'node:path';
 import {
   DIARY_API_PREFIX, ENTRY_KINDS, META_OPEN, appendEntryText, buildDay, dateKey, dayCharCount, dayFileName,
-  isValidDateKey, isValidMonthKey, moodScore, normalizeMeta, parseDay, parseTags, removeEntryText,
+  isValidDateKey, isValidMonthKey, moodScore, normalizeMeta, parseDay, parseTags, removeEntryText, updateEntryText,
   splitFrontmatter, timeKey,
 } from '../diary-format.js';
 import { createDiaryGate } from './diary-gate.js';
@@ -274,6 +274,55 @@ export function createDiaryStore(options = {}) {
       if (privateSide) await writePrivateAtomic(key, result.text, secret);
       else await writeDayAtomic(key, result.text);
       return { date: key, entries: result.entries.length, chars: dayCharCount(result.entries), scope: input.scope === 'private' ? 'private' : 'public' };
+    });
+  }
+
+  /**
+   * 改写某一天的某一条（正文 / 时间 / 类型 / 来源 / 元数据）。
+   *
+   * ★ 为什么需要它：在它之前，agent 只有 `append` —— 用户说「把今天这五条压成三条」，
+   *   模型只能**追加**三条新的、把原来五条留在原地。用户 2026-10-27 的原话是
+   *   「AI 整理为什么只能往灵感里追加新条目，不能改也不能删。我需要的是能改能删」。
+   * ★ `scope` 与删除同源：两个文件各有自己的序号，只给一个数字必然要靠合并下标反查。
+   * ★ 空正文一律拒绝（`ENTRY_EMPTY`）：要清空就该用删除，而不是留一条空壳。
+   */
+  async function updateEntry(input = {}) {
+    const key = input.date;
+    if (!isValidDateKey(key)) throw coded('BAD_DATE', `无效的日期：${key}`);
+    if (typeof input.body !== 'string' || input.body.trim() === '') {
+      throw coded('ENTRY_EMPTY', '改写后的正文是空的。要删掉这一条，请用删除。');
+    }
+    if (input.body.length > MAX_ENTRY_CHARS) {
+      throw coded('ENTRY_TOO_LARGE', `一条最多 ${MAX_ENTRY_CHARS} 字，这一条 ${input.body.length} 字`);
+    }
+    const privateSide = input.scope === 'private';
+    const file = privateSide ? diaryPrivateFilePath(key) : diaryFilePath(key);
+    return await enqueue(file, async () => {
+      const current = privateSide ? await readPrivateDay(key) : await readDay(key);
+      if (!current.exists) throw coded('ENTRY_NOT_FOUND', `${key} 还没有日记`);
+      const result = updateEntryText(current.text, input.index, {
+        body: input.body,
+        time: input.time,
+        kind: input.kind,
+        source: input.source,
+        meta: normalizeMeta(input.meta),
+      });
+      if (result === null) throw coded('ENTRY_NOT_FOUND', '这一条已经不存在了（可能刚被删掉）');
+      const chars = dayCharCount(result.entries);
+      if (chars > MAX_DAY_CHARS) {
+        throw coded('DAY_TOO_LARGE', `这一天会变成 ${chars} 字，超过 ${MAX_DAY_CHARS} 字上限`);
+      }
+      if (privateSide) await writePrivateAtomic(key, result.text, secret);
+      else await writeDayAtomic(key, result.text);
+      log(`[日记] 改写 ${key} #${input.index} ${result.entry.kind}（${result.entry.body.length} 字${privateSide ? '，私密' : ''}）`);
+      return {
+        date: key,
+        index: input.index,
+        time: result.entry.time,
+        kind: result.entry.kind,
+        chars,
+        scope: privateSide ? 'private' : 'public',
+      };
     });
   }
 
@@ -632,6 +681,7 @@ export function createDiaryStore(options = {}) {
     readFull: readDayFull,
     readPrivate: readPrivateDay,
     append,
+    updateEntry,
     removeEntry,
     listMonth,
     search,

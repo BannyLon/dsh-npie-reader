@@ -416,7 +416,10 @@ describe('灵感模块：情绪 / 标签 / 时间轴 / 关联到书', () => {
     assert.match(diary, /fetchDiaryTimeline\(\{ limit: 30 \}\)/);
     assert.match(diary, /fetchDiaryTags\(\)/);
     for (const label of ['标签', '时间轴', '挂在书上']) {
-      assert.ok(diary.includes(`>${label}<`), `侧栏少了「${label}」这一块的标题`);
+      // 「标签」这块的标题现在带一个计数徽章（标签几千个时，先看见数量比先看见云有用），
+      // 所以判据从 `>标签<` 放宽成「标题以这个字开头」—— 它守的是「这一块存在且叫这个名字」，
+      // 不是「标题后面紧跟闭合标签」。
+      assert.ok(diary.includes(`>${label}`), `侧栏少了「${label}」这一块的标题`);
     }
     // ★ 展开态：日期行带 aria-expanded，展开后才渲染当天条目。
     assert.match(diary, /aria-expanded=\{open\}/, '日期行不是可展开的 —— 时间轴只剩「哪几天写过」');
@@ -843,5 +846,122 @@ describe('灵感模块：没有情绪追踪', () => {
   it('★ 灵感保存时不带 mood（否则会继承私密里选过的心情）', () => {
     assert.match(diary, /const meta = moduleValue === 'private' && mood \? \{ mood \} : \{\}/,
       '保存时无条件带 mood —— 灵感条目会悄悄带上用户没选过的心情');
+  });
+});
+
+/**
+ * 0.35.0 的三处「用户看图指出来的事」，逐条钉住。
+ *
+ * ★ 这三条都不是「样式好不好看」：每一条背后都有一个**会静默发生**的坏结果 ——
+ *   标签多了看不见、私密正文渲染进 DOM、读后感空页没有落点。
+ */
+describe('0.35：标签扩展性 / 私密逐条查看 / 读后感空状态', () => {
+  const composer = () => read('DiaryComposer.jsx');
+
+  it('★ 标签：侧栏只铺固定几个，全量走浮层（268px 装不下几千个）', () => {
+    // 用户 2026-10-27 第三次问「几千个标签怎么办」。0.35 的答案是「内联筛选 + 展开 300」，
+    // 那是往侧栏里塞更多东西 —— 而侧栏在任何阈值下都装不下几千个。
+    assert.match(diary, /const TAG_SIDE = 6/, '侧栏内联上限不见了');
+    assert.match(diary, /const tagSide = tagIndex\.tags\.slice\(0, TAG_SIDE\)/,
+      '侧栏没有按 TAG_SIDE 截断 —— 又会把整栏铺满');
+    // 浮层里的过滤必须作用在**全部**标签上，不是侧栏已经截断的那几个。
+    assert.match(diary, /tagIndex\.tags\.filter\(/, '浮层过滤没有作用在全部标签上');
+    assert.match(diary, /const tagSheetMatched = tagSheetNeedle === ''/, '浮层没有「先过滤」这一步');
+    assert.match(diary, /全部 \{tagIndex\.tags\.length\} 个/, '没有打开全量的入口');
+    assert.match(diary, /className="npr-tagsheet"/, '浮层没有渲染');
+  });
+
+  it('★ 标签：浮层不悄悄截断，且入口只在标签真的超出时才出现', () => {
+    assert.match(diary, /还有 \{tagSheetHidden\} 个没铺开/, '截断后没有说还有多少 —— 用户会以为标签丢了');
+    assert.match(diary, /tagIndex\.tags\.length > TAG_SIDE && \(\s*<button type="button" className="npr-diary-tagmore"/,
+      '入口的出现条件不对（标签只有 4 个时也挂一个「全部 4 个」是噪音）');
+    // 搜索命中时不受 TAG_SHEET_MAX 约束：搜到了却不给看，比不搜更糟。
+    assert.match(diary, /tagSheetNeedle === ''\s*\?\s*tagSheetMatched\.slice\(0, TAG_SHEET_MAX\)/,
+      '搜索时也被截断了');
+  });
+
+  it('★ 私密：解锁之后仍然**逐条点开**才明文（DOM 里不能有正文）', () => {
+    // 用户 2026-10-27：「即使输入口令解锁后，展示在面板上的日记应该还不是明码，
+    // 点击查看才可以明码，查看完就又不是明码。」
+    assert.match(diary, /const veiled = privateSide && !empty && peek !== key/,
+      '收着的判据不见了 —— 解锁后会把整页私密日记铺成明文');
+    assert.match(diary, /className="npr-diary-veil"[\s\S]{0,200}?peekEntry\(key\)/, '收着的时候没有「点开看」入口');
+    // 收着时必须**不渲染**正文节点，而不是渲染了再遮住。
+    const veilBranch = /\{empty\s*\?[\s\S]*?: veiled\s*\?([\s\S]*?): \(html/.exec(diary);
+    assert.ok(veilBranch, '收着 / 展开的分支结构没找到');
+    // 只允许读**长度**（「23 字」那种提示），不许把正文本身放进 DOM。
+    assert.equal(veilBranch[1].includes('dangerouslySetInnerHTML'), false, '收着的分支里在渲染 HTML —— 正文已经进 DOM 了');
+    assert.equal(/\{entry\.body\}/.test(veilBranch[1]), false, '收着的分支里在插 entry.body');
+  });
+
+  it('★ 私密：切模块 / 上锁 / 再点一次都会收回（不只靠计时器）', () => {
+    assert.match(diary, /const PEEK_MS = 30_000/);
+    assert.match(diary, /function hidePeek\(/, '没有「收起来」这个动作');
+    assert.match(diary, /\}, \[moduleValue\]\);[\s\S]{0,80}?hidePeek\(\)|hidePeek\(\);[\s\S]{0,200}?\}, \[moduleValue\]\);/,
+      '切模块时没有收回 —— 看完的那条会跟着用户去别的页');
+    // 窗口给到 400：`lockNow` 开头有一个 try/catch，第一个 `}` 落在 catch 里，
+    // 用 300 字符 + 首个右括号会把 `hidePeek()` 挡在窗口外（写这条时踩过一次）。
+    assert.match(diary, /async function lockNow\(\)[\s\S]{0,400}?hidePeek\(\)/, '上锁时没有收回');
+  });
+
+  it('★ 读后感空状态与「阅读」那一页同一套版式（不是三行说明文字）', () => {
+    assert.match(diary, /<div className="npr-welcome">/, '空状态没用 welcome 版式');
+    assert.match(diary, /NPIE REFLECTION/);
+    // 版式必须**在读后感模块里**，不能顺手加到别的模块的空状态上。
+    const block = /moduleValue === 'reflection'[\s\S]{0,4000}?NPIE REFLECTION/.test(diary);
+    assert.ok(block, 'welcome 版式不在读后感模块里');
+    // 只判**空状态那一段**：`先在左边选一本书` 作为保存时的报错文案还在（那是另一处，合理）。
+    assert.equal(diary.includes('<p>先在左边选一本书。</p>'), false, '旧的三行说明还在');
+  });
+
+  it('★ 编辑器是**按需下载**的第三方底座，且 textarea 留着当退路', () => {
+    const c = composer();
+    assert.match(c, /loadDiaryEditor\(\)/, '没有接入编辑器底座');
+    assert.match(c, /\.catch\(\(\) => \{[\s\S]{0,200}?setRich\(false\)/, '加载失败时没有退回 textarea');
+    assert.match(c, /\{!rich && \(/, 'textarea 退路不见了 —— 编辑器一挂，日记就写不了');
+    // 两个视图必须是同一份值：不能各自维护一份 state。
+    assert.match(c, /onUpdate: \(markdown\) => changeRef\.current\(markdown\)/);
+  });
+});
+
+/**
+ * 0.36.0：用户 2026-10-27 对「灵感速记」的两条现场反馈。
+ *
+ * ★ 一条是 bug（时间轴点了没有标注），一条是结构问题（一天太长要滚很久）。
+ *   两条都会**静默**发生 —— 不报错，只是用起来难受，所以只能靠测试钉住。
+ */
+describe('0.36：时间轴联动 / 一天太长 / 标签全量', () => {
+  it('★ 时间轴点了某一条，右边那一条要标出来，而且不是一闪就没', () => {
+    // 0.33–0.35 的判据是 `focusKey === key && privateSide`：灵感侧永远不会高亮，
+    // 用户点完时间轴在正文里找不到任何标注（2026-10-27 的截图就是这么来的）。
+    assert.match(diary, /npr-diary-entry\$\{focusKey === key \? ' is-focus' : ''\}/,
+      '正文里的高亮判据不见了 —— 用户点了时间轴会找不到对应那一条');
+    assert.equal(/focusKey === key && privateSide/.test(diary), false,
+      '高亮又绑回私密侧了 —— 灵感模块永远不会亮');
+    assert.equal(/setTimeout\(\(\) => setFocusKey\(''\)/.test(diary), false,
+      '高亮还在 1.8 秒自动褪 —— 平滑滚动没落位标注就没了');
+    // 侧栏那一项也要亮：两处同时亮才叫「对应」。
+    assert.match(diary, /npr-diary-dayitem\$\{focusKey === entryKey\(entry\) \? ' is-focus' : ''\}/,
+      '侧栏时间轴没有选中态');
+  });
+
+  it('★ 一天太长：默认只铺最近 N 条，并说清楚还藏了几条', () => {
+    assert.match(diary, /const DAY_PREVIEW = 10/);
+    assert.match(diary, /const entriesShown = dayAll \? visibleEntries : visibleEntries\.slice\(-DAY_PREVIEW\)/,
+      '默认没有截断 —— 一天几十条就要滚八屏');
+    assert.match(diary, /更早还有 \{entriesHidden\} 条/, '折叠后没有说自己藏了多少 —— 等于把记录藏起来');
+    assert.match(diary, /\{entriesShown\.map\(/, '列表没改成渲染 entriesShown');
+  });
+
+  it('★ 点开被折叠的那一条时要自动展开，换天则把两个临时状态收回', () => {
+    // 被折叠的条目不在 DOM 里：不先展开，`scrollIntoView` 会静默失败。
+    assert.match(diary, /if \(!node\) \{\s*if \(!dayAll\) setDayAll\(true\)/,
+      '点了被折叠的条目不会展开 —— 点击静默无效');
+    // 窗口给到 900：pick 里有一段解释为什么换天要收回状态的注释，
+    // 400 字符会在注释里就截断（写这条时踩过一次，报「pick 没找到」而不是「断言失败」）。
+    const pick = /const pick = \(date\) => \{([\s\S]{0,900}?)\n  \};/.exec(diary);
+    assert.ok(pick, 'pick 没找到');
+    assert.match(pick[1], /setFocusKey\(''\)/, '换天没有清掉上一条的高亮');
+    assert.match(pick[1], /setDayAll\(false\)/, '换天没收回「展开了更早的」');
   });
 });

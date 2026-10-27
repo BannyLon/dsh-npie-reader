@@ -1,5 +1,6 @@
 /**
- * 日记的三个工具（`diary_today` / `diary_append` / `diary_search`）**真跑**。
+ * 日记的五个工具（`diary_today` / `diary_append` / `diary_update` / `diary_delete` /
+ * `diary_search`）**真跑**。
  *
  * ★ 为什么必须真跑而不是断言源码里出现了 `diary_append`：
  *   工具坏掉的样子是**静默的** —— 没注册上 ⇒ 模型永远不知道有这回事，用户只会
@@ -9,9 +10,10 @@
  *
  * ★ 这里量的是**渲染出来的文本**（走 `output.render`），因为模型看到的就是它。
  *
- * ★ 一条硬边界：**没有**改写 / 删除工具。`diary_append` 只追加，而这句话必须
- *   在给模型看的文本里**说清楚** —— 否则模型会把「打磨后的整篇」再追加一遍，
- *   用户第二天打开会看到两篇几乎一样的日记，且分不清哪篇是原稿。
+ * ★ `diary_append` 必须自称「只追加」，这句不能删：它挡的是「把打磨后的整篇再追加
+ *   一遍」，用户第二天打开会看到两篇几乎一样的日记、分不清哪篇是原稿。
+ *   但「只追加」不等于「没有别的路」—— 0.35 起 `diary_update` / `diary_delete`
+ *   就是那条路，描述里必须互相指向（用户 2026-10-27：「我需要的是能改能删」）。
  */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
@@ -29,28 +31,45 @@ before(async () => {
 after(disposeHarness);
 
 describe('注册', () => {
-  it('三个工具都注册上了', () => {
-    for (const name of [TOOL_NAMES.diaryToday, TOOL_NAMES.diaryAppend, TOOL_NAMES.diarySearch]) {
+  it('五个工具都注册上了', () => {
+    for (const name of [
+      TOOL_NAMES.diaryToday, TOOL_NAMES.diaryAppend, TOOL_NAMES.diaryUpdate,
+      TOOL_NAMES.diaryDelete, TOOL_NAMES.diarySearch,
+    ]) {
       assert.ok(tools.get(name), `工具没注册：${name}`);
     }
   });
 
-  it('★ 名字就是文档里承诺的那三个（改名字会让 skill 里写的调用全部失效）', () => {
+  it('★ 名字就是文档里承诺的那五个（改名字会让 skill 里写的调用全部失效）', () => {
     assert.equal(TOOL_NAMES.diaryToday, 'diary_today');
     assert.equal(TOOL_NAMES.diaryAppend, 'diary_append');
+    assert.equal(TOOL_NAMES.diaryUpdate, 'diary_update');
+    assert.equal(TOOL_NAMES.diaryDelete, 'diary_delete');
     assert.equal(TOOL_NAMES.diarySearch, 'diary_search');
   });
 
-  it('★ 没有改写 / 删除工具（这条边界靠「不存在」来保证）', () => {
-    for (const name of ['diary_delete', 'diary_edit', 'diary_update', 'diary_remove', 'diary_rewrite']) {
-      assert.equal(tools.get(name), undefined, `不该存在的工具出现了：${name}`);
+  it('★ 改写 / 删除**存在**，且没有第二个别名（0.35 推翻了 0.34 的「靠不存在来保证」）', () => {
+    // 用户 2026-10-27：「AI 整理为什么只能往灵感里追加新条目，不能改也不能删。
+    // 我需要的是能改能删」。所以这条判据从「必须不存在」反过来了 ——
+    // 保留的意义是：**只能有一个名字**。多出一个 diary_edit / diary_rewrite 之类的
+    // 别名，模型会在两个之间挑，而两条路的实现迟早不一致。
+    assert.ok(tools.get('diary_update'), 'diary_update 不见了');
+    assert.ok(tools.get('diary_delete'), 'diary_delete 不见了');
+    for (const alias of ['diary_edit', 'diary_rewrite', 'diary_remove', 'diary_modify']) {
+      assert.equal(tools.get(alias), undefined, `不该存在的别名：${alias}`);
     }
   });
 
   it('★ 每个工具的说明都写明了自己的写权限', () => {
     const append = tools.get('diary_append');
-    assert.match(append.description, /only ever APPENDS/);
+    // 「只追加」这句**必须还在** —— 它挡的是「把改稿再追加一遍」那种重复。
+    assert.match(append.description, /ONLY appends/);
     assert.match(append.description, /never edits or deletes/);
+    // 但它不能再让模型以为「没有别的路」：描述里必须指向真正能改的那个工具。
+    assert.match(append.description, /diary_update/);
+    assert.match(tools.get('diary_update').description, /IN PLACE/);
+    assert.match(tools.get('diary_update').description, /destructive/);
+    assert.match(tools.get('diary_delete').description, /cannot be undone/);
     // 两个读工具必须自称只读
     for (const name of ['diary_today', 'diary_search']) {
       assert.match(tools.get(name).description, /Read-only/);
@@ -174,5 +193,50 @@ describe('diary_search', () => {
   it('提示了下一步怎么读全文（模型不该在这里猜）', async () => {
     const out = await runTool(tools, TOOL_NAMES.diarySearch, { query: '磨坊' });
     assert.match(out, /diary_today/);
+  });
+});
+
+describe('diary_update / diary_delete', () => {
+  /** 读现在这一天有几条。测试之间共享同一个 store，所以条数一律现读现算。 */
+  async function count() {
+    const text = await runTool(tools, TOOL_NAMES.diaryToday, {});
+    const hit = /共 (\d+) 条/.exec(text);
+    if (!hit) return 0;
+    return Number(hit[1]);
+  }
+
+  it('改写是**原地替换**：条数不变，原文不见了', async () => {
+    await runTool(tools, TOOL_NAMES.diaryAppend, { body: '要被改掉的原稿' });
+    const before = await count();
+    const index = before - 1;
+    const out = await runTool(tools, TOOL_NAMES.diaryUpdate, { index, body: '改过之后的稿子' });
+    assert.match(out, /已改写/);
+    assert.match(out, /原文已被替换/, '回执照抄「另存了一份」会让模型以为原文还在');
+    const after = await runTool(tools, TOOL_NAMES.diaryToday, {});
+    assert.match(after, /改过之后的稿子/);
+    assert.equal(after.includes('要被改掉的原稿'), false, '原文还在 —— 那不是改写，是又抄了一份');
+    assert.match(after, new RegExp(`共 ${before} 条`), '改写不该改变条数');
+  });
+
+  it('★ 空正文不写进去，并指向 diary_delete（不许用改写清空一条日记）', async () => {
+    const out = await runTool(tools, TOOL_NAMES.diaryUpdate, { index: 0, body: '   ' });
+    assert.match(out, /diary_delete/);
+  });
+
+  it('★ 删除是**少一条**，被删的那条读不回来了', async () => {
+    await runTool(tools, TOOL_NAMES.diaryAppend, { body: '这条马上会被删掉' });
+    const before = await count();
+    const index = before - 1;
+    const out = await runTool(tools, TOOL_NAMES.diaryDelete, { index });
+    assert.match(out, /已删掉/);
+    const after = await runTool(tools, TOOL_NAMES.diaryToday, {});
+    assert.equal(after.includes('这条马上会被删掉'), false, '删了还在：模型会再删一次，把别的条目删掉');
+    assert.match(after, new RegExp(`共 ${before - 1} 条`));
+  });
+
+  it('★ diary_today 必须把**从 0 开始**的编号印在每条前面（改 / 删都靠它）', async () => {
+    const text = await runTool(tools, TOOL_NAMES.diaryToday, {});
+    assert.match(text, /\[0\]/, '编号没印出来，模型只能自己数 —— 差一位就改错条目');
+    assert.match(text, /从 0 开始/);
   });
 });

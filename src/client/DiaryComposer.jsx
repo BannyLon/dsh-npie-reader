@@ -1,52 +1,43 @@
 /**
  * 日记的写入口（灵感 / 私密 / 读后感三种模块共用）。
  *
- * 为什么自己写而不用现成的编辑器组件 —— 以及到底抄了谁
- * ------------------------------------------------------
- * 2026-10-27 用户的第 3 条反馈：「你的写作框真的巨丑，而且不便捷。再次命令你去
- * github 找好的文本编辑框。」上一轮我给的两份调研全是数据层的，没有一个字讲编辑器，
- * 所以这一轮先真的去看了三个参考实现，再决定怎么做：
+ * 底座：Milkdown（markdown 原生，ProseMirror 内核），按需从宿主下载
+ * ------------------------------------------------------------------
+ * 用户在 2026-10-27 第三次要求「去 GitHub 找一个好的文本编辑器」，前两次我都交的是
+ * 手写 textarea + 自造工具栏。这次换了做法：**接一个真正的编辑器**。
  *
- *   ① **uiwjs/react-md-editor**（9.6k★，MIT）
- *      - 工具栏分两区：左侧 `commands`（格式命令）、右侧 `extraCommands`（视图/全屏），
- *        中间用 `divider` 分组；命令多了用 `group` 收成下拉。
- *      - 架构是清晰的三层：**按键 → 命令 → 文本操作**（TextState 带 selectedText，
- *        TextAreaTextApi 提供 replaceSelection / makeList）。
- *      - 高度自适应靠 `minHeight` / `maxHeight` 两个边界，`autoFocusEnd` 让人接着上次写。
- *      - 这条最重要：它**没有**把 textarea 换成 contenteditable —— 纯 textarea 也能有
- *        好用的工具栏，只要命令层写对。
+ * 为什么是 Milkdown，而不是 stars 更高的那几个（数据是当天 GitHub API 实测的）：
+ *   quill 47,374 / monaco 46,897 / editor.js 31,977 / lexical 23,987 都排在它前面，
+ *   但 **5 万以上的仓库全是完整应用**（AppFlowy / AFFiNE / Joplin / Logseq），不是库；
+ *   而排在前面的库里，Quill 与 Lexical 都是 **HTML 输出** —— 我们的日记是
+ *   **一天一个 .md 文件**，人要能拿任何编辑器直接打开。HTML 路线要 HTML→Markdown
+ *   往返（turndown），一次往返就可能改掉用户写的 `#标签`、`---`、空行。
+ *   Milkdown 两头都是 markdown（remark 解析 / 序列化），是这几家里往返损耗最小的。
+ *   → 结论：这一步不该按 stars 选，该按「能不能保住存储格式」选。
  *
- *   ② **bytedance/bytemd**（4.6k★，MIT）
- *      - 三种模式 `split` / `tab` / `auto`；默认 `auto` 跟着容器宽度自己切。
- *      - 预览有 `previewDebounce`（300ms）—— 边打边渲染会把光标位置抖没。
- *      - 工具栏里没启用的功能（比如没传 uploadImages）就不显示对应按钮。
+ * 为什么它不被打进主 bundle：
+ *   373 KB 的第三方代码内联进去会撞破 `test/build.test.mjs` 那条「非第一方字节数为 0」
+ *   的闸。所以照 pdf.js 的老路：单独构建到 `vendor/editor/editor.mjs`，由宿主按
+ *   `EDITOR_VENDOR_PREFIX` 发出来，客户端**按需** `import()`（见 `diary-editor.js`）。
  *
- *   ③ **usememos/memos**（40k★）
- *      - 写入口**在流里**，不是一张浮在页面上的表单卡；提交后回到列表顶部。
- *      - 支持 markdown 快捷输入（`- ` 自动续列表、`# ` 变标题）。
+ * ★ **textarea 没有删，它是退路**：拿不到编辑器（宿主没托管、请求失败、命令不可用）
+ *   时 `rich` 保持 false，界面照旧是 textarea + 同一排工具栏。日记必须永远能写 ——
+ *   编辑器是增强，不是前提。
+ * ★ 两者是**同一份 markdown 的两个视图**，不是两套存储：编辑器里看到的是排好版的
+ *   标题和列表，落盘的仍然是可读的 `.md` 原文。
  *
- * 抄的是**交互**，不是代码：
- *   - 工具栏 + 命令层（①）：本文件下半部的 `wrap` / `prefix` / `insertTag` 就是那个
- *     「命令 → 文本操作」的骨架，只是用 textarea 的 setRangeText 实现；
- *   - tab 预览 + 防抖（②）：`useEffect` 里 180ms 后再渲染预览；
- *   - 焦点在正文、工具栏收在底部（③）：写的时候看不见一排按钮，鼠标移上来才出现。
- *
- * 为什么**不**直接装这些依赖：
- *   本插件是 esbuild 单文件打包、产物已经 1.07 MB，react-md-editor 带 rehype/prism
- *   一整套（≈300 KB gzip 前），换来的主要是「CodeMirror 级的高亮」——而日记的行内
- *   格式只有粗体、列表、引用三种。为了三种格式背 300 KB，还要把它整套 CSS 覆盖成
- *   宿主主题（`--npr-*` 变量是独立的一套），收益比不划算。这里只借它们的**结构**。
- *
- * 视觉上要修掉的具体毛病（用户截图里那三条）：
- *   - 焦点态是一圈 2px 的品牌绿 outline（截图里那圈荧光绿）⇒ 现在没有描边，
- *     焦点只靠「工具栏浮出来 + 光标」表达；
- *   - 整块是灰底圆角盒子 ⇒ 现在透明底，只用一条 1px 的线跟正文分开；
- *   - 占位符里写着 `**一句话总结**` 的源码 ⇒ 模板改成 `## 一句话总结`，且预览
- *     一按就渲染成真标题。
+ * 手写那部分留下的东西（仍然在用）：
+ *   - 工具栏的**命令层**（`wrap` / `prefix` / `insertTag`）：富文本模式下按钮改走
+ *     Milkdown 命令，退路模式下仍然是「命令 → 改字符串」，共用同一份 `COMMANDS`；
+ *   - tab 预览 + 180ms 防抖：⌘E 仍然能在「写」和「渲染后的样子」之间切；
+ *   - 高度跟着内容长、⌘↵ 提交、私密模块的情绪行插在工具栏与底栏之间。
+ * 已删掉的是 0.33 那圈 2px 品牌绿 outline 与灰底圆角盒子 —— 那是「表单」的样子，
+ * 不是「稿纸」的样子。
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { sanitizeHtml } from '../host/sanitize.js';
 import { markdownToHtml } from '../host/markdown.js';
+import { loadDiaryEditor } from './diary-editor.js';
 
 /** 预览防抖：边打边渲染会把光标抖没（bytemd 的 previewDebounce 是同一个理由）。 */
 const PREVIEW_DEBOUNCE_MS = 180;
@@ -113,9 +104,17 @@ const COMMANDS = [
   { id: 'list', label: '•', title: '列表', run: toggleLinePrefix('- ') },
   { id: 'quote', label: '”', title: '引用', run: toggleLinePrefix('> ') },
   { id: 'divider2', divider: true },
-  { id: 'tag', label: '#', title: '标签（正文里写 #词 就会进标签云）', run: insertText('#', 0) },
+  { id: 'tag', label: '#', title: '标签（正文里写 #词 就会进标签云）', run: insertText('#', 0), plainOnly: true },
   { id: 'rule', label: '—', title: '分隔线', run: insertText('\n\n---\n\n') },
 ];
+
+/**
+ * 富文本模式里**没有**的命令。
+ *
+ * `tag` 插的是一个纯文本 `#`，在所见即所得里等于「多打一个字符」—— 留着反而占位；
+ * 而正文里打 `#灵感` 本身就是标签的写法，不需要工具栏帮忙。
+ */
+const RICH_BLOCKED = new Set(['tag']);
 
 /**
  * @param props.value     当前文本
@@ -135,6 +134,56 @@ export function DiaryComposer({
   const el = useRef(null);
   const [mode, setMode] = useState('edit');
   const [preview, setPreview] = useState('');
+
+  // ---- 富文本编辑器（Milkdown，按需从宿主下载）------------------------------
+  const richEl = useRef(null);
+  const richRef = useRef(null);
+  const [rich, setRich] = useState(false);
+  /** 编辑器自己的 onChange 走 ref：effect 只挂一次，不能因为父组件重渲染就重挂。 */
+  const changeRef = useRef(onChange);
+  changeRef.current = onChange;
+  const valueRef = useRef(value);
+  valueRef.current = value;
+
+  useEffect(() => {
+    if (disabled) return undefined;
+    let alive = true;
+    loadDiaryEditor()
+      .then(async (mod) => {
+        if (!alive) return;
+        // 先把挂载点渲染出来再挂编辑器：ProseMirror 挂在一个不可见的容器里
+        // 会按 0 高度量一遍，光标位置和滚动都会错位。
+        setRich(true);
+        await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+        if (!alive || !richEl.current) return;
+        const editor = await mod.createDiaryEditor({
+          root: richEl.current,
+          value: valueRef.current,
+          onUpdate: (markdown) => changeRef.current(markdown),
+        });
+        if (!alive) { editor.destroy(); return; }
+        richRef.current = editor;
+        if (autoFocus) editor.focus();
+      })
+      .catch(() => {
+        // 拿不到编辑器（宿主没托管这个文件 / 请求失败）⇒ 退回 textarea。
+        // 日记必须还能写：编辑器是增强，不是前提。
+        if (alive) setRich(false);
+      });
+    return () => {
+      alive = false;
+      try { richRef.current?.destroy(); } catch { /* 已销毁 */ }
+      richRef.current = null;
+      setRich(false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [disabled]);
+
+  // 外部改值（套用模板 / 清空 / 切到另一天）要写回编辑器。
+  useEffect(() => {
+    if (!rich || !richRef.current) return;
+    richRef.current.setMarkdown(value);
+  }, [value, rich]);
 
   // 高度跟着内容长：先归零再读 scrollHeight，否则只会越缩越长。
   useLayoutEffect(() => {
@@ -161,8 +210,29 @@ export function DiaryComposer({
   }, [autoFocus]);
 
   const commands = useMemo(() => COMMANDS.map((item) => ({ ...item })), []);
+  /**
+   * 富文本模式下要隐掉的按钮，以及「因为被隐掉而变成连续/落单的分隔符」。
+   * 不做这一步的话，工具栏上会出现「B I | H • " | | —」这种两道竖线挨着的怪相。
+   */
+  const shownCommands = useMemo(() => {
+    if (!rich) return commands;
+    const kept = commands.filter((item) => item.divider || !RICH_BLOCKED.has(item.id));
+    return kept.filter((item, at, all) => {
+      if (!item.divider) return true;
+      const prev = all[at - 1];
+      const next = all[at + 1];
+      return Boolean(prev && next && !prev.divider);
+    });
+  }, [commands, rich]);
+
   const runCommand = (item) => {
     if (disabled || !item.run) return;
+    // 富文本模式下交给编辑器自己的命令层（它知道光标在哪、选区是什么）；
+    // 退路模式下还是那一套「命令 → 改字符串」。
+    if (rich && richRef.current) {
+      richRef.current.run(item.id);
+      return;
+    }
     item.run({ el: el.current, value, onChange });
   };
 
@@ -210,21 +280,39 @@ export function DiaryComposer({
           ? <div className="npr-write-preview" dangerouslySetInnerHTML={{ __html: preview }} />
           : <p className="npr-write-empty">还没有内容。</p>
       ) : (
-        <textarea
-          ref={(node) => { el.current = node; if (inputRef) inputRef.current = node; }}
-          className="npr-write-input"
-          value={value}
-          placeholder={placeholder}
-          aria-label={placeholder}
-          spellCheck={false}
-          disabled={disabled}
-          onChange={(event) => onChange(event.target.value)}
-          onKeyDown={onKeyDown}
-        />
+        <>
+          {/*
+            * ★ 富文本挂载点**先于**编辑器存在：ProseMirror 需要一个已经排好版的
+            *   容器才能算光标与滚动位置。`rich` 为假时它被 CSS 收掉，显示 textarea。
+            * ★ 两者的值始终是**同一份 markdown 字符串**：富文本不是另一套存储，
+            *   它只是这份 .md 的一个视图 —— 拿编辑器打开文件依然是可读的原文。
+            */}
+          <div className="npr-write-rich" ref={richEl} data-ready={rich ? 'yes' : 'no'}
+            onKeyDown={(event) => {
+              const mod = event.metaKey || event.ctrlKey;
+              if (mod && event.key === 'Enter') { event.preventDefault(); onSubmit?.(); }
+            }} />
+          {/* 空的时候盖一条提示。ProseMirror 的空文档不是空节点（里面有一个 <br>），
+              所以占位只能由我们这一层出；有字就不渲染，聚焦时 CSS 再收掉。 */}
+          {rich && value.trim() === '' && <span className="npr-write-ph" aria-hidden="true">{placeholder}</span>}
+          {!rich && (
+            <textarea
+              ref={(node) => { el.current = node; if (inputRef) inputRef.current = node; }}
+              className="npr-write-input"
+              value={value}
+              placeholder={placeholder}
+              aria-label={placeholder}
+              spellCheck={false}
+              disabled={disabled}
+              onChange={(event) => onChange(event.target.value)}
+              onKeyDown={onKeyDown}
+            />
+          )}
+        </>
       )}
 
       <div className="npr-write-tools" role="toolbar" aria-label="格式">
-        {commands.map((item) => (item.divider
+        {shownCommands.map((item) => (item.divider
           ? <span key={item.id} className="npr-write-sep" aria-hidden="true" />
           : (
             <button key={item.id} type="button" title={item.title} aria-label={item.title}
