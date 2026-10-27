@@ -1684,24 +1684,7 @@ export function DiaryApp({
              *   「按时间轴检索」—— 它只提供了「按日期跳转」，却占满了整栏。
              *   用户 2026-10-27 的原话是「实在是不符合常理」，说的就是这个。
              */
-            /*
-             * ★ 切换器在 `.npr-diary-panel` **外面**：面板是 `overflow: auto`，
-             *   放进去就会跟着内容一起滚走 —— 而「我现在在按什么看」必须一直在。
-             */
-            <>
-              <div className="npr-diary-views" role="tablist" aria-label="灵感视图">
-                {LINK_VIEWS.map((item) => (
-                  <button key={item.value} type="button" role="tab"
-                    aria-selected={linkView === item.value}
-                    className={`npr-diary-view${linkView === item.value ? ' is-on' : ''}`}
-                    title={`${item.label}浏览灵感`}
-                    onClick={() => { setLinkView(item.value); setOpenSrcKey(''); }}>
-                    <Icon name={item.icon} size={13} />
-                    <span>{item.label}</span>
-                  </button>
-                ))}
-              </div>
-              <div className="npr-diary-panel">
+            <div className="npr-diary-panel">
               <section className="npr-diary-sect">
                 <h2 className="npr-diary-sect-head"><Icon name="tag" size={12} />标签
                   {tagIndex.tags.length > 0 && (
@@ -1737,6 +1720,27 @@ export function DiaryApp({
                   </button>
                 )}
               </section>
+
+              {/*
+               * ★ 切换器在标签**下面**（用户 2026-10-27：「这部分放到标签下面」）。
+               *   但它仍然必须**钉住**：面板是 `overflow: auto`，而「按书本」的列表会
+               *   一直变长 —— 往下翻几十行之后要切回「按时间」，还得滚回顶上去找它，
+               *   那就等于没有切换器。所以它在滚动区里 + `position: sticky`。
+               */}
+              <div className="npr-diary-viewbar">
+                <div className="npr-diary-views" role="tablist" aria-label="灵感视图">
+                  {LINK_VIEWS.map((item) => (
+                    <button key={item.value} type="button" role="tab"
+                      aria-selected={linkView === item.value}
+                      className={`npr-diary-view${linkView === item.value ? ' is-on' : ''}`}
+                      title={`${item.label}浏览灵感`}
+                      onClick={() => { setLinkView(item.value); setOpenSrcKey(''); }}>
+                      <Icon name={item.icon} size={13} />
+                      <span>{item.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
 
               <section className="npr-diary-sect" hidden={linkView !== 'time'}>
                 <h2 className="npr-diary-sect-head"><Icon name="clock" size={12} />时间轴</h2>
@@ -1884,7 +1888,6 @@ export function DiaryApp({
                 </section>
               )}
             </div>
-            </>
           ) : moduleValue === 'private' ? (
             <div className="npr-diary-panel">
               <DiaryCalendar year={month.year} month0={month.month0} marks={privateDays} tones={privateTones}

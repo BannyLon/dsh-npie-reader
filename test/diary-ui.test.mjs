@@ -1421,11 +1421,23 @@ describe('0.41：灵感侧栏是一个切换器 + 当前那一档', () => {
       '切档没有收起上一档的展开');
   });
 
-  it('★ 切换器在滚动区外面，且三档都带 tab 语义', () => {
+  it('★ 切换器排在标签下面，且滚远了也不消失（sticky）', () => {
+    // 用户 2026-10-27：「调下位置，[切换器] 这部分放到标签下面」。
+    // ⇒ 顺序是「标签 → 切换器 → 当前那一档」，不是「切换器顶在最上面」。
+    const tagsAt = diary.indexOf('<Icon name="tag" size={12} />标签');
     const viewsAt = diary.indexOf('<div className="npr-diary-views"');
-    const panelAt = diary.indexOf('<div className="npr-diary-panel">', viewsAt);
+    const panelAt = diary.indexOf('<div className="npr-diary-panel">');
+    assert.ok(tagsAt > 0, '标签区块不见了');
     assert.ok(viewsAt > 0, '没有视图切换器');
-    assert.ok(panelAt > viewsAt, '切换器在滚动区里面 —— 往下翻就看不见当前是哪一档');
+    assert.ok(tagsAt < viewsAt, '切换器又跑到标签上面去了');
+    assert.ok(panelAt < viewsAt, '切换器在面板外面 —— 那它就不是「标签下面」，而是另一条顶栏');
+    // ★ 但它在滚动区里，所以必须自己钉住：「按书本」的列表会一直变长，
+    //   翻几屏之后要切回「按时间」还得滚回顶上找它，那就等于没有切换器。
+    assert.match(diaryCss, /\.npr-diary-viewbar \{[^}]*position: sticky[^}]*top: 0/,
+      '切换器在滚动区里却没有 sticky —— 往下翻就看不见当前是哪一档');
+    // ★ 不透明的底：sticky 条下面有行在滚，背景透明会让两行字叠在一起。
+    assert.match(diaryCss, /\.npr-diary-viewbar \{[^}]*background: var\(--npr-bg-2\)/,
+      'sticky 条没有底色 —— 滚动时下面的行会从边距里透出来');
     assert.match(diary, /role="tablist" aria-label="灵感视图"/, '没有 tablist 语义');
     assert.match(diary, /role="tab"\s*\n?\s*aria-selected=\{linkView === item\.value\}/, 'tab 没有 aria-selected');
   });

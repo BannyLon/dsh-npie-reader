@@ -2554,7 +2554,13 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
    ★ 槽用 `--npr-hover`（fg 6% 混 bg）、选中块用 `--npr-surface`：
      两个都是主题变量，浅色下是「白块浮在浅灰槽上」、深色下是「亮块浮在暗槽上」，
      不需要为深色再写一套（写了就一定会漂）。 */
-.npr-diary-views { display: flex; gap: 2px; flex-shrink: 0; margin: 8px 12px 2px; padding: 2px; border-radius: 8px; background: var(--npr-hover); }
+/* ★ 0.41.1 切换器挪到标签**下面**，于是它必须自己在滚动区里钉住。
+   `.npr-diary-panel` 是 `overflow: auto` —— 直接放进去会跟着列表一起滚走，
+   而「按书本」的列表会一直变长，往下翻几十行之后就没有切换器了。
+   ★ 底色必须写 `--npr-bg-2`（侧栏自己的底色）：不写的话，滚动时下面的行会从
+     那 12px 左右边距和 8px 上缝里透出来，看起来像切换器是半透明的。 */
+.npr-diary-viewbar { position: sticky; top: 0; z-index: 3; padding-top: 2px; background: var(--npr-bg-2); }
+.npr-diary-views { display: flex; gap: 2px; margin: 6px 12px 4px; padding: 2px; border-radius: 8px; background: var(--npr-hover); }
 .npr-root .npr-diary-view { flex: 1 1 0; display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 0; height: 26px; padding: 0 4px; border: 0; border-radius: 6px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11.5px; white-space: nowrap; cursor: pointer; }
 .npr-root .npr-diary-view:hover { color: var(--npr-fg); }
 .npr-root .npr-diary-view.is-on { background: var(--npr-surface); color: var(--npr-fg); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / 12%), 0 0 0 1px color-mix(in srgb, var(--npr-fg) 6%, transparent); }
