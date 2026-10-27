@@ -2518,7 +2518,11 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
    不保证够深；而 `fg/bg` 这一对是主题里**对比度最大**的两色，任何主题下都成立。
    品牌色仍然出现在选中态、focus ring 与 hover 描边上 —— 它只是不再承载文字。 */
 .npr-root .npr-diary-save { height: 30px; padding: 0 16px; border: 1px solid var(--npr-fg); border-radius: 8px; background: var(--npr-fg); color: var(--npr-bg); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
-.npr-root .npr-diary-save:hover:not(:disabled) { background: var(--npr-accent-strong); border-color: var(--npr-accent-strong); color: #fff; }
+/* hover 只在 fg/bg 这一对里挪一点，**不换回品牌色**：0.31.0 那种「品牌浅绿底 + 白字」
+   在悬停时会一模一样地复现（实测约 2:1），等于只修了静态态。往 bg 方向混 12% 就能
+   在浅色主题下略变浅、深色主题下略变深 —— 两个方向都仍然是「深底浅字」或「浅底深字」，
+   对比度不掉档，也不需要为深浅主题各写一条。 */
+.npr-root .npr-diary-save:hover:not(:disabled) { background: color-mix(in srgb, var(--npr-fg) 88%, var(--npr-bg)); border-color: color-mix(in srgb, var(--npr-fg) 88%, var(--npr-bg)); }
 .npr-root .npr-diary-save:disabled { opacity: .45; cursor: not-allowed; }
 
 /* ── 心情：独立成行、放大、带中文标签 ─────────────────────────────────
