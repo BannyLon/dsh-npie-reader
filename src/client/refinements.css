@@ -2517,7 +2517,14 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
    ★ 0.32.0 写的是 `text-transform: uppercase` + `.06em` —— 那是给拉丁字母小标签用的，
      四个汉字被拉开字距、压成 10.5px 之后，读起来像一排**工具栏的机器标签**，
      而它其实是内容分组。现在按内容来排：字重 600、颜色退一档、下面留 6px。 */
-.npr-diary-sect-head { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; padding: 0 14px; font-size: 11px; font-weight: 600; letter-spacing: 0; color: var(--npr-muted); text-transform: none; }
+/* ★ 0.41 把标题「立起来」：12px / 600 / 实色 + 前置图标 + 下方微分隔线。
+   以前是 11px / 600 / muted 且**没有任何边界**，标题和下面的说明文字几乎同色同号 ——
+   用户 2026-10-27 的原话：「'挂在书上'在字号、粗细和区块划分上和正文说明几乎没有拉开差距，
+   视觉上不显眼」。差别不在字重（原来就是 600），在于**颜色太弱 + 没有分隔线**。
+   分隔线画在标题下方而不是区块之间：区块之间已经有 14px 的间距，再加线会显得碎。 */
+.npr-diary-sect-head { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; padding: 0 14px 6px; border-bottom: 1px solid var(--npr-border); font-size: 12px; font-weight: 600; letter-spacing: .01em; color: var(--npr-fg); text-transform: none; }
+/* 图标比字小一号、再淡一档：它负责「一眼认出是哪一块」，不该比标题本身更响。 */
+.npr-diary-sect-head > svg { flex: 0 0 auto; color: var(--npr-faint); }
 .npr-diary-sect-badge { padding: 0 5px; border-radius: 999px; background: color-mix(in srgb, var(--npr-fg) 8%, transparent); color: var(--npr-faint); font-size: 11px; font-weight: 500; letter-spacing: 0; font-variant-numeric: tabular-nums; }
 .npr-diary-sect-note { margin: 2px 0 6px; padding: 0 14px; font-size: 11.5px; line-height: 1.65; color: var(--npr-faint); }
 .npr-diary-sect-note.is-error { color: var(--dsw-alias-state-error-primary); }
@@ -2537,6 +2544,29 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-diary-dayrow-date { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .npr-diary-dayrow-count { flex: 0 0 auto; font-size: 11px; color: var(--npr-faint); font-variant-numeric: tabular-nums; }
 .npr-diary-dayrow-mood { flex: 0 0 auto; font-size: 12px; line-height: 1; }
+
+/* ── 一级视图切换器（按时间 / 按书本 / 按文章）──────────────────────────
+   ★ 为什么是**胶囊分段**、而上面三个模块 tab 是**下划线**：
+     模块 tab 是「这一页分几块」，切换器是「这一块按什么看」—— 两层。
+     两层用同一种样式，用户会以为它们是同级的三选一（用户 2026-10-27 提的正是
+     「把书和文章提升为和标签同级的筛选维度」——同级指的是**和标签并列**，
+     不是和「灵感速记/私密日记/读后感」并列）。
+   ★ 槽用 `--npr-hover`（fg 6% 混 bg）、选中块用 `--npr-surface`：
+     两个都是主题变量，浅色下是「白块浮在浅灰槽上」、深色下是「亮块浮在暗槽上」，
+     不需要为深色再写一套（写了就一定会漂）。 */
+.npr-diary-views { display: flex; gap: 2px; flex-shrink: 0; margin: 8px 12px 2px; padding: 2px; border-radius: 8px; background: var(--npr-hover); }
+.npr-root .npr-diary-view { flex: 1 1 0; display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 0; height: 26px; padding: 0 4px; border: 0; border-radius: 6px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11.5px; white-space: nowrap; cursor: pointer; }
+.npr-root .npr-diary-view:hover { color: var(--npr-fg); }
+.npr-root .npr-diary-view.is-on { background: var(--npr-surface); color: var(--npr-fg); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / 12%), 0 0 0 1px color-mix(in srgb, var(--npr-fg) 6%, transparent); }
+
+/* ── 来源行（书 / 文章）与它的二级展开 ────────────────────────────────
+   ★ 行本身是 `.npr-diary-dayrow`（与时间轴同一套 hover/选中），只把「条数」换成胶囊。
+   ★ `.npr-diary-srcbody` 不再加左边线：`.npr-diary-daylist` 自己有一条，
+     外面再套一条就是双线，在 268px 里看起来像缩进错位。 */
+.npr-diary-src { margin-bottom: 1px; }
+.npr-diary-srccount { flex: 0 0 auto; min-width: 18px; padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--npr-fg) 7%, transparent); color: var(--npr-faint); font-size: 11px; font-weight: 500; line-height: 17px; text-align: center; font-variant-numeric: tabular-nums; }
+.npr-diary-src.is-open > .npr-diary-dayrow { background: color-mix(in srgb, var(--npr-fg) 5%, transparent); font-weight: 600; }
+.npr-diary-srcbody { padding: 0 0 2px; }
 
 /* ── 侧栏时间轴：日期行可展开 ───────────────────────────────────────────
    ★ 展开出来的条目用「一道 2px 竖线 + 12px 缩进」表达从属关系，而不是再套一层框：

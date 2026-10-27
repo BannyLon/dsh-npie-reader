@@ -195,6 +195,24 @@ const AI_DAY_PROMPT = [
 const TAG_SIDE = 6;
 
 /**
+ * 灵感侧栏的**一级视图**：按时间 / 按书本 / 按文章。
+ *
+ * ★ 为什么要有这个切换器（用户 2026-10-27 的原话）：
+ *   「挂在书上 / 挂在文章上……随着书本和文章越读越多，这两部分也会无限向下延伸，
+ *     挤占空间」，建议「提升为和标签同级的筛选维度切换器」。
+ *   在此之前三块是**纵向平铺**的：时间轴先长到几十天，书和文章永远被压在栏底，
+ *   读得越多越找不到 —— 而它们的数量增长是**单调**的，平铺迟早会失败。
+ * ★ 为什么不是四个（把「标签」也做成视图）：标签是**筛选器**，不是内容列表 ——
+ *   它和这三档是正交的（在「按书本」里也应该能按标签收窄）。所以它留在切换器下面，
+ *   三档都能用，而不是变成第四档（那会让人以为「按标签」是一个并列的内容视图）。
+ */
+const LINK_VIEWS = [
+  { value: 'time', label: '按时间', icon: 'clock' },
+  { value: 'book', label: '按书本', icon: 'book-open' },
+  { value: 'article', label: '按文章', icon: 'file-text' },
+];
+
+/**
  * 浮层里**不搜索时**最多铺多少个。
  *
  * 浮层是阅读区大小（约 900×600），一屏能放七十来个。3000 个全铺出来会让 DOM 变重、
@@ -317,7 +335,25 @@ function linkedSources(days) {
         article: '',
         page: null,
         chapter: null,
+        /*
+         * 这个来源底下的**条目本身**。
+         * ★ 0.41 之前只存 count：侧栏只能显示「《深度工作》 4 条」，点一下跳去别处，
+         *   用户要问「哪四条」。现在一级视图就是「按书本」，展开必须能直接看到这四条，
+         *   否则「按书本」只是一个更长的跳转列表，没有回答那个问题。
+         * ★ 存的是**快照**（time/preview/date/key），不是 `entry` 引用：
+         *   `timeline.days` 每次刷新都会换一批对象，拿着旧引用去比 `focusKey` 会失效。
+         */
+        entries: [],
       };
+      cell.entries.push({
+        date: day.date,
+        time: entry.time ?? '',
+        preview: entry.preview ?? '',
+        entryKey: entryKey(entry),
+        // 序号用来在同一天里定先后。不存它就只能按 `entryKey` 字符串排，
+        // 而那是 `public-10` / `public-9` —— 字典序会把 10 排到 9 前面。
+        index: Number.isInteger(entry.index) ? entry.index : 0,
+      });
       cell.count += 1;
       // 同一天内按记录顺序往后覆盖：最后写入的就是这一天最新的那一条。
       if (day.date >= cell.last) {
@@ -343,9 +379,17 @@ function linkedSources(days) {
       map.set(key, cell);
     }
   }
-  return [...map.values()].sort((left, right) => (
-    right.last.localeCompare(left.last) || right.count - left.count || left.title.localeCompare(right.title)
-  ));
+  return [...map.values()]
+    .map((cell) => ({
+      ...cell,
+      // 展开区里**最近的在最上面**：从「按书本」进来的人想知道「我最近对这本书想到什么」。
+      entries: [...cell.entries].sort((left, right) => (
+        right.date.localeCompare(left.date) || right.index - left.index
+      )),
+    }))
+    .sort((left, right) => (
+      right.last.localeCompare(left.last) || right.count - left.count || left.title.localeCompare(right.title)
+    ));
 }
 
 export function DiaryApp({
@@ -508,6 +552,21 @@ export function DiaryApp({
   const [expand, setExpand] = useState(null);
   /** 侧栏时间轴里展开的那一天（同一次只展开一天）。 */
   const [openDay, setOpenDay] = useState('');
+  /**
+   * 侧栏一级视图：`time` / `book` / `article`（见 `LINK_VIEWS`）。
+   *
+   * ★ 不持久化：每次进页面回到「按时间」。理由是这三档的**默认值就是最常用的那个**
+   *   （打开日记多半是看「最近写了什么」），而记住上次的档位会让「怎么今天打开是书单」
+   *   变成一个要重新学习的状态。真要按书翻，点一下的代价小于「界面不按预期打开」。
+   */
+  const [linkView, setLinkView] = useState('time');
+  /**
+   * 「按书本 / 按文章」里**二级展开**的那一个来源（`linkedSources()` 的 key）。
+   *
+   * ★ 同一次只展开一个：268px 的侧栏，展开两个就等于把第三个挤出去，
+   *   而用户来这一档是**找一个来源**，不是同时看两个。
+   */
+  const [openSrcKey, setOpenSrcKey] = useState('');
   const [stats, setStats] = useState(null);
   /**
    * AI 面板的宽度（百分比），可拖动。
@@ -1412,6 +1471,33 @@ export function DiaryApp({
   const linkedBookRows = linked.filter((item) => item.kind === 'book');
   const linkedArticleRows = linked.filter((item) => item.kind === 'article');
 
+  /**
+   * 当前视图要铺的那一列（时间档为空 —— 时间轴是另一套结构，不走这里）。
+   *
+   * ★ 只算**当前这一档**：三档同时铺就是原来的纵向长龙，切换器等于没做。
+   * ★ 文案跟着档位走：同一句「点一行回到那本书」在「按书本」里是错的 ——
+   *   现在点一行是**展开这一本的灵感**，「去书里」是展开区里的第二个按钮。
+   *   文案说错，用户就会按错（而且会以为功能坏了）。
+   */
+  const linkViewRows = linkView === 'book' ? linkedBookRows
+    : linkView === 'article' ? linkedArticleRows
+      : [];
+  const linkViewMeta = linkView === 'book'
+    ? {
+      icon: 'book-open',
+      head: '挂在书上',
+      note: '读书时按 L 记的灵感 —— 点一本展开它的灵感，展开区里可以回到那本书。',
+      empty: '还没有挂在书上的灵感。读书时按 L 记一条，它就会出现在这里。',
+      jump: '打开这本书',
+    }
+    : {
+      icon: 'file-text',
+      head: '挂在文章上',
+      note: '读 RSS 时按 L 记的灵感 —— 点一篇展开它的灵感，展开区里可以回到那一篇。',
+      empty: '还没有挂在文章上的灵感。读 RSS 时按 L 记一条，它就会出现在这里。',
+      jump: '打开这篇文章',
+    };
+
   const filteredBooks = books.items.filter((item) => (
     bookQuery.trim() === '' || item.title.toLowerCase().includes(bookQuery.trim().toLowerCase())
   ));
@@ -1598,9 +1684,26 @@ export function DiaryApp({
              *   「按时间轴检索」—— 它只提供了「按日期跳转」，却占满了整栏。
              *   用户 2026-10-27 的原话是「实在是不符合常理」，说的就是这个。
              */
-            <div className="npr-diary-panel">
+            /*
+             * ★ 切换器在 `.npr-diary-panel` **外面**：面板是 `overflow: auto`，
+             *   放进去就会跟着内容一起滚走 —— 而「我现在在按什么看」必须一直在。
+             */
+            <>
+              <div className="npr-diary-views" role="tablist" aria-label="灵感视图">
+                {LINK_VIEWS.map((item) => (
+                  <button key={item.value} type="button" role="tab"
+                    aria-selected={linkView === item.value}
+                    className={`npr-diary-view${linkView === item.value ? ' is-on' : ''}`}
+                    title={`${item.label}浏览灵感`}
+                    onClick={() => { setLinkView(item.value); setOpenSrcKey(''); }}>
+                    <Icon name={item.icon} size={13} />
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="npr-diary-panel">
               <section className="npr-diary-sect">
-                <h2 className="npr-diary-sect-head">标签
+                <h2 className="npr-diary-sect-head"><Icon name="tag" size={12} />标签
                   {tagIndex.tags.length > 0 && (
                     <span className="npr-diary-sect-badge">{tagIndex.tags.length}</span>
                   )}
@@ -1635,8 +1738,8 @@ export function DiaryApp({
                 )}
               </section>
 
-              <section className="npr-diary-sect">
-                <h2 className="npr-diary-sect-head">时间轴</h2>
+              <section className="npr-diary-sect" hidden={linkView !== 'time'}>
+                <h2 className="npr-diary-sect-head"><Icon name="clock" size={12} />时间轴</h2>
                 {timeline.busy && <p className="npr-diary-sect-note">正在读…</p>}
                 {!timeline.busy && recentDays.length === 0 && (
                   <p className="npr-diary-sect-note">还没有灵感。右边写一句就行。</p>
@@ -1701,54 +1804,94 @@ export function DiaryApp({
                 )}
               </section>
 
-              {linkedBookRows.length > 0 && (
+              {/*
+                * 「按书本 / 按文章」——**同一套结构，两种数据**。
+                *
+                * ★ 为什么不再分成两个 section 纵向铺：用户 2026-10-27 的原话是
+                *   「随着书本和文章越读越多，这两部分也会无限向下延伸，挤占空间」。
+                *   它们的增长是**单调**的（读一本多一行，永不减少），而时间轴也在长 ——
+                *   三块抢一条纵向空间，最先被挤掉的就是书和文章，正是最想按它找的那个维度。
+                * ⇒ 改成和「按时间」平级的视图，一次只铺一档，谁也不挤谁。
+                *
+                * ★ 点一行 = **展开这一本的灵感**，不是直接跳走。
+                *   0.39 点一行是「回到那本书」，那是当时的正确解 —— 因为 0.38 点书得到的是
+                *   一页日记（用户：「挂在书上为什么还会有日记显示的内容」）。
+                *   但到了「按书本」这个视图里，用户的问题是「这本书我想过什么」，
+                *   直接跳走等于把这个问题又推回给阅读器。
+                * ★ 两种行为**不压在同一个点击目标上**：行是展开，「打开这本书」是展开区里的
+                *   第二个按钮。同一个按钮既是展开又是跳转，用户永远猜不准这一下会发生什么。
+                */}
+              {linkView !== 'time' && (
                 <section className="npr-diary-sect">
-                  <h2 className="npr-diary-sect-head">挂在书上</h2>
-                  <p className="npr-diary-sect-note">读书时按 L 记的灵感 —— 点一行回到那本书的对应页。</p>
-                  {linkedBookRows.map((item) => (
-                    <button key={item.key} type="button"
-                      className={`npr-diary-dayrow${linkKey === item.key ? ' npr-selected' : ''}`}
-                      /* 有书 id = 点了会走；没有（0.30 之前的老条目 / 书已删）= 只在日记里筛，
-                         两种行为不同，提示也得不同 —— 同一句文案会让点空的那次像坏了。 */
-                      title={item.bookId === ''
-                        ? `${item.key} · ${item.count} 条 · 最近一条在 ${item.last}（这本书已不在书架）`
-                        : `打开这本书${Number.isInteger(item.page) ? `第 ${item.page} 页` : ''} · 共 ${item.count} 条`}
-                      onClick={() => openSource(item)}>
-                      <span className="npr-diary-dayrow-date">{item.key}</span>
-                      <span className="npr-diary-dayrow-count">{item.count} 条</span>
-                    </button>
-                  ))}
-                </section>
-              )}
-              {/* ★ 为什么文章也要一块：用户 2026-10-27 的原话是「那如果是在阅读 RSS 时
-                  创建的灵感怎么办？挂在书上的意义？」——问得对。挂在某处这件事的意义
-                  从来不是「因为它是书」，而是**回到现场**：一条灵感离开上下文就只剩
-                  半句话。所以书和文章各占一块，用同一个机制，只是回到的地方不同。 */}
-              {linkedArticleRows.length > 0 && (
-                <section className="npr-diary-sect">
-                  <h2 className="npr-diary-sect-head">挂在文章上</h2>
-                  <p className="npr-diary-sect-note">读 RSS 时按 L 记的灵感 —— 点一行回到那一篇。</p>
-                  {linkedArticleRows.map((item) => (
-                    <button key={item.key} type="button"
-                      className={`npr-diary-dayrow${linkKey === item.key ? ' npr-selected' : ''}`}
-                      title={item.article === ''
-                        ? `${item.title} · ${item.count} 条 · 最近一条在 ${item.last}（这篇已不在订阅里）`
-                        : `打开这篇文章 · 共 ${item.count} 条`}
-                      onClick={() => openSource(item)}>
-                      <span className="npr-diary-dayrow-date">{item.title}</span>
-                      <span className="npr-diary-dayrow-count">{item.count} 条</span>
-                    </button>
-                  ))}
+                  <h2 className="npr-diary-sect-head">
+                    <Icon name={linkViewMeta.icon} size={12} />{linkViewMeta.head}
+                    {linkViewRows.length > 0 && (
+                      <span className="npr-diary-sect-badge">{linkViewRows.length}</span>
+                    )}
+                  </h2>
+                  <p className="npr-diary-sect-note">{linkViewMeta.note}</p>
+                  {linkViewRows.length === 0 && <p className="npr-diary-sect-note">{linkViewMeta.empty}</p>}
+                  {linkViewRows.map((item) => {
+                    const open = openSrcKey === item.key;
+                    // 有没有「现场」可回：书要 bookId、文章要 article 字段。
+                    // 0.30 之前的老条目只有书名 —— 那种就只能展开，不能跳（跳了也没地方去）。
+                    const canJump = item.kind === 'book' ? item.bookId !== '' : item.article !== '';
+                    return (
+                      <div key={item.key} className={`npr-diary-src${open ? ' is-open' : ''}`}>
+                        <button type="button" aria-expanded={open}
+                          className={`npr-diary-dayrow${linkKey === item.key ? ' npr-selected' : ''}`}
+                          /* 长书名必须能看全：侧栏 268px 放不下
+                             「《译文名著文库》 076[法]雨果-九三年（叶尊译）」，按钮上是省略号，
+                             全文只在这里。 */
+                          title={`${item.key} · ${item.count} 条 · 最近一条在 ${item.last}`}
+                          onClick={() => setOpenSrcKey(open ? '' : item.key)}>
+                          <span className="npr-diary-dayrow-date">{item.key}</span>
+                          <span className="npr-diary-srccount">{item.count}</span>
+                          <Icon name={open ? 'chevron-up' : 'chevron-down'} size={13} />
+                        </button>
+                        {open && (
+                          <div className="npr-diary-srcbody">
+                            <ul className="npr-diary-daylist">
+                              {item.entries.map((entry) => (
+                                <li key={`${entry.date}-${entry.entryKey}`}>
+                                  <button type="button"
+                                    className={`npr-diary-dayitem${entry.date === selected && focusKey === entry.entryKey ? ' is-focus' : ''}`}
+                                    title={`${entry.date} ${entry.time} ${entry.preview}`}
+                                    onClick={() => jump(entry.date, entry.entryKey)}>
+                                    <span className="npr-diary-dayitem-time">{entry.time}</span>
+                                    <span className="npr-diary-dayitem-text">{entry.preview}</span>
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                            {canJump ? (
+                              <button type="button" className="npr-diary-dayload"
+                                onClick={() => openSource(item)}>
+                                {linkViewMeta.jump} ›
+                              </button>
+                            ) : (
+                              <p className="npr-diary-sect-note">
+                                {item.kind === 'book'
+                                  ? '这本书已经不在书架上了，只能在这里看这些灵感。'
+                                  : '这篇已经不在订阅里了，只能在这里看这些灵感。'}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </section>
               )}
             </div>
+            </>
           ) : moduleValue === 'private' ? (
             <div className="npr-diary-panel">
               <DiaryCalendar year={month.year} month0={month.month0} marks={privateDays} tones={privateTones}
                 selected={selected} today={today}
                 onPick={pick} onShift={(delta) => setMonth(shiftMonth(month.year, month.month0, delta))} onToday={() => pick(today)} />
               <section className="npr-diary-sect">
-                <h2 className="npr-diary-sect-head">这个月</h2>
+                <h2 className="npr-diary-sect-head"><Icon name="calendar" size={12} />这个月</h2>
                 {writtenDays.length === 0 && <p className="npr-diary-sect-note">这个月还没有私密日记。</p>}
                 {writtenDays.map(([date, count]) => {
                   const tone = marks.moods?.[date]?.private;
@@ -1776,7 +1919,7 @@ export function DiaryApp({
 
               {!books.busy && books.error === '' && (
                 <section className="npr-diary-sect">
-                  <h2 className="npr-diary-sect-head">读完的<span className="npr-diary-sect-badge">{readBooks.length}</span></h2>
+                  <h2 className="npr-diary-sect-head"><Icon name="book-open" size={12} />读完的<span className="npr-diary-sect-badge">{readBooks.length}</span></h2>
                   {readBooks.length === 0 && (
                     <p className="npr-diary-sect-note">还没有读完的书。在书架里读完一本、点「标记读完」，它就会出现在这里。</p>
                   )}
