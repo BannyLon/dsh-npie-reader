@@ -2933,8 +2933,17 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-diary-linkfind { width: 100%; margin: 0 0 8px; padding: 5px 0; border: 0; border-bottom: 1px solid var(--npr-border); background: transparent; color: var(--npr-fg); font: inherit; font-size: 13px; outline: none; }
 .npr-diary-linkfind:focus { border-bottom-color: var(--npr-fg); }
 .npr-diary-linkbooks { display: flex; flex-direction: column; gap: 1px; max-height: 190px; overflow: auto; overscroll-behavior: contain; }
+/* 章节列表一打开就收窄书列表：190 + 190 + 头脚 = 622 > 卡片上限 600，
+   body 会自己溢出 30px ⇒ 三层嵌套滚动。96px ≈ 3 行，够「认得出是哪本」，
+   要换书上面还有搜索框。★ 收窄后书名必须写进下面那行，否则高亮行滚出视野。 */
+.npr-diary-linkbooks.is-compact { max-height: 96px; }
 .npr-diary-linkchapters { display: flex; flex-direction: column; gap: 1px; max-height: 190px; overflow: auto; overscroll-behavior: contain; margin-top: 4px; }
-.npr-root .npr-diary-linkbook { display: block; width: 100%; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12.5px; line-height: 1.5; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ★ `flex: 0 0 auto` 是**必须的**，不是保险：列表是 flex 列 + max-height + overflow，
+   子项默认 flex-shrink:1 ⇒ 装不下时**行被压扁**而不是溢出滚动。10 本书压进 190px
+   每行只剩 18px，而文字行高 18.75px ⇒ 每一行都被垂直切掉半截，看起来像「渲染坏了」。
+   量出来的判据：`scrollHeight` 恒等于 `clientHeight`（永远滚不动）。
+   改成 `flex: 0 0 auto` 之后 10 本 = 316px > 190 ⇒ 真的滚，每行保持 30.75px。 */
+.npr-root .npr-diary-linkbook { display: block; width: 100%; flex: 0 0 auto; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12.5px; line-height: 1.5; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .npr-root .npr-diary-linkbook:hover { background: var(--npr-hover); }
 /* 选中：淡底 + 左侧一道竖线。**不用实心反白** —— 书和章会同时各选中一项，
    两块都反白会让人以为「整块是一个按钮」。 */

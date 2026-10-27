@@ -1,9 +1,9 @@
-# 交接：日记三个模块（0.40.0）—— 代码与静态验收已完成，**只差真机**
+# 交接：日记三个模块（0.40.1）—— 代码与静态验收已完成，**只差真机**
 
 > 自足的，不需要之前的对话。
 > **仓库**：`/Users/habhy/Documents/NPIE-program/dsh_plugins_desktop/dsh-npie-reader`
 > **注意是桌面端那棵树**（`dsh_plugins_desktop/`），不是 `dsh_plugins/`。
-> **版本**：`0.40.0`。**git**：0.29–0.39 已全部提交，0.40 见 `git log`。
+> **版本**：`0.40.1`。**git**：0.29–0.39 已全部提交，0.40 / 0.40.1 见 `git log`。
 > **上一份交接**（`HANDOFF-diary-0.32.0.md`）已过期 7 个版本，挪到了 `.build/archive/`，**别再照它做**。
 
 ---
@@ -12,7 +12,8 @@
 
 用户对日记页提过的所有具体批评（版式、AI 整理粒度、两个侧栏、情绪 emoji、读后感门禁、
 挂在书上、页脚串味、编辑器、写入口固定、记录密度、标签全量）**都已落地**。
-0.40 补的是最后三个已知缺口 + 一批「文档和代码说反话」的修正。
+0.40 补的是最后三个已知缺口 + 一批「文档和代码说反话」的修正；
+0.40.1 是给「挂到书」浮层补预览图时**量出两个真 bug**（列表行被 flex 压扁、三层嵌套滚动）并修掉。
 
 **下一步只有一件事：重启 DSH，在真机上把这些过一遍。** 这一轮所有结论都来自
 单元测试 + 静态预览，**真机一次都没跑过**。
@@ -29,14 +30,16 @@ node scripts/check-classes.mjs
 node --test test/diary-*.test.mjs test/build.test.mjs test/client-runtime.test.mjs
 ```
 
-0.40.0 实测期望值：
+0.40.1 实测期望值：
 
 | 检查 | 期望 |
 | --- | --- |
-| 日记相关 9 个测试文件 | **365 / 365 通过** |
+| 日记相关（8 个 `diary-*.test.mjs` + `build` + `client-runtime`） | **369 / 369 通过** |
 | `check-classes` | 定义 593 / 使用 620，**双向 0 缺口**，4 个白名单语义钩子 |
-| 构建 | host **571.2 KB** / client **1156.0 KB** / vendor/editor 373.8 KB |
+| 构建 | host **571.2 KB** / client **1156.2 KB** / vendor/editor 373.8 KB |
 | 静态预览几何 | `node .build/preview/make-diary-preview.mjs && node .build/preview/measure.mjs` ⇒ `cols=268px 1px 911px`，标题与正文左缘差 **0** |
+| 「挂到书」浮层几何 | `node .build/preview/measure-link.mjs` ⇒ `ALL OK`（三帧：卡片装进画框 / body 不滚 / 行高 31px） |
+| 浮层反向对照 | `node .build/preview/check-link-mutant.mjs` ⇒ `反向对照通过`（两条变异各自变红且理由对） |
 
 **不要**用 `node --test test/`（`MODULE_NOT_FOUND`），要 `test/*.test.mjs`。
 
@@ -92,27 +95,56 @@ README 曾明写「**没有** `diary_edit` / `diary_delete`，不是还没做，
 ★ 最阴的是最后一条：工具改了、提示词改了、注释没改。下一个接手的人照注释「修回去」，
 就会把已经改好的能力又锁上。
 
+### ⑥ 0.40.1：给浮层补图，然后量出两个真 bug
+
+0.40 的「挂到书」浮层**从没进过任何一张预览图**（预览脚本是手写的静态近似，不渲染真 JSX）。
+补了三帧（选完书 / 读过目录 / 没有目录）之后用真 Chrome 量 computed 值，抓到两个
+**在缩略图里都长得像正常留白**的问题。两个都是 0.40 自己引入的。
+
+1. **列表行被 flex 压扁**。列表是 `flex-direction: column` + `max-height: 190px` +
+   `overflow: auto`，子项默认 `flex-shrink: 1` ⇒ 装不下时**行被压扁**而不是溢出滚动。
+   10 本书压进 190px，每行只剩 18px，而文字行高 18.75px ⇒ 每行被垂直切掉半截。
+   指纹：`scrollHeight === clientHeight`（永远滚不动）。
+   修：`.npr-root .npr-diary-linkbook` 加 `flex: 0 0 auto`。
+2. **三层嵌套滚动**。书列表 190 + 章列表 190 同时在场 ⇒ 内容 622px > 卡片上限 600px
+   ⇒ `.npr-diary-modal-body` 自己溢出 30px。`overscroll-behavior: contain` 挡住链式传递
+   ⇒ 章列表滚到底不会接着滚卡片，用户得把指针挪出去再滚（看着像「滚不动」）。
+   修：章节列表打开时书列表收窄到 96px（`is-compact`）；同时「当前选择」那行**必须带书名**，
+   否则选中的书被滚出视野就不知道在往哪本挂。
+
+**落点**：`refinements.css` 的 `.npr-diary-linkbook` / `.npr-diary-linkbooks.is-compact`；
+`DiaryApp.jsx` 浮层里 book 列表的条件 class 与 `.npr-diary-linkpicked`。
+
+**判据落点**：`.build/preview/measure-link.mjs`（几何）+ `check-link-mutant.mjs`（两条变异
+各自必须变红）。单测 +4 钉住「CSS 守卫还在 + class 是条件拼的 + 变异锚点没漂」。
+
 ---
 
 ## 3. 已验证 / 未验证（**动手前先看这一节**）
 
 ### 已验证（可复现）
 
-- 日记相关 **365 个用例全绿**（见 §1）。
+- 日记相关 **369 个用例全绿**（8 个 `diary-*.test.mjs` + `build` + `client-runtime`，见 §1）。
 - 类名定义/使用双向 0 缺口。
 - 构建通过，体积见 §1。
 - 新增断言做了**变异验证**（跑绿不算数）：
   - 追加→替换 ⇒ 红；去掉「拿到 0 天」守卫 ⇒ 红；`body` 改回必填 ⇒ 2 红。
+  - 挖掉 `.is-compact` ⇒ 红（「三层嵌套滚动」）；挖掉 `flex: 0 0 auto` ⇒ 红（「行被压扁到 18px」）。
 - 静态预览几何未回归：`cols=268px 1px 911px`、标题与正文左缘差 0。
+- **「挂到书」浮层三帧已静态量过**（真 Chrome）：卡片 464 / 536 / 463px 均装进 642px 画框、
+  `body` 不滚、行高 31px、书列表 190/317 与章列表 190/253 真滚。
 
 ### 未验证（**这就是接手后的第一件事**）
 
-- **真机一次都没跑过。** 0.40 的所有视觉/交互结论都来自静态预览与源码断言。
+- **真机一次都没跑过。** 0.40 / 0.40.1 的所有视觉/交互结论都来自静态预览与源码断言。
 - 预览**不能**替代真机的四处差异：
   1. 没有宿主，`--npr-*` 是手填的 `--dsw-alias-*` 派生的 —— **深色主题完全没看过**；
   2. 没有 Harness 对话面板，`has-companion` 分支没验过；
-  3. 预览数据是写死的，真实的长书名、超长标签、几十条记录没试过；
-  4. **0.40 新增的「挂到书」浮层根本没进预览**（预览脚本是手写的静态近似，不含它）。
+  3. 预览数据是写死的，真实的长书名、超长标签、几十条记录没试过
+     （★ 这一条**已经咬过一次**：夹具只放 6 本书时列表恰好装得下，`flex-shrink` 那个
+     bug 完全量不出来；加到 10 本才暴露）；
+  4. 「挂到书」浮层**版式**已静态验证（含最挤的两列同屏），但**真机交互未验**：
+     滚动是否顺手、`autoFocus` 关闭按钮会不会抢走搜索框焦点、Esc 是否关得掉。
 - 宿主半区改了 `updateEntry` 的入参契约与 `append` 的返回值
   ⇒ **必须重启 DSH 才生效**（桌面端没有 `hmr`）。
 
@@ -214,17 +246,24 @@ README 曾明写「**没有** `diary_edit` / `diary_delete`，不是还没做，
 | 产物 | 路径 |
 | --- | --- |
 | 静态预览 HTML | `.build/preview/diary-preview.html` |
-| 十一帧模块图 | `.build/preview/m1.png` … `m11.png`（2 倍图） |
+| 十四帧模块图 | `.build/preview/m1.png` … `m14.png`（2 倍图；`m12`–`m14` 是「挂到书」浮层三态） |
 | 量几何 | `node .build/preview/measure.mjs`（JSON：`cols` / 对齐 / 选中格 computed 值） |
+| 量浮层几何 | `node .build/preview/measure-link.mjs`（卡片 / body / 两个列表 / 行高；末行打印判据） |
+| 浮层反向对照 | `node .build/preview/check-link-mutant.mjs`（挖掉两条 CSS 守卫，各自必须变红） |
 | 出图 | `node .build/preview/shoot.mjs`（自带「三列必须是三列」闸门） |
+| 裁帧 | `node .build/preview/cut.mjs`（按 `frames.json` 裁 `m*.png`） |
 | 过期交接文档 | `.build/archive/HANDOFF-diary-0.32.0.md`（**别再照它做**） |
 | 需求/调研 | `WorkBuddy_Test/dsh-npie-reader-日记功能_{需求推演,架构定稿,GitHub调研,GitHub二次调研}_20261026.md` |
+
+★ **整个 `.build/` 在 `.gitignore` 里**（第 17 行），预览工具链与图都**不进版本库** ——
+换台机器 clone 下来是没有这些的。它们只在这台机器上可复现。
+`measure-link.mjs` / `check-link-mutant.mjs` 是 0.40.1 新加的，同样在 `.build/preview/` 下。
 
 ---
 
 ## 9. 建议的接手顺序
 
-1. 跑 §1 三条命令，确认 365 绿、类名 0 缺口、构建过。
+1. 跑 §1 三条命令，确认 369 绿、类名 0 缺口、构建过。
 2. 重启 DSH，按 §4 的 P0-1 表逐项过，**第 5/6 项（挂到书）和深色主题优先** —— 它们是这一轮唯一没被任何测试覆盖到的部分。
 3. 真机有问题就改，改完回到 §1 复跑（别只看图）。
 4. 真机过了再做 P1，一次一个，每个都配用例 + 变异验证。

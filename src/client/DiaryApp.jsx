@@ -2367,7 +2367,15 @@ export function DiaryApp({
               <input className="npr-diary-linkfind" type="search" value={linkPick.find}
                 placeholder="找一本书…" aria-label="找一本书"
                 onChange={(event) => setLinkPick((current) => current && { ...current, find: event.target.value })} />
-              <div className="npr-diary-linkbooks">
+              {/* ★ 章节列表一打开，书列表就收窄（`is-compact`）。
+                  量出来的：书列表 190 + 章列表 190 同时在场时卡片内容 622px，
+                  而卡片上限是画框高 - 40 = 600 ⇒ 卡片 body 自己溢出 30px，
+                  变成「卡片 / 书列表 / 章列表」三层嵌套滚动（overscroll-behavior
+                  挡住链式传递，滚到底不会接着滚卡片，用户得把指针挪出来再滚）。
+                  收窄到 96px 省下 94px，body 不再滚。
+                  ★ 收窄之后「选的是哪本」只能靠下面的书名，所以那一行必须带书名 ——
+                    否则高亮行被滚出视野，用户就不知道自己在往哪本书上挂。 */}
+              <div className={`npr-diary-linkbooks${linkPick.outline.items.length > 0 ? ' is-compact' : ''}`}>
                 {linkBookList.map((item) => (
                   <button key={item.id} type="button"
                     className={`npr-diary-linkbook${linkPick.bookId === item.id ? ' is-picked' : ''}`}
@@ -2381,7 +2389,7 @@ export function DiaryApp({
               {linkPick.bookId !== '' && (
                 <div className="npr-diary-linkchapter">
                   <p className="npr-diary-linkpicked">
-                    {linkPick.chapter === null ? '整本书（不分章）' : `第 ${linkPick.chapter} 章 · ${linkPick.chapterTitle}`}
+                    {linkPick.bookTitle} · {linkPick.chapter === null ? '整本书（不分章）' : `第 ${linkPick.chapter} 章 · ${linkPick.chapterTitle}`}
                   </p>
                   {!linkPick.outline.asked && !linkPick.outline.busy && (
                     <button type="button" className="npr-diary-dayload" onClick={() => void askLinkOutline()}>

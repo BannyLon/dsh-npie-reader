@@ -1289,3 +1289,56 @@ describe('0.39：页脚按模块报自己的数（灵感页不该闻到私密）
       '导出私密明文的入口没有跟着私密模块 —— 灵感页会出现一个它不该有的按钮');
   });
 });
+
+// ---------------------------------------------------------------------------
+// 0.40.1：「挂到书」浮层的版式 —— 两条都是**量出来的**，不是看出来的
+//
+// ★ 起因：0.40 的浮层从没进过任何一张预览图（预览脚本是手写的静态近似，
+//   不渲染真 JSX）。补图之后用真 Chrome 量 computed 值，抓到两个真 bug，
+//   而这两个在缩略图里都长得像「正常留白」：
+//   ① 书列表 190 + 章列表 190 同时在场 ⇒ 卡片内容 622px > 上限 600px ⇒
+//      body 自己溢出 30px ⇒「卡片 / 书列表 / 章列表」三层嵌套滚动；
+//      `overscroll-behavior: contain` 挡住链式传递 ⇒ 章列表滚到底不会接着滚卡片，
+//      用户得把指针挪出列表再滚。
+//   ② 列表是 flex 列 + max-height + overflow，子项默认 `flex-shrink: 1`
+//      ⇒ 装不下时**行被压扁**而不是溢出滚动：10 本书压进 190px 每行只剩 18px，
+//      而文字行高 18.75px ⇒ 每行被垂直切掉半截，看着像渲染坏了。
+//      `scrollHeight` 恒等于 `clientHeight`（永远滚不动）就是它的指纹。
+//
+// ⇒ 几何判据在 `.build/preview/measure-link.mjs`（真 Chrome），反向对照在
+//   `check-link-mutant.mjs`（两条变异各自必须变红）。这里钉两件事：
+//   那两条 CSS 守卫还在，且界面上**真的用上了**（class 是条件拼的）。
+// ---------------------------------------------------------------------------
+describe('0.40.1：「挂到书」浮层不塌（书列表收窄 / 行不被压扁）', () => {
+  it('★ 列表行不许被 flex 压扁（`flex: 0 0 auto`）', () => {
+    // 少了这一条，列表就退化成「10 本书压成 10 条被切掉半截的字」——
+    // 而 `overflow: auto` 看起来「明明是滚动的」，所以肉眼很难怀疑到 flex 头上。
+    assert.match(diaryCss, /\.npr-root \.npr-diary-linkbook \{[^}]*flex: 0 0 auto/,
+      '书/章列表的行会被压扁 —— 行数一多，每行文字被垂直切掉');
+  });
+
+  it('★ 章节列表打开时书列表要收窄，否则三层嵌套滚动', () => {
+    assert.match(diaryCss, /\.npr-diary-linkbooks\.is-compact \{[^}]*max-height: 96px/,
+      '没有收窄规则 —— 两个 190px 列表叠起来会撑破卡片');
+    // 光有 CSS 不算：class 必须是**条件**拼上去的，否则永远收窄（选书时只剩 3 行）或永远不收窄。
+    assert.match(diary, /npr-diary-linkbooks\$\{linkPick\.outline\.items\.length > 0 \? ' is-compact' : ''\}/,
+      'is-compact 没有按「目录是否已展开」条件生效');
+  });
+
+  it('★ 收窄之后，书名必须写在「当前选择」那一行上', () => {
+    // 收窄到 96px 只装得下 3 行，选中的书很可能被滚出视野 ——
+    // 那时候「我在往哪本书上挂」只剩这一行能回答。
+    assert.match(diary, /<p className="npr-diary-linkpicked">\s*\{linkPick\.bookTitle\} · \{linkPick\.chapter === null/,
+      '「当前选择」没有书名 —— 书列表一收窄就不知道在挂哪本书');
+  });
+
+  it('★ 反向对照的变异锚点必须还在（否则那两条变异会静默变成空操作）', () => {
+    // check-link-mutant.mjs 靠这两段**原文**挖掉规则。CSS 一改格式（多空格、换行、
+    // 调整属性顺序），它就会找不到锚点 —— 那时脚本报的是「夹具没跟上真代码」，
+    // 而人只看到「没变红」，很容易当成「断言没牙」。锚点在这里钉住。
+    assert.ok(diaryCss.includes('.npr-diary-linkbooks.is-compact { max-height: 96px; }'),
+      '变异锚点 A 漂了：check-link-mutant.mjs 挖不到 is-compact 那条规则');
+    assert.ok(diaryCss.includes('width: 100%; flex: 0 0 auto; padding: 6px 8px;'),
+      '变异锚点 B 漂了：check-link-mutant.mjs 挖不到 flex: 0 0 auto');
+  });
+});
