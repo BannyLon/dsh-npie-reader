@@ -403,17 +403,23 @@ describe('灵感模块：情绪 / 标签 / 时间轴 / 关联到书', () => {
     assert.match(diary, /const query = `#\$\{tag\}`/);
   });
 
-  it('★ 侧栏是三块检索器（标签 / 最近写过 / 挂在书上），且**不再抄一遍正文**', () => {
-    // 用户 2026-10-27：「侧边栏的显示实在是不符合常理」。0.31.0 那里是
-    // 「最近 30 天、每天每条的时间 + 正文前 160 字」—— 正文在右边已经完整显示，
-    // 侧栏再抄一遍既不是标签检索也不是时间轴检索，只是把整栏占满了。
+  it('★ 侧栏是三块检索器（标签 / 时间轴 / 挂在书上）；正文摘要只在**展开那一天**时才读', () => {
+    // 用户 2026-10-27：「侧边栏的显示实在是不符合常理」，随后又补了一句
+    // 「侧边栏是不是要有时间轴啊，比如点击今天，展开今天记录的时间轴」。
     assert.match(diary, /fetchDiaryTimeline\(\{ limit: 30 \}\)/);
     assert.match(diary, /fetchDiaryTags\(\)/);
-    for (const label of ['标签', '最近写过']) {
+    for (const label of ['标签', '时间轴', '挂在书上']) {
       assert.ok(diary.includes(`>${label}<`), `侧栏少了「${label}」这一块的标题`);
     }
-    // ★ 判据就是「侧栏不再读 entry.preview」：只要它不读，就不可能再把正文抄一遍。
-    assert.doesNotMatch(diary, /\.preview/, '侧栏又在读 entry.preview —— 正文被抄了第二遍');
+    // ★ 展开态：日期行带 aria-expanded，展开后才渲染当天条目。
+    assert.match(diary, /aria-expanded=\{open\}/, '日期行不是可展开的 —— 时间轴只剩「哪几天写过」');
+    assert.match(diary, /const open = openDay === item\.date/, '没有「同一次只展开一天」的状态');
+    const openBlock = /\{open && \(([\s\S]*?)\n\s*\)\}/.exec(diary);
+    assert.ok(openBlock, '没有找到「展开后渲染」的分支');
+    assert.match(openBlock[1], /entry\.preview/, '展开分支里没有摘要 —— 展开了也看不到写了什么');
+    // ★ 但**折叠态**绝不能读 preview：那正是 0.31.0 被否掉的做法（把正文抄一遍）。
+    assert.doesNotMatch(diary.replace(openBlock[0], ''), /\.preview/,
+      '折叠态也在读 entry.preview —— 正文又被抄了一遍');
     assert.match(diary, /entry\.kind !== '读后感'/, '时间轴没有滤掉读后感');
   });
 
@@ -673,13 +679,13 @@ describe('读后感门禁：只对读完的书开放', () => {
     assert.equal(defaultBlocksUnread(old), false);
   });
 
-  it('侧栏把书分两组：读完的可点，没读完的 disabled 并写明「未读完」', () => {
+  it('★ 侧栏只列读完的书 —— 未读完的不再摊一屏', () => {
+    // 用户 2026-10-27：「读后感只显示标记完成的书，不显示未读完的书」。
+    // 0.32.0 把 2636 本「还没读完」全部铺在侧栏里，真正要用的那 1 本被挤到最上面一行。
     assert.match(diary, /const readBooks = filteredBooks\.filter\(\(item\) => stateOf\(item\.id\) === 'read'\)/);
-    assert.match(diary, /const unreadBooks = filteredBooks\.filter\(\(item\) => stateOf\(item\.id\) !== 'read'\)/);
-    // 没读完那一组必须是**禁用**的按钮：只压暗不禁用的话，点了会静默切到那本书。
-    assert.match(diary, /className="npr-diary-dayrow" disabled/,
-      '没读完的书还是可点的 —— 点进去会打开一个写不了的页面');
-    assert.match(diary, /<span className="npr-diary-dayrow-count">未读完<\/span>/, '那一行没写「未读完」');
+    assert.doesNotMatch(diary, /const unreadBooks/, '未读完的那一组还在算');
+    assert.ok(!diary.includes('还没读完<span'), '侧栏还在渲染「还没读完」那一块的分组标题');
+    assert.ok(!diary.includes('>未读完<'), '侧栏还在把「未读完」当状态胶囊画出来');
   });
 
   it('★ `openBook` 自己也判一次（从阅读器进来不经过侧栏那道 UI 闸）', () => {
@@ -724,5 +730,87 @@ describe('私密侧栏：只数私密，不混灵感的条数', () => {
     // 会出现「有点、但点了没反应」或者「有心情、但没有点」。
     assert.match(diary, /cell\?\.private/, '情绪点没有按 private 取');
     assert.match(diary, /tones=\{privateTones\}/, '日历没收到情绪色');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.33：用户 2026-10-27 的六条真机反馈里，三条是「**不报错但坏掉了**」
+//
+//   ① 「AI 整理这一天功能失效」—— 错误只写在伴读面板内部，而面板要成功打开才会出现，
+//      于是失败时界面一片安静，看起来像按钮没接上。
+//   ② 「我一点击内容条它就消失」—— `jump()` 里顺手把搜索框关了，导航与检索互相打断。
+//   ③ 「撰写的日记显示不能是明文」—— 私密条目直接 `dangerouslySetInnerHTML`，
+//      加密只保护了**盘上的文件**，屏幕上是明文。
+// ---------------------------------------------------------------------------
+
+describe('私密日记：默认遮罩，显式解密才渲染正文', () => {
+  it('★ 遮罩态**不渲染正文节点**（不是 CSS 模糊）', () => {
+    // ★ 判据是结构：veiled 为真时走 `<button class="npr-diary-veil">`，
+    //   正文只在 else 分支里出现。`filter: blur()` 挡不住复制、截图与读屏。
+    assert.match(diary, /const veiled = privateSide && !revealed\.has\(key\)/,
+      '没有「这条还遮着」的判据');
+    const branch = /\{veiled \? \(([\s\S]*?)\) : \(html/.exec(diary);
+    assert.ok(branch, '没有找到「遮罩 / 正文」的二选一分支');
+    assert.match(branch[1], /npr-diary-veil/, '遮罩态画的不是遮罩');
+    assert.doesNotMatch(branch[1], /dangerouslySetInnerHTML/, '遮罩态仍然把正文渲染进 DOM');
+  });
+
+  it('★ 换一天就清空「已显示」—— 一次解密不跨天授权', () => {
+    assert.match(diary, /const pick = \(date\) => \{[\s\S]*?setRevealed\(new Set\(\)\)/,
+      'pick() 没有清空已解密的集合');
+  });
+
+  it('★ 有「全部显示 / 全部隐藏」，且只数当天的私密条目', () => {
+    assert.match(diary, /privateEntries\.map\(entryKey\)/, '「全部显示」没有限定在当天的条目上');
+    assert.match(diary, /全部隐藏/, '没有回到遮罩态的入口');
+  });
+});
+
+describe('搜索框：导航不再关掉它', () => {
+  it('★ `jump()` 不碰搜索状态', () => {
+    const body = /const jump = \(date, key = ''\) => \{([\s\S]*?)\n  \};/.exec(diary);
+    assert.ok(body, 'jump() 的锚点找不到了');
+    assert.doesNotMatch(body[1], /setSearch/, 'jump() 又把搜索框关了 —— 点一条内容它就消失');
+  });
+
+  it('★ 反向对照：把 `setSearch` 塞回 jump，判据必须变红', () => {
+    const broken = diary.replace(
+      /(const jump = \(date, key = ''\) => \{\n)/,
+      "$1    setSearch((current) => ({ ...current, open: false }));\n",
+    );
+    const body = /const jump = \(date, key = ''\) => \{([\s\S]*?)\n  \};/.exec(broken);
+    assert.match(body[1], /setSearch/, '反向对照没生效，这条判据是假绿');
+  });
+});
+
+describe('AI 整理：失败必须在**面板之外**可见', () => {
+  it('★ 错误渲染在正文区，而不是只在伴读面板里', () => {
+    assert.match(diary, /const \[aiError, setAiError\]/, '没有独立的失败状态');
+    const alert = diary.indexOf('npr-diary-alert"');
+    const companion = diary.indexOf('npr-companion"');
+    assert.ok(alert > 0, '没有失败横幅');
+    assert.ok(companion > 0, '伴读面板的锚点找不到了');
+    assert.ok(alert < companion, '失败横幅在伴读面板之后 —— 面板没打开时它也不会渲染');
+  });
+
+  it('★ 两条整理路径都把异常写进这个状态', () => {
+    assert.equal((diary.match(/setAiError\(message\)/g) ?? []).length, 2,
+      'tidyDay / tidyEntry 没有都上报失败原因');
+    assert.equal((diary.match(/acquired\?\.release\?\.\(\)/g) ?? []).length, 2,
+      '失败后没有释放半成品会话');
+  });
+});
+
+describe('灵感模块：没有情绪追踪', () => {
+  it('★ 灵感写入口不含 MoodRow，私密写入口仍然有', () => {
+    assert.equal((diary.match(/<MoodRow /g) ?? []).length, 1,
+      '情绪行挂了不止一处 —— 灵感模块不该有情绪追踪');
+    const guard = /moduleValue === 'private'[\s\S]{0,600}?<MoodRow /.test(diary);
+    assert.ok(guard, '剩下的那一处不在私密模块里');
+  });
+
+  it('★ 灵感保存时不带 mood（否则会继承私密里选过的心情）', () => {
+    assert.match(diary, /const meta = moduleValue === 'private' && mood \? \{ mood \} : \{\}/,
+      '保存时无条件带 mood —— 灵感条目会悄悄带上用户没选过的心情');
   });
 });
