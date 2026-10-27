@@ -976,15 +976,38 @@ export function DiaryApp({
    */
   function openLinkPick(entry) {
     if (entry.scope === 'private') return;
+    /*
+     * ★ 书架只在「读后感」那一页拉过（见 `moduleValue` 的 effect）。灵感页上
+     *   `books.items` 是**空的** ⇒ 浮层永远说「书架上没有匹配的书」，而书架上其实有书
+     *   （用户 2026-10-27 的截图就是这个：书架上明明有《译文名著文库》，浮层却说没有）。
+     *   打开浮层时补拉一次，不另开接口。
+     */
+    if (books.items.length === 0 && !books.busy) void loadBooks();
+    /*
+     * ★ 这条**已经挂在某处**时，直接把那个来源选好、章号填好 —— 不用再搜一遍。
+     *   读书 / 读文章时按 L 记的灵感，`QuickCapture` 把当时的 bookId 写进了 `meta.book`，
+     *   所以这里是**精确匹配**，不是拿书名去模糊猜：猜错了会把灵感挂到另一本书上，
+     *   而两本书名常常只差一个译名（《九三年》/《九三年（叶尊译）》），用户看不出来。
+     * ★ 书架上没有这本（已移出书架 / 网盘书没进库）时**不假装选中**，只把书名摆出来
+     *   说明「原本挂在哪」，让用户从列表里另选 —— 见浮层里的 `linkOrphan` 提示。
+     */
+    const bookId = typeof entry.meta?.book === 'string' ? entry.meta.book : '';
+    const chapter = Number.isInteger(entry.meta?.chapter) ? entry.meta.chapter : null;
+    const parsed = parseSource(entry.source ?? '');
     setLinkPick({
       date: entry.date ?? selected,
       index: entry.index,
+      scope: entry.scope ?? 'public',
       excerpt: String(entry.body ?? '').replace(/\s+/g, ' ').slice(0, 60),
       find: '',
-      bookId: '',
-      bookTitle: '',
-      chapter: null,
+      bookId,
+      // 书架还没到之前先用 `source` 里拆出来的书名占位；到了之后用书架上的正式书名
+      // （`linkPickedTitle`）—— 预填的和书架上那本可能是同一本、写法不同。
+      bookTitle: bookId !== '' && parsed?.isBook ? parsed.title : '',
+      chapter,
       chapterTitle: '',
+      // 这条原来是挂在**文章**上的（读 RSS 时按 L）。挂到书会把这个出处换掉，要说出来。
+      articleTitle: bookId === '' && parsed !== null && !parsed.isBook ? parsed.title : '',
       outline: { asked: false, busy: false, items: [], error: '' },
       busy: false,
       error: '',
@@ -1460,6 +1483,24 @@ export function DiaryApp({
     const needle = (linkPick?.find ?? '').trim().toLowerCase();
     return needle === '' || String(item.title).toLowerCase().includes(needle);
   });
+
+  /**
+   * 浮层里「当前选中的是哪一本」。
+   *
+   * ★ 优先用**书架上那一份**的书名：预填时手上只有从 `source` 拆出来的名字，
+   *   它和书架上的正式书名可能不是同一个写法（少了译名、多了副标题）。
+   */
+  const linkPickedBook = books.items.find((item) => item.id === linkPick?.bookId) ?? null;
+  const linkPickedTitle = linkPick?.bookId ? (linkPickedBook?.title ?? linkPick.bookTitle) : '';
+  /**
+   * 已经挂着、但书架上找不到这本。
+   *
+   * ★ 这是**信息**不是错误：条目本身没坏（`source` 里还写着书名），只是没法再
+   *   「从目录里挑一章」（目录是按 bookId 去读的，书不在书架上就读不到）。
+   * ★ `books.busy` 时不下结论 —— 那一刻「找不到」只是「还没读到」。
+   */
+  const linkOrphan = Boolean(linkPick?.bookId) && !books.busy && books.error === ''
+    && linkPickedBook === null;
 
   /*
    * 侧栏「挂在书上 / 挂在文章上」两块，分开放。
@@ -2510,6 +2551,12 @@ export function DiaryApp({
             </header>
             <div className="npr-diary-modal-body">
               <p className="npr-diary-link-excerpt">{linkPick.excerpt}…</p>
+              {/* 挂在文章上的条目也能挂到书，但那会**换掉**它现在的出处 —— 先说清楚。 */}
+              {linkPick.articleTitle !== '' && (
+                <p className="npr-diary-sect-note">
+                  这条现在挂在文章《{linkPick.articleTitle}》上 —— 挂到书会把这个出处换成书。
+                </p>
+              )}
               <input className="npr-diary-linkfind" type="search" value={linkPick.find}
                 placeholder="找一本书…" aria-label="找一本书"
                 onChange={(event) => setLinkPick((current) => current && { ...current, find: event.target.value })} />
@@ -2528,16 +2575,38 @@ export function DiaryApp({
                     title={item.title}
                     onClick={() => pickLinkBook(item)}>{item.title}</button>
                 ))}
+                {/*
+                  * ★ 空态必须分得清「还在读」「读失败」「书架真的空」「搜索没命中」。
+                  *   0.40 只有一句「书架上没有匹配的书」—— 而那时书架**根本没被拉过**
+                  *   （`loadBooks` 只在读后感页调），所以那是一句确定的假话。
+                  */}
                 {linkBookList.length === 0 && (
-                  <p className="npr-diary-sect-note">书架上没有匹配的书。</p>
+                  <p className="npr-diary-sect-note">
+                    {books.busy
+                      ? '正在读书架…'
+                      : books.error !== ''
+                        ? `读不到书架：${books.error}`
+                        : books.items.length > 0
+                          ? '书架里没有名字带这几个字的书。'
+                          : '书架上还没有书。'}
+                  </p>
                 )}
               </div>
               {linkPick.bookId !== '' && (
                 <div className="npr-diary-linkchapter">
                   <p className="npr-diary-linkpicked">
-                    {linkPick.bookTitle} · {linkPick.chapter === null ? '整本书（不分章）' : `第 ${linkPick.chapter} 章 · ${linkPick.chapterTitle}`}
+                    {linkPickedTitle || '这本书不在书架上'} · {linkPick.chapter === null
+                      ? '整本书（不分章）'
+                      : linkPick.chapterTitle === ''
+                        ? `第 ${linkPick.chapter} 章`
+                        : `第 ${linkPick.chapter} 章 · ${linkPick.chapterTitle}`}
                   </p>
-                  {!linkPick.outline.asked && !linkPick.outline.busy && (
+                  {linkOrphan && (
+                    <p className="npr-diary-sect-note">
+                      这条原本挂在《{linkPick.bookTitle || '那本书'}》上，但书架上已经没有它了 —— 换一本再挂。
+                    </p>
+                  )}
+                  {!linkOrphan && !linkPick.outline.asked && !linkPick.outline.busy && (
                     <button type="button" className="npr-diary-dayload" onClick={() => void askLinkOutline()}>
                       从目录里挑一章 ›
                     </button>

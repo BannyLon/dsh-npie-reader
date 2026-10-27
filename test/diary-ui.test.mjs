@@ -1370,8 +1370,12 @@ describe('0.40.1：「挂到书」浮层不塌（书列表收窄 / 行不被压�
   it('★ 收窄之后，书名必须写在「当前选择」那一行上', () => {
     // 收窄到 96px 只装得下 3 行，选中的书很可能被滚出视野 ——
     // 那时候「我在往哪本书上挂」只剩这一行能回答。
-    assert.match(diary, /<p className="npr-diary-linkpicked">\s*\{linkPick\.bookTitle\} · \{linkPick\.chapter === null/,
+    assert.match(diary, /<p className="npr-diary-linkpicked">\s*\{linkPickedTitle \|\| '这本书不在书架上'\}/,
       '「当前选择」没有书名 —— 书列表一收窄就不知道在挂哪本书');
+    // ★ 书名优先取**书架上那一份**：预填时手上只有 `source` 里拆出来的写法，
+    //   和书架上的正式书名可能差一个译名 / 副标题。
+    assert.match(diary, /const linkPickedTitle = linkPick\?\.bookId \? \(linkPickedBook\?\.title \?\? linkPick\.bookTitle\) : ''/,
+      '当前选择没优先用书架上的正式书名');
   });
 
   it('★ 反向对照的变异锚点必须还在（否则那两条变异会静默变成空操作）', () => {
@@ -1488,5 +1492,67 @@ describe('0.41：灵感侧栏是一个切换器 + 当前那一档', () => {
       '长标题没有单行省略');
     assert.match(diaryCss, /\.npr-diary-srccount \{[^}]*border-radius: 999px/,
       '条数胶囊没有圆角');
+  });
+});
+
+describe('0.42：「挂到书」自动匹配这条原本挂在哪儿', () => {
+  // 用户 2026-10-27：「本身是在阅读文章或者电子书时候通过 L 创建的灵感，
+  //   在右边展示区域点击『书籍』图标是不是自动匹配好文章或者电子书啊」。
+  // 同时暴露了一个更糟的 bug：浮层里写「书架上没有匹配的书」，而书架上明明有书。
+
+  it('★ 打开浮层时要补拉书架（`loadBooks` 只在读后感页调过）', () => {
+    const pick = diary.slice(diary.indexOf('function openLinkPick('));
+    const body = pick.slice(0, pick.indexOf('\n  }'));
+    assert.match(body, /if \(books\.items\.length === 0 && !books\.busy\) void loadBooks\(\);/,
+      '打开浮层没有补拉书架 —— 灵感页上 books.items 是空的，浮层只会说「书架上没有匹配的书」');
+    // 反面：别的页面的 effect 不能替它兜底（`loadBooks` 目前只在 reflection 里调）。
+    assert.match(diary, /if \(moduleValue === 'reflection'\) void loadBooks\(\);/,
+      '读后感页那条调用变了 —— 上面那条判据的前提（书架平时没被拉）需要重新确认');
+  });
+
+  it('★ 用 `meta.book` 精确匹配，不拿书名去猜', () => {
+    // 读书时按 L 记的灵感，`QuickCapture` 把当时的 bookId 写进了 `meta.book`。
+    // ★ 为什么不能按书名模糊匹配：两本书名常常只差一个译名
+    //   （《九三年》/《九三年（叶尊译）》），猜错了会把灵感挂到另一本书上，
+    //   而界面看起来完全正常 —— 用户永远发现不了。
+    assert.match(diary, /const bookId = typeof entry\.meta\?\.book === 'string' \? entry\.meta\.book : '';/,
+      '打开浮层没有从 meta.book 取已关联的 bookId');
+    assert.match(diary, /const chapter = Number\.isInteger\(entry\.meta\?\.chapter\) \? entry\.meta\.chapter : null;/,
+      '没有预填章号 —— 已经挂在第 3 章的那条，打开浮层会退回「整本书」');
+    const pick = diary.slice(diary.indexOf('function openLinkPick('));
+    const body = pick.slice(0, pick.indexOf('\n  }'));
+    assert.doesNotMatch(body, /items\.find\(|includes\(needle\)|toLowerCase\(\)/,
+      '在按书名模糊猜 —— 应该用 meta.book 精确匹配');
+  });
+
+  it('★ 书架上没有这本时说出来，而不是假装选中', () => {
+    assert.match(diary, /const linkOrphan = Boolean\(linkPick\?\.bookId\) && !books\.busy && books\.error === ''/,
+      '没有区分「已挂的书不在书架上」');
+    assert.match(diary, /这条原本挂在《\{linkPick\.bookTitle \|\| '那本书'\}》上，但书架上已经没有它了/,
+      '书不在书架上时没有解释');
+    // 目录是按 bookId 读的，书不在书架上就读不到 —— 那颗按钮不能还亮着。
+    assert.match(diary, /\{!linkOrphan && !linkPick\.outline\.asked && !linkPick\.outline\.busy && \(/,
+      '书不在书架上还让用户点「从目录里挑一章」—— 点了必然读不到');
+  });
+
+  it('★ 空态要分四种，不能一句「没有匹配的书」盖住「还没读」', () => {
+    // 0.40 那句话是**确定的假话**：书架没被拉过，任何书名都匹配不上。
+    assert.doesNotMatch(diary, /书架上没有匹配的书/, '又变回那句假话了');
+    assert.match(diary, /'正在读书架…'/, '没有「正在读」这一态');
+    assert.match(diary, /读不到书架：\$\{books\.error\}/, '没有「读失败」这一态');
+    assert.match(diary, /'书架里没有名字带这几个字的书。'/, '没有「搜索没命中」这一态');
+    assert.match(diary, /'书架上还没有书。'/, '没有「书架真的空」这一态');
+  });
+
+  it('★ 章标题缺失时不留一个悬空的「· 」', () => {
+    assert.match(diary, /: linkPick\.chapterTitle === ''\s*\n\s*\? `第 \$\{linkPick\.chapter\} 章`/,
+      '预填的章号没有章名时会渲染成「第 3 章 · 」');
+  });
+
+  it('★ 挂在文章上的条目要说明「挂到书会换掉出处」', () => {
+    assert.match(diary, /articleTitle: bookId === '' && parsed !== null && !parsed\.isBook \? parsed\.title : ''/,
+      '没有识别「这条原来挂在文章上」');
+    assert.match(diary, /这条现在挂在文章《\{linkPick\.articleTitle\}》上 —— 挂到书会把这个出处换成书。/,
+      '没提醒「挂到书会换掉原来的文章出处」—— 用户会以为是在加一个出处');
   });
 });
