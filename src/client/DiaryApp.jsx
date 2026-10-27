@@ -918,7 +918,6 @@ export function DiaryApp({
   function openLinkPick(entry) {
     if (entry.scope === 'private') return;
     setLinkPick({
-      key: entryKey(entry),
       date: entry.date ?? selected,
       index: entry.index,
       excerpt: String(entry.body ?? '').replace(/\s+/g, ' ').slice(0, 60),
