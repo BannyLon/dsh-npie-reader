@@ -101,6 +101,13 @@ const OWNED_ATTRS = new Set([
   //   `data-current` —— 当前这一处命中（`true` / `false`），跳转后给它加个描边。
   //   仍然只是自有 CSS 的选择器依据，不是宿主锚点。
   'data-current',
+  // 日记（0.33 / 0.34）自己写的三个：
+  //   `data-diary-key` —— 条目的唯一键（`scope-index`），时间轴点一条之后靠它 scrollIntoView；
+  //   `data-variant` —— 写入口的三种形态（quick / private / reflection），自有 CSS 按它调起点高度；
+  //   `data-mode` —— 写入口当前是「写」还是「预览」，用来切工具条的可用态。
+  //   ★ 这三个都是**本插件**的 DOM 契约。宿主完全不认识它们，登记进 HOST_ANCHORS
+  //     会被下面那条「宿主产物里必须命中」的反向检查判红。
+  'data-diary-key', 'data-variant', 'data-mode',
 ]);
 
 

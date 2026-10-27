@@ -21,6 +21,16 @@
  *   GET    /stats                     多少天、占多少字节、目录在哪、密钥在哪
  *   GET    /secret                    密钥状态（会触发取密钥，只在真正需要时调）
  *   POST   /reveal                    在访达/资源管理器里打开日记目录
+ *   GET    /gate                      口令闸门状态（有没有设、现在解没解锁）
+ *   POST   /gate                      第一次设置口令（body: { passphrase }）
+ *   POST   /gate/unlock               解锁（body: { passphrase }）；错口令 401
+ *   POST   /gate/lock                 立刻上锁
+ *
+ * ★ **私密正文在未解锁时不会离开宿主**。这不是界面上的遮罩：`/day` 返回的私密条目
+ *   在锁着时 `body` 是空串、`locked: true`；`/search`、`/tags`、`/timeline` 会关掉
+ *   `includePrivate`；`/export?private=1` 与「删掉一条私密」直接 403。
+ *   用户 2026-10-27：「私密日记点击就能查看还有什么私密，一定是只能本人查看啊。」
+ *   —— 「点一下就看见」正是当时的行为，因为解密发生在宿主、遮罩只画在屏幕上。
  *
  * ★ 每条路由都过 `isTrustedLocalRequest` 栅栏：宿主派发插件路由**不经过**它自己的
  *   鉴权拦截器（先精确路由、再鉴权），漏掉就等于把「读用户日记、删用户日记」
@@ -89,6 +99,11 @@ function diaryErrorStatus(error) {
   if (code === 'DISK_IO' || code === 'DISK_BAD_PATH' || code === 'EIO') return 500;
   if (code === 'ENTRY_NOT_FOUND' || code === 'ENOENT') return 404;
   if (code === 'EMPTY_ENTRY' || code === 'BAD_DATE' || code === 'BAD_MONTH' || code === 'BAD_BOOK') return 400;
+  // 口令闸门：弱口令是**请求不对**（400），锁着是**没权限**（403），
+  // 口令文件读不出来是**我们自己坏了**（500，别让用户去改口令试）。
+  if (code === 'GATE_WEAK' || code === 'GATE_UNSET') return 400;
+  if (code === 'GATE_LOCKED') return 403;
+  if (code === 'GATE_WRONG') return 401;
   return 500;
 }
 
@@ -158,7 +173,7 @@ function segment(value) {
 export function makeDiaryRoutes(handlers = {}) {
   const {
     read, readFull, append, removeEntry, listMonth, search, tags, timeline, byBook,
-    exportAll, stats, secretStatus, reveal,
+    exportAll, stats, secretStatus, reveal, gate,
     log = () => {},
   } = handlers;
 
@@ -175,6 +190,24 @@ export function makeDiaryRoutes(handlers = {}) {
     && typeof stats === 'function';
   /** 0.31 才有的几条：没接上就 501，不影响老路由。 */
   const extraReady = typeof tags === 'function' && typeof timeline === 'function';
+  /**
+   * 私密正文现在能不能交出去。
+   *
+   * ★ 没接上闸门（老测试直接构造路由）时**放行**，这样它是一条可选依赖；
+   *   真实宿主一定会接（`service.js` 里 `this.diary.gate`）。这条默认值是权衡后的
+   *   选择，写在这里免得以后有人以为「漏传也能用」是设计。
+   */
+  const gateAllow = () => (gate && typeof gate.allow === 'function' ? gate.allow() === true : true);
+  /** 锁着时把私密条目的正文摘掉 —— **不是**加个标记让界面自己藏。 */
+  const redact = (payload) => {
+    if (!payload || gateAllow()) return payload;
+    const entries = Array.isArray(payload.entries)
+      ? payload.entries.map((entry) => (entry?.scope === 'private'
+        ? { ...entry, body: '', source: '', locked: true }
+        : entry))
+      : payload.entries;
+    return { ...payload, entries, locked: true };
+  };
 
   return {
     kind: 'prefix',
@@ -226,7 +259,7 @@ export function makeDiaryRoutes(handlers = {}) {
           //   界面上每条私密条目都带小锁 —— 看得见「这是私密的」才是正确形态。
           return sendJson(res, 200, {
             ok: true,
-            ...(await search({ query, limit: url.searchParams.get('limit'), includePrivate: true })),
+            ...(await search({ query, limit: url.searchParams.get('limit'), includePrivate: gateAllow() })),
           });
         } catch (error) {
           return fail(res, error);
@@ -238,7 +271,7 @@ export function makeDiaryRoutes(handlers = {}) {
         if (method !== 'GET') return methodNotAllowed(res);
         if (!extraReady) return sendJson(res, 501, { ok: false, error: '标签索引没有接上' });
         try {
-          return sendJson(res, 200, { ok: true, ...(await tags({ includePrivate: true })) });
+          return sendJson(res, 200, { ok: true, ...(await tags({ includePrivate: gateAllow() })) });
         } catch (error) {
           return fail(res, error);
         }
@@ -252,7 +285,7 @@ export function makeDiaryRoutes(handlers = {}) {
           const payload = await timeline({
             limit: url.searchParams.get('limit'),
             before: url.searchParams.get('before') ?? '',
-            includePrivate: true,
+            includePrivate: gateAllow(),
           });
           return sendJson(res, 200, { ok: true, ...payload });
         } catch (error) {
@@ -276,6 +309,79 @@ export function makeDiaryRoutes(handlers = {}) {
         }
       }
 
+      // ---- /gate -----------------------------------------------------------
+      //
+      // ★ 闸门不可用（没接上）时回 `{ set:false, unlocked:true }`：那台机器上
+      //   私密日记本来就没有口令这层，界面不该显示一个点不动的解锁框。
+      if (parts[0] === 'gate' && parts.length <= 2) {
+        const gateReady = gate && typeof gate.peek === 'function';
+        if (parts.length === 1) {
+          if (method === 'GET') {
+            if (!gateReady) return sendJson(res, 200, { ok: true, set: false, unlocked: true, available: false });
+            try {
+              return sendJson(res, 200, { ok: true, ...(await gate.peek()), available: true });
+            } catch (error) {
+              return fail(res, error);
+            }
+          }
+          if (method === 'POST') {
+            // 第一次设置口令。已经设过 ⇒ 409，界面必须走「先解锁」而不是静默覆盖
+            // （静默覆盖会让「知道旧口令的人」被悄悄踢出去，用户以为是 App 抽风）。
+            if (!gateReady || typeof gate.setup !== 'function') {
+              return sendJson(res, 501, { ok: false, error: '口令闸门没有接上' });
+            }
+            if (!(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
+              return sendJson(res, 415, { ok: false, error: '需要 JSON body' });
+            }
+            let body;
+            try { body = await readBody(req); } catch (error) { return fail(res, error); }
+            try {
+              const result = await gate.setup(body.passphrase);
+              log('[日记] 私密日记已上锁（口令已设置）');
+              return sendJson(res, 200, { ok: true, ...result });
+            } catch (error) {
+              if (error?.code === 'GATE_EXISTS') {
+                return sendJson(res, 409, { ok: false, error: error.message, code: error.code });
+              }
+              return fail(res, error);
+            }
+          }
+          return methodNotAllowed(res);
+        }
+
+        const action = parts[1];
+        if (action === 'unlock') {
+          if (method !== 'POST') return methodNotAllowed(res);
+          if (!gateReady || typeof gate.unlock !== 'function') {
+            return sendJson(res, 501, { ok: false, error: '口令闸门没有接上' });
+          }
+          if (!(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
+            return sendJson(res, 415, { ok: false, error: '需要 JSON body' });
+          }
+          let body;
+          try { body = await readBody(req); } catch (error) { return fail(res, error); }
+          try {
+            const ok = await gate.unlock(body.passphrase);
+            if (!ok) {
+              // 401 而不是 400：这是「你是谁没验证通过」，不是「请求格式不对」。
+              return sendJson(res, 401, { ok: false, error: '口令不对', code: 'GATE_WRONG' });
+            }
+            return sendJson(res, 200, { ok: true, set: true, unlocked: true });
+          } catch (error) {
+            return fail(res, error);
+          }
+        }
+        if (action === 'lock') {
+          if (method !== 'POST') return methodNotAllowed(res);
+          if (!gateReady || typeof gate.lock !== 'function') {
+            return sendJson(res, 501, { ok: false, error: '口令闸门没有接上' });
+          }
+          gate.lock();
+          return sendJson(res, 200, { ok: true, set: true, unlocked: false });
+        }
+        return sendJson(res, 404, { ok: false, error: `没有这条口令路由：${rest}` });
+      }
+
       // ---- GET /export ------------------------------------------------------
       //
       // ★ 取消「移入 Obsidian」之后这是日记**唯一**的出口。它只读、只拼内存字符串，
@@ -285,6 +391,11 @@ export function makeDiaryRoutes(handlers = {}) {
       if (parts.length === 1 && parts[0] === 'export') {
         if (method !== 'GET') return methodNotAllowed(res);
         const includePrivate = url.searchParams.get('private') === '1';
+        // ★ 锁着时连「导出」也不给：导出的落点是浏览器下载目录里的**明文**，
+        //   那正是加密层要防的第一件事，而锁着的闸门不该被一个 GET 绕过。
+        if (includePrivate && !gateAllow()) {
+          return sendJson(res, 403, { ok: false, error: '私密日记还是锁着的，先解锁再导出', code: 'GATE_LOCKED' });
+        }
         try {
           const payload = await exportAll({ includePrivate });
           log(`[日记] 导出 ${payload.total} 天${includePrivate ? '（含私密）' : ''}`);
@@ -337,7 +448,8 @@ export function makeDiaryRoutes(handlers = {}) {
           try {
             // `readFull` 给了就用它（合并公开 + 私密，每条带 `scope` / `index`）。
             const payload = typeof readFull === 'function' ? await readFull(date) : await read(date);
-            return sendJson(res, 200, { ok: true, ...payload });
+            // ★ `redact` 在锁着时把私密条目的 body 摘成空串 —— 正文根本不出宿主。
+            return sendJson(res, 200, { ok: true, ...redact(payload) });
           } catch (error) {
             return fail(res, error);
           }
@@ -383,6 +495,11 @@ export function makeDiaryRoutes(handlers = {}) {
           // ★ `scope` 必须显式说明删的是哪一半：两个文件各有自己的序号，
           //   只给一个数字就必然要靠「合并后的下标」反查，反查错一次就是删错一条。
           const scope = url.searchParams.get('scope') === 'private' ? 'private' : 'public';
+          // ★ 删除是**破坏性**动作，锁着时必须先解锁：否则拿到本机端口的人可以
+          //   在没有口令的情况下一天一条地把私密日记删空（读不到、也删得掉最坏）。
+          if (scope === 'private' && !gateAllow()) {
+            return sendJson(res, 403, { ok: false, error: '私密日记还是锁着的，解锁后才能删', code: 'GATE_LOCKED' });
+          }
           try {
             return sendJson(res, 200, { ok: true, ...(await removeEntry({ date, index, scope })) });
           } catch (error) {

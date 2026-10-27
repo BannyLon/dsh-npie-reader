@@ -242,8 +242,15 @@ describe('三个功能模块（不是三种条目类型）', () => {
     for (const marker of ["moduleValue === 'inspiration' &&", "moduleValue === 'private' &&", "moduleValue === 'reflection' &&"]) {
       assert.ok(diary.includes(marker), `缺少 ${marker} 那一块`);
     }
-    // 灵感：极简（一个 textarea + 情绪 + 保存）
-    assert.match(diary, /npr-diary-input npr-diary-input-quick/);
+    // 灵感：极简（一个写入口，**没有**情绪行）
+    // ★ 0.34 三个模块共用 `DiaryComposer`（同一个组件、三种变体），而不是三份
+    //   textarea。判据因此从「类名」变成「变体」：类名相同是重构的自由，
+    //   而 `variant` 三者必须齐、且各自配对——那才是「三种形态」这件事本身。
+    assert.match(diary, /<DiaryComposer[\s\S]{0,200}?variant="quick"/);
+    assert.match(diary, /<DiaryComposer[\s\S]{0,200}?variant="private"/);
+    assert.match(diary, /<DiaryComposer[\s\S]{0,200}?variant="reflection"/);
+    // 灵感那一块里不能出现 MoodRow（情绪追踪只在私密）。
+    assert.equal((diary.match(/<MoodRow /g) ?? []).length, 1);
     // 私密：加密说明必须在
     assert.match(diary, /npr-diary-secret/, '私密的加密说明不见了');
     // 读后感：模板 + 划线引用
@@ -441,16 +448,24 @@ describe('AI 整理：整天，不是逐条', () => {
   it('★ 上下文不传 target —— 那是「整天模式」的开关', () => {
     // `diaryContext()` 里 `target === null` 时开场白写的是「处理对象是这一天的
     // 日记整体」。传了 target 就退回「一条一条整理」，正是用户否掉的做法。
-    assert.match(diary, /await api\.setDiaryContext\(\{ sessionId: acquired\.sessionId, date: selected \}\)/,
+    // ★ 0.34 起同一个函数服务两种上下文（整天 / 单篇），用三元表达式分流。
+    //   判据是**两个分支各自的样子**：整天那条不许带 target，单篇那条必须带。
+    assert.match(diary, /\{ sessionId: acquired\.sessionId, date: selected \}/,
       '「AI 整理这一天」还在传 target —— 那还是逐条整理');
+    assert.match(diary, /date: entry\.date \?\? selected, target: entry\.index/,
+      '单篇整理没有带 target —— 模型会在整天的上下文里找那一篇');
     // 提示词也得说清是「整天」，否则模型看到多条上下文仍会只改第一条。
     assert.match(diary, /今天这一整天/, '提示词没说明是整天 —— 模型会当成某一条');
   });
 
   it('★ 灵感模块没有逐条 AI 按钮，读后感才有（一篇读后感本身就是一整篇文档）', () => {
     assert.doesNotMatch(diary, /tidyWithAi/, '逐条整理的旧函数还在');
-    assert.equal((diary.match(/void tidyDay\(\)/g) ?? []).length, 1, '「AI 整理这一天」挂了不止一处');
-    assert.equal((diary.match(/void tidyEntry\(entry\)/g) ?? []).length, 1, '逐条 AI 整理挂了不止一处');
+    // ★ 0.34 起 `openAiPanel()` 有三个正当调用点：抽屉的「换一个对话」、面板里的
+    //   「重试」、以及灵感模块那颗主按钮。所以**不能再按出现次数**判「只挂一处」——
+    //   那会把两个恢复入口当成越界。真正要守的是「那颗**日期栏**按钮的守卫是
+    //   inspiration」，由下面 `aiButtonGuard` 那条专门管。
+    assert.match(diary, /void openAiPanel\(\)/, '「AI 整理这一天」的入口不见了');
+    assert.equal((diary.match(/void openAiPanel\(entry\)/g) ?? []).length, 1, '逐条 AI 整理挂了不止一处');
     assert.match(diary, /AI 整理这一篇/, '读后感那条没有标明它是「按篇」');
   });
 
@@ -743,26 +758,38 @@ describe('私密侧栏：只数私密，不混灵感的条数', () => {
 //      加密只保护了**盘上的文件**，屏幕上是明文。
 // ---------------------------------------------------------------------------
 
-describe('私密日记：默认遮罩，显式解密才渲染正文', () => {
-  it('★ 遮罩态**不渲染正文节点**（不是 CSS 模糊）', () => {
-    // ★ 判据是结构：veiled 为真时走 `<button class="npr-diary-veil">`，
-    //   正文只在 else 分支里出现。`filter: blur()` 挡不住复制、截图与读屏。
-    assert.match(diary, /const veiled = privateSide && !revealed\.has\(key\)/,
-      '没有「这条还遮着」的判据');
-    const branch = /\{veiled \? \(([\s\S]*?)\) : \(html/.exec(diary);
-    assert.ok(branch, '没有找到「遮罩 / 正文」的二选一分支');
-    assert.match(branch[1], /npr-diary-veil/, '遮罩态画的不是遮罩');
-    assert.doesNotMatch(branch[1], /dangerouslySetInnerHTML/, '遮罩态仍然把正文渲染进 DOM');
+describe('私密日记：口令闸门，而不是屏幕遮罩', () => {
+  /*
+   * ★ 0.33 这一组守的是「默认遮罩、点一下显示」。用户 2026-10-27 一句话否掉了它：
+   *   「私密日记点击就能查看还有什么私密，一定是只能本人查看啊。」
+   *   遮罩只挡眼睛：正文照样在 DOM 里，点一下就开，谁坐在这台机器前都能看。
+   *   0.34 改成**宿主侧的闸门**（`/gate`）：锁着时 `/day` 返回的私密条目 body 是
+   *   空串，界面想看也没有东西可渲染。这里守的是界面那一半的契约。
+   */
+  it('★ 锁着时不渲染写入口，也不渲染条目', () => {
+    // 写入口的守卫必须带 `gate.unlocked`：给一个「能写、但看不到自己昨天写了什么」
+    // 的框，是在骗人。
+    assert.match(diary, /moduleValue === 'private' && \(gate\.available === false \|\| gate\.unlocked\)/,
+      '私密写入口没有上锁判据');
+    // 锁着时画的是解锁卡，且解锁卡本身**不含**写入口。
+    const gateCard = /moduleValue === 'private' && gate\.available !== false && !gate\.unlocked/.test(diary);
+    assert.ok(gateCard, '没有解锁卡');
+    assert.match(diary, /npr-gate-form/, '解锁卡里没有输入框');
   });
 
-  it('★ 换一天就清空「已显示」—— 一次解密不跨天授权', () => {
-    assert.match(diary, /const pick = \(date\) => \{[\s\S]*?setRevealed\(new Set\(\)\)/,
-      'pick() 没有清空已解密的集合');
+  it('★ 口令交给宿主校验，不是前端比一下', () => {
+    // 判据：调用的是 `/gate` 的三个动作，而不是在本地比较某个常量。
+    assert.match(diary, /await unlockDiaryGate\(text\)/, '解锁没有走宿主');
+    assert.match(diary, /await setupDiaryGate\(text\)/, '设口令没有走宿主');
+    assert.doesNotMatch(diary, /passphrase ===|=== passphrase/, '前端在自己比口令 —— 那不是权限');
   });
 
-  it('★ 有「全部显示 / 全部隐藏」，且只数当天的私密条目', () => {
-    assert.match(diary, /privateEntries\.map\(entryKey\)/, '「全部显示」没有限定在当天的条目上');
-    assert.match(diary, /全部隐藏/, '没有回到遮罩态的入口');
+  it('★ 离开私密模块就上锁（锁跟着人，不跟着日期）', () => {
+    assert.match(diary, /void lockDiaryGate\(\)/, '离开模块没有上锁');
+    // 反向：`pick()` 里**不该**再清「已显示」那套旧状态（它已经不存在了）。
+    const pick = /const pick = \(date\) => \{([\s\S]*?)\n  \};/.exec(diary);
+    assert.ok(pick, 'pick() 的锚点找不到了');
+    assert.doesNotMatch(pick[1], /setRevealed/, 'pick() 还在用已删掉的 revealed 状态');
   });
 });
 
@@ -787,17 +814,21 @@ describe('AI 整理：失败必须在**面板之外**可见', () => {
   it('★ 错误渲染在正文区，而不是只在伴读面板里', () => {
     assert.match(diary, /const \[aiError, setAiError\]/, '没有独立的失败状态');
     const alert = diary.indexOf('npr-diary-alert"');
-    const companion = diary.indexOf('npr-companion"');
+    const companion = diary.indexOf('className="npr-companion');
     assert.ok(alert > 0, '没有失败横幅');
     assert.ok(companion > 0, '伴读面板的锚点找不到了');
     assert.ok(alert < companion, '失败横幅在伴读面板之后 —— 面板没打开时它也不会渲染');
   });
 
-  it('★ 两条整理路径都把异常写进这个状态', () => {
-    assert.equal((diary.match(/setAiError\(message\)/g) ?? []).length, 2,
-      'tidyDay / tidyEntry 没有都上报失败原因');
-    assert.equal((diary.match(/acquired\?\.release\?\.\(\)/g) ?? []).length, 2,
+  it('★ 打开失败要同时写横幅与面板，且释放半成品会话', () => {
+    // 0.34 把「整天 / 单篇」合成同一个 `openAiPanel(entry)`，所以这里只剩**一条**
+    // 建会话的路径 —— 两条路径各写一份 `setAiError` 的旧判据反而会鼓励复制粘贴。
+    assert.equal((diary.match(/setAiError\(message\)/g) ?? []).length, 1,
+      '打开失败没有上报原因');
+    assert.equal((diary.match(/acquired\?\.release\?\.\(\)/g) ?? []).length, 1,
       '失败后没有释放半成品会话');
+    // 面板必须**先开再建对话**：否则失败时它压根不渲染，错误就没地方显示。
+    assert.match(diary, /\{aiOpen && \(/, '面板还是绑在 chat 上 —— 建会话失败时它是隐形的');
   });
 });
 

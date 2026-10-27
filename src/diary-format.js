@@ -56,16 +56,14 @@ export const DIARY_MODULES = Object.freeze([
  *   把它拆成四个 input 再拼回去，用户在 Obsidian 里手改过的痕迹就全没了。
  */
 export const REFLECTION_TEMPLATE = [
-  '**一句话总结**',
+  '## 一句话总结',
   '',
-  '**核心收获**',
-  '- ',
+  '## 核心收获',
   '',
-  '**行动指南**',
-  '- ',
+  '## 行动指南',
   '',
-  '**金句摘录**',
-  '> ',
+  '## 金句摘录',
+  '',
 ].join('\n');
 
 /**

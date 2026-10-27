@@ -416,6 +416,9 @@ export class RssService {
         exportAll: options => this.diary.exportAll(options),
         stats: () => this.diary.stats(),
         secretStatus: () => this.diary.secret.status(),
+        // ★ 闸门必须**整个对象**递进去：路由层要 peek / allow / setup / unlock / lock
+        //   五件事，只传一个「是否解锁」的布尔量就没法完成设置了。
+        gate: this.diary.gate,
         reveal: () => this.revealDiaryDir(),
         log: message => ctx.logger.info(message),
       });
@@ -1579,7 +1582,14 @@ export class RssService {
    * ★ 只 `touch()` 不 `flush()`：同 `setBookContext`（`data.json` 已 9.6 MB，
    *   而注入读的是内存）。
    */
-  async setDiaryContext(request = {}) {
+  async setDiaryContext(request) {
+    // ★ 签名里**不能有默认值**。宿主用 typert 把 `Remote` 方法暴露成 RPC，
+    //   它要求「唯一标识的参数、不许解构、不许默认值、不许 rest」，否则客户端一调
+    //   就拿回 `SRC method "setDiaryContext" must use unique identifier parameters
+    //   without destructuring, defaults, or rest` —— 而用户看到的是「AI 整理失效」，
+    //   错误横幅里那句英文正是这条约束（2026-10-27 真机）。
+    //   这里写 `request = {}` 时方法体里本来就有 `request ?? {}` 兜底，去掉默认值
+    //   不改变任何行为，只让网关能正确生成调用桩。
     await this.ready;
     const { sessionId, date, target } = request ?? {};
     assertSessionId(sessionId);

@@ -2361,7 +2361,12 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
      上一版把 `clamp(16px,3vw,34px)` 抄在两处，窄容器下滚动区改 16px、工具栏还是
      34px —— 差 18px，而且只在窗口很窄时才出现。 */
 .npr-diary-reader { --npr-diary-sheet-w: 600px; --npr-diary-pad: clamp(16px, 3vw, 34px); display: flex; flex-direction: column; overflow: hidden; }
-.npr-diary-scroll { flex: 1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 var(--npr-diary-pad) 40px; }
+/* ★★ 顶部内边距不能是 0。写入口是滚动区的第一个孩子，`overflow:auto` 会把它
+   溢出到元素边界外的描边直接裁掉 —— 0.33 反馈里的「输入框被截断」就是这条：
+   2px 绿框只看得见左/右/下三条边，上边被滚动边界切平。0.34 去掉了粗描边，
+   但顶部零间距仍让写入口紧贴在工具栏那条 border-bottom 上，看起来像被压住。
+   14px 给三个模块共用（读后感与私密的第一个孩子也是写入口）。 */
+.npr-diary-scroll { flex: 1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 14px var(--npr-diary-pad) 40px; }
 
 /* ── 顶栏：这一页的**第一级**层级 ────────────────────────────────────
    ★ 0.31.0 的日期是 14px 粗体，和正文（15px）、说明（11px）挤在同一层灰里，
@@ -2397,7 +2402,7 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
      字号，而它继承的是 `.npr-root` 的 13px ⇒ 实际只有 520px（≈34 个汉字），
      与注释里「40 个汉字」的意图对不上。上一版就是这么错的，肉眼看不出来 ——
      只会觉得「行有点短」。现在宽度是一个**显式的数**，与工具栏共用同一个变量。
-   ★ 同时把字号钉在 15px：写入口（`.npr-diary-input`）本来就是 15px，
+   ★ 同时把字号钉在 15px：写入口（`.npr-write-input`）本来就是 15px，
      而正文吃的是 `var(--npr-font-size)`（阅读设置，默认 **19px**）——
      于是「写的时候 15、读的时候 19」，同一页里两套字号。日记是独立版面，
      不跟阅读字号走，写和读用同一个尺寸。 */
@@ -2456,6 +2461,15 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-sidebar .npr-diary-search { padding: 10px 12px 6px; }
 .npr-sidebar .npr-diary-search input { height: 30px; padding: 0 10px; border: 1px solid transparent; border-radius: 7px; background: color-mix(in srgb, var(--npr-fg) 4%, transparent); font-size: 12px; }
 .npr-sidebar .npr-diary-search input:focus-visible { border-color: var(--npr-border-strong); background: var(--npr-bg); outline: none; }
+
+/* 筛选条（点标签之后）：回答「列表为什么变了」，并给出唯一的出口「全部」。
+   ★ 不用填充色块、不用品牌色 —— 它和标签云、时间轴同属检索器，不是一个按钮。
+   ★ `padding` 与 `.npr-diary-search` 保持一致：搜索态 ↔ 筛选态切换时侧栏不跳。 */
+.npr-diary-filterbar { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; }
+.npr-diary-filterbar-text { flex: 1; min-width: 0; font-size: 11.5px; line-height: 1.5; color: var(--npr-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npr-diary-filterbar-text b { font-weight: 600; color: var(--npr-fg); }
+.npr-diary-filterbar-clear { flex: 0 0 auto; height: 22px; padding: 0 9px; border: 1px solid var(--npr-border-strong); border-radius: 6px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; cursor: pointer; }
+.npr-diary-filterbar-clear:hover { background: var(--npr-hover); color: var(--npr-fg); }
 .npr-diary-sect { padding: 14px 0 6px; }
 .npr-diary-sect + .npr-diary-sect { border-top: 0; }
 /* 分组标题：中文、11px、**不用** uppercase + letter-spacing。
@@ -2494,7 +2508,8 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-diary-daylist { margin: 0 6px 2px 16px; padding: 2px 0 2px 10px; border-left: 1px solid var(--npr-border); list-style: none; }
 .npr-root button.npr-diary-dayitem { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 4px 6px; border: 0; border-radius: 5px; background: transparent; color: var(--npr-muted); font: inherit; text-align: left; cursor: pointer; }
 .npr-root button.npr-diary-dayitem:hover { background: var(--npr-hover); color: var(--npr-fg); }
-.npr-diary-dayitem-time { flex: 0 0 auto; font-size: 10.5px; color: var(--npr-faint); font-variant-numeric: tabular-nums; }
+/* 时间轴上的时刻是功能性文本（用户靠它定位到那一条），11px 是下限。 */
+.npr-diary-dayitem-time { flex: 0 0 auto; font-size: 11px; color: var(--npr-faint); font-variant-numeric: tabular-nums; }
 .npr-diary-dayitem-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 
 /* 搜索结果 */
@@ -2509,16 +2524,55 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
      不像一张表单。
    ★ 字号跟正文对齐到 15px：写的地方比读的地方小一号，写的时候会不自觉地
      把句子写短（而日记里最该长出来的就是句子）。 */
-.npr-diary-write { margin: 16px 0 8px; }
-.npr-diary-input { display: block; width: 100%; min-height: 96px; padding: 10px 12px; border: 0; border-radius: 10px; background: color-mix(in srgb, var(--npr-fg) 4%, transparent); color: var(--npr-fg); font: inherit; font-size: 15px; line-height: 1.85; resize: vertical; }
-/* 灵感速记：输入框是主角，给它更高的起点（打开即写，不该先看见一个矮盒子）。 */
-.npr-diary-input-quick { min-height: 84px; }
-/* 读后感：模板一填就有四段，给高一点。 */
-.npr-diary-input-tall { min-height: 200px; }
-.npr-diary-input::placeholder { color: var(--npr-faint); }
-.npr-diary-input:focus-visible { outline: 2px solid var(--npr-accent); outline-offset: 1px; }
-.npr-diary-writefoot { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
-.npr-diary-foot-hint { flex: 1; min-width: 0; font-size: 11px; color: var(--npr-faint); }
+/* 写入口的三层（0.34 重做）
+   ─────────────────────────────────────────────────────────────────
+   结构（与 uiwjs/react-md-editor 同一套分工，只是不做富文本）：
+     .npr-write-input   只管写字（透明底、无边框、随内容长高）
+     .npr-write-tools   格式命令条：平时也看得见，但压得很轻（12px 灰字）
+     .npr-write-foot    字数 + 附加动作 + 记下来
+
+   ★ 三处具体修的是用户 2026-10-27 截图里的东西：
+     ① 一圈 2px 的品牌绿 outline（旧写入口的 focus-visible 规则）—— 那圈绿
+        在深浅两个主题下都很刺眼，而且它标记的是「焦点」，不是「你在写」。
+        现在**没有描边**：焦点靠光标 + 工具栏浮起表达。
+     ② 灰底圆角盒子：书写区该像纸，不像表单。现在透明底，只在工具栏上方
+        一条 1px 的线作为「这里开始是工具」的分界。
+     ③ 占位符里写满 `**一句话总结**` 这类源码：模板已改成 `## 一句话总结`，
+        并且按一下「预览」看到的就是渲染后的真标题。 */
+.npr-diary-write { margin: 14px 0 6px; }
+/* ★ 写入口是一「块」：工具栏上方本来有一条 border-top，但区块底部没有任何收尾，
+   于是空状态下它就是页面顶部的一片空白 —— 用户找不到落笔处（2026-10-27 反馈）。
+   这条底边负责合上这个块；不引入背景色，避免又变回 0.33 那个「灰底圆角盒子」。 */
+.npr-diary-write { margin: 0 0 20px; padding-bottom: 14px; border-bottom: 1px solid var(--npr-border); }
+.npr-write { position: relative; }
+.npr-write-input { display: block; width: 100%; min-height: 76px; padding: 2px 0 6px; border: 0; outline: none; background: transparent; color: var(--npr-fg); font: inherit; font-size: 15px; line-height: 1.85; resize: none; overflow: auto; }
+.npr-write[data-variant=reflection] .npr-write-input { min-height: 140px; }
+.npr-write[data-variant=private] .npr-write-input { min-height: 96px; }
+/* ★ 占位符不能靠 `--npr-faint`（宿主 label-tertiary）：预览里实测白底只有 3.2:1，
+   低于 4.5:1。而它是「这里能写字」的唯一提示 —— 太淡等于没有提示。
+   用 fg/bg 混到 65%：实测 4.6:1 达标，仍明显弱于输入正文（100% fg），深浅主题各自成立。 */
+.npr-write-input::placeholder { color: color-mix(in srgb, var(--npr-fg) 65%, var(--npr-bg)); }
+.npr-write-input:disabled { opacity: .6; }
+/* 预览态：与正文同一套排版（markdown → sanitize 后的 HTML），只是更紧凑。 */
+.npr-write-preview { min-height: 76px; padding: 2px 0 6px; font-size: 15px; line-height: 1.85; color: var(--npr-fg); }
+.npr-write-preview > :first-child { margin-top: 0; }
+.npr-write-preview > :last-child { margin-bottom: 0; }
+.npr-write-preview h1, .npr-write-preview h2, .npr-write-preview h3 { margin: 14px 0 6px; font-size: 15px; font-weight: 650; letter-spacing: 0; }
+.npr-write-empty { margin: 0; padding: 2px 0 6px; font-size: 13px; color: var(--npr-faint); }
+/* 工具条：压在底线之上，字小、无框；hover 才出现底。 */
+.npr-write-tools { display: flex; align-items: center; gap: 1px; padding: 2px 0; border-top: 1px solid var(--npr-border); opacity: .78; transition: opacity .12s ease-out; }
+.npr-write:focus-within .npr-write-tools, .npr-write:hover .npr-write-tools { opacity: 1; }
+.npr-root .npr-write-tool { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 12px; line-height: 1; cursor: pointer; }
+.npr-root .npr-write-tool:hover:not(:disabled) { background: var(--npr-hover); color: var(--npr-fg); }
+.npr-root .npr-write-tool:disabled { opacity: .35; cursor: default; }
+.npr-root .npr-write-tool.is-strong { font-weight: 700; }
+.npr-root .npr-write-tool.is-italic { font-style: italic; font-family: Georgia, 'Times New Roman', serif; }
+.npr-root .npr-write-tool.is-text { padding: 0 8px; font-size: 11px; }
+.npr-root .npr-write-tool[aria-pressed=true] { background: var(--npr-hover); color: var(--npr-fg); }
+.npr-write-sep { width: 1px; height: 12px; margin: 0 5px; background: var(--npr-border); }
+.npr-write-grow { flex: 1; }
+.npr-write-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.npr-write-hint { flex: 1; min-width: 0; font-size: 11px; color: var(--npr-faint); font-variant-numeric: tabular-nums; }
 /* 书籍档案卡（读后感工作台）：书名下面那一排数。
    ★ 用一条**淡底 + 细边**把它和下面的输入框分开：它是「这本书的档案」，
      不是正文的一部分；不加这条分隔，五个数看着像输入框的标题行。 */
@@ -2567,7 +2621,10 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-root .npr-diary-moodrow button { flex: 1 1 0; display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 5px; padding: 5px 4px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--npr-muted); font: inherit; cursor: pointer; transition: background-color .12s ease-out, border-color .12s ease-out; }
 .npr-root .npr-diary-moodrow button:hover { background: var(--npr-hover); }
 .npr-diary-moodface { font-size: 20px; line-height: 1.1; }
-.npr-diary-moodname { font-size: 10.5px; line-height: 1.2; }
+/* ★ 11.5px，不是 10.5px：这是**可点按钮上的文字**（心情是每次保存都要点的动作），
+   不是装饰性 micro-label。impeccable 的 `undersized-ui-text` 判据把功能性文本的
+   下限定在 11px —— 低于它，在 2x 屏和小窗口上先糊掉的就是这一行。 */
+.npr-diary-moodname { font-size: 11.5px; line-height: 1.3; }
 .npr-root .npr-diary-moodrow button[aria-pressed=true] { color: var(--npr-fg); font-weight: 600; }
 .npr-root .npr-diary-moodrow button[data-tone="5"][aria-pressed=true] { border-color: #16a34a; background: #16a34a26; }
 .npr-root .npr-diary-moodrow button[data-tone="4"][aria-pressed=true] { border-color: #4ade80; background: #4ade8026; }
@@ -2599,7 +2656,7 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-root .npr-diary-action.is-danger { border-color: var(--dsw-alias-state-error-primary); color: var(--dsw-alias-state-error-primary); }
 /* ★ 字号/行高**不吃** `--npr-font-size` / `--npr-line-height`（那是阅读设置，
    默认 19px / 1.9），改由 `.npr-diary-sheet` 的 15px 继承下来，与写入口同一个尺寸。
-   行高取 1.85 与 `.npr-diary-input` 对齐：写的时候看到的行距，就是读的时候的行距。 */
+   行高取 1.85 与 `.npr-write-input` 对齐：写的时候看到的行距，就是读的时候的行距。 */
 .npr-diary-body { margin: 8px 0 0; line-height: 1.85; color: var(--npr-fg); }
 .npr-diary-body > :first-child { margin-top: 0; }
 .npr-diary-body > :last-child { margin-bottom: 0; }
@@ -2637,8 +2694,11 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
    不写出来就等于让用户以为两者一样。
    ★ 0.32.0 把它压成**一行**：以前是 composer 顶部一个「私密 · 本地加密」胶囊 +
      下面三行说明，每次打开私密日记都先读一段安全声明，把写日记的地方挤掉了。 */
-.npr-diary-secret { margin: 8px 0 0; padding: 5px 9px; border-left: 2px solid var(--npr-border-strong); border-radius: 0 6px 6px 0; background: color-mix(in srgb, var(--npr-fg) 4%, transparent); font-size: 11px; line-height: 1.65; color: var(--npr-muted); }
-.npr-diary-secret.is-error { border-left-color: var(--dsw-alias-state-error-primary); color: var(--dsw-alias-state-error-primary); }
+/* ★ 去掉左侧 2px 色条。impeccable 把它归为 `side-tab`——「AI 生成 UI 最容易认出的
+   一处特征」。这里它不承载结构：说明条不是被引用的内容，色条只是「注意这里」的装饰。
+   改成一整块淡底 + 统一圆角，层级靠底色和字号区分。 */
+.npr-diary-secret { margin: 8px 0 0; padding: 6px 10px; border-radius: 7px; background: color-mix(in srgb, var(--npr-fg) 4%, transparent); font-size: 11.5px; line-height: 1.65; color: var(--npr-muted); }
+.npr-diary-secret.is-error { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent); color: var(--dsw-alias-state-error-primary); }
 
 /* ── AI 整理失败：正文区顶部的一条横幅 ─────────────────────────────────
    ★ 它必须与伴读面板**无关**地存在。0.32.0 的错误只写在面板内部，
@@ -2655,11 +2715,29 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
      复制、截图、读屏都会把明文带出去。这里根本没有正文节点（见 DiaryApp 的 veiled 分支）。
    ★ 那几条灰杠只是「这里有内容」的占位，长度固定，不随正文长度变化 ——
      否则 8 行和 3 行的遮罩高度不同，等于把字数泄露出去了。 */
-.npr-root button.npr-diary-veil { display: flex; align-items: center; gap: 12px; width: 100%; margin: 10px 0 0; padding: 11px 12px; border: 1px dashed var(--npr-border-strong); border-radius: 8px; background: color-mix(in srgb, var(--npr-fg) 3%, transparent); font: inherit; text-align: left; cursor: pointer; }
-.npr-root button.npr-diary-veil:hover { border-color: var(--npr-accent); }
-.npr-diary-veil-bars { flex: 1; height: 7px; border-radius: 4px; background: repeating-linear-gradient(90deg, color-mix(in srgb, var(--npr-fg) 15%, transparent) 0 46px, transparent 46px 58px); }
-.npr-diary-veil-hint { flex: 0 0 auto; font-size: 11px; color: var(--npr-muted); }
-.npr-diary-veilbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 16px 0 0; padding-bottom: 8px; border-bottom: 1px solid var(--npr-border); font-size: 11px; color: var(--npr-faint); }
+.npr-diary-gatebar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 16px 0 0; padding-bottom: 8px; border-bottom: 1px solid var(--npr-border); font-size: 11px; color: var(--npr-faint); }
+
+/* ── 私密日记的解锁卡 ────────────────────────────────────────────────
+   它不是「空态」，是一道**闸**：画得太 Soft 会让人以为是加载失败。
+   所以：垂直居中、有一个明确的标题、一个单行输入、一颗主按钮，
+   并且把「忘了口令也不会丢字」写在最下面（那是最常见的恐惧）。 */
+.npr-gate { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 320px; padding: 40px 16px; text-align: center; }
+.npr-gate-icon { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 50%; background: color-mix(in srgb, var(--npr-fg) 6%, transparent); color: var(--npr-muted); }
+.npr-gate h2 { margin: 2px 0 0; font-size: 17px; font-weight: 620; letter-spacing: 0; color: var(--npr-fg); }
+.npr-gate p { max-width: 34em; margin: 0; font-size: 12.5px; line-height: 1.75; color: var(--npr-muted); }
+.npr-gate small { max-width: 34em; margin-top: 2px; font-size: 11px; line-height: 1.7; color: var(--npr-faint); }
+.npr-gate-form { display: flex; align-items: center; gap: 8px; width: 100%; max-width: 340px; margin-top: 6px; }
+.npr-gate-form input { flex: 1; min-width: 0; height: 34px; padding: 0 11px; border: 1px solid var(--npr-border-strong); border-radius: 8px; background: var(--npr-bg); color: var(--npr-fg); font: inherit; font-size: 13px; outline: none; }
+.npr-gate-form input:focus { border-color: color-mix(in srgb, var(--npr-fg) 42%, var(--npr-bg)); }
+.npr-root .npr-gate-submit { flex: 0 0 auto; height: 34px; padding: 0 16px; border: 1px solid var(--npr-fg); border-radius: 8px; background: var(--npr-fg); color: var(--npr-bg); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.npr-root .npr-gate-submit:disabled { opacity: .45; cursor: not-allowed; }
+.npr-gate-error { margin: 0; font-size: 12px; color: var(--dsw-alias-state-error-primary); }
+/* 竖排两个输入（设置口令时要输两次）时改为纵向，否则右边那颗按钮会被挤到第二行。 */
+.npr-gate-form:has(input + input) { flex-wrap: wrap; justify-content: center; }
+.npr-gate-form:has(input + input) input { flex: 1 1 100%; }
+
+/* 面板与伴读共用 .npr-companion；这里只补两处日记特有的事。 */
+.npr-diary-companion .npr-native-chat { position: relative; }
 
 /* 条目上的小标记 */
 .npr-diary-mood { font-size: 13px; line-height: 1; }
@@ -2675,7 +2753,7 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-diary-cloud { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 6px; padding: 4px 14px 10px; }
 .npr-root .npr-diary-tagchip { display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 9px; border: 1px solid var(--npr-border); border-radius: 999px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; cursor: pointer; }
 .npr-root .npr-diary-tagchip:hover { border-color: var(--npr-accent); }
-.npr-diary-tagcount { font-size: 10px; color: var(--npr-faint); font-variant-numeric: tabular-nums; }
+.npr-diary-tagcount { font-size: 11px; color: var(--npr-faint); font-variant-numeric: tabular-nums; }
 
 /* 读后感工作台：右栏「正文 + 划线侧栏」是一行两列。
    ★ 必须是**两个并排的独立面板**，不是一张卡切两半 —— 划线侧栏有自己的标题与
@@ -2692,7 +2770,8 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-diary-mark:last-child { border-bottom: 0; }
 .npr-diary-mark-quote { margin: 0; padding-left: 8px; border-left: 2px solid var(--npr-border-strong); font-size: 12px; line-height: 1.7; color: var(--npr-fg); }
 .npr-diary-mark-note { margin: 4px 0 0; font-size: 11px; line-height: 1.6; color: var(--npr-muted); }
-.npr-diary-mark-foot { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 10px; color: var(--npr-faint); }
+/* 页码（「第 128 页」）是功能性文本：用户靠它回到书里。10px 低于 11px 下限。 */
+.npr-diary-mark-foot { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 11px; color: var(--npr-faint); }
 .npr-diary-mark-foot .npr-diary-action { margin-left: auto; }
 
 /* 页脚里那个「连私密一起导出」：长得像链接、实际是按钮（它要两次点击）。 */

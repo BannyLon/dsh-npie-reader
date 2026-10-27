@@ -342,9 +342,14 @@ describe('常量', () => {
     for (const part of ['一句话总结', '核心收获', '行动指南', '金句摘录']) {
       assert.ok(REFLECTION_TEMPLATE.includes(part), `模板里没有「${part}」`);
     }
-    // 模板必须是**合法 Markdown**（加粗标题 + 列表 + 引用），否则渲染出来是一坨。
-    assert.ok(REFLECTION_TEMPLATE.includes('**一句话总结**'));
-    assert.ok(REFLECTION_TEMPLATE.includes('> '));
+    // 模板必须是**合法 Markdown**，而且四段要用 `##` 小标题。
+    // ★ 0.34 从 `**一句话总结**` 改成 `## 一句话总结`：前者在编辑器里是一串星号，
+    //   用户 2026-10-27 的截图就是那个样子（「写作框巨丑」）。小标题在预览里是真
+    //   标题，源码里也只是两个 `#` —— 一眼就知道那是标题，而不是乱码。
+    assert.ok(REFLECTION_TEMPLATE.includes('## 一句话总结'));
+    assert.ok(!REFLECTION_TEMPLATE.includes('**'), '模板里还留着加粗语法的 * 号');
+    // 四段之间要留空行，否则渲染出来是四行连着的标题。
+    assert.equal(REFLECTION_TEMPLATE.split('\n\n').length, 4);
   });
 
   it('★ 老条目「书摘」写回去仍然是「书摘」（重写不能改类型）', () => {

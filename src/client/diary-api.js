@@ -103,9 +103,44 @@ export async function fetchDiarySecret() {
   return await jsonRequest('/secret');
 }
 
+/**
+ * 口令闸门的状态。**不碰钥匙串、不做密码学**，可以随时调。
+ *
+ * ★ 锁着的时候宿主的 `/day` 已经把私密正文摘掉了（`body: ''` + `locked: true`），
+ *   所以界面必须**先问这个**再决定画什么：画条目还是画解锁框。
+ */
+export async function fetchDiaryGate() {
+  return await jsonRequest('/gate');
+}
+
+/**
+ * 第一次设置私密日记的口令。
+ * ★ 只在「还没设过」时可用：设过之后宿主回 409，界面要走解锁而不是覆盖。
+ */
+export async function setupDiaryGate(passphrase) {
+  return await jsonRequest('/gate', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ passphrase }),
+  });
+}
+
+/** 解锁。口令不对时宿主回 401，这里会抛「口令不对」。 */
+export async function unlockDiaryGate(passphrase) {
+  return await jsonRequest('/gate/unlock', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ passphrase }),
+  });
+}
+
+/** 立刻上锁。关闭私密模块、点「锁定」、窗口失焦超时都调它。 */
+export async function lockDiaryGate() {
+  return await jsonRequest('/gate/lock', { method: 'POST' });
+}
+
 /** 跨天搜。 */
-export async function searchDiary(query, limit) {
-  const params = new URLSearchParams({ q: query });
+export async function searchDiary(query, limit) {  const params = new URLSearchParams({ q: query });
   if (limit !== undefined) params.set('limit', String(limit));
   return await jsonRequest(`/search?${params.toString()}`);
 }

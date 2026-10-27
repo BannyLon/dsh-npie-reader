@@ -37,10 +37,21 @@
  *
  * ★ 数据全部走 HTTP（`diary-api.js`），不走 Remote：日记是文件，翻页/搜一句都是读盘。
  *
+ * ★ 0.34（2026-10-27 第二轮真机反馈）改了四件事，都是「看起来在工作、其实没有」：
+ *   ① `setDiaryContext(request = {})` 的**默认参数**让宿主的 typert 网关拒绝生成调用桩，
+ *      于是「AI 整理这一天」点下去只回一句英文错误。签名去掉默认值即可（见 service.js）。
+ *   ② 读后感页面底部挂着「日记共 4 天 · 存在 ~/.dsh/…」—— 同一个页脚覆盖了三个模块，
+ *      就必然在其中一个里是错的。
+ *   ③ 私密日记原来是**屏幕遮罩**：宿主解密、正文进 DOM、点一下就显示。用户原话
+ *      「点击就能查看还有什么私密」。现在改成宿主侧口令闸门（`diary-gate.js`）。
+ *   ④ 写入口重做成 `DiaryComposer`（工具栏 + 预览 + 自动长高），并去掉那圈绿色
+ *      focus outline 与灰底盒子。
+ *
  * ★ 私密条目**不给「AI 整理」**：宿主的 `setDiaryContext` 读的是公开那半边，
  *   按钮能点的话模型看到的会是同一天的另一段内容。这是边界，不是没做。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { sanitizeHtml } from '../host/sanitize.js';
 import { markdownToHtml } from '../host/markdown.js';
 import {
@@ -49,11 +60,12 @@ import {
 } from '../diary-format.js';
 import {
   appendDiaryEntry, downloadDiaryBundle, fetchDiaryBook, fetchDiaryDay, fetchDiaryExport,
-  fetchDiaryMonth, fetchDiarySecret, fetchDiaryStats, fetchDiaryTags, fetchDiaryTimeline,
-  removeDiaryEntry, revealDiaryFolder, searchDiary,
+  fetchDiaryGate, fetchDiaryMonth, fetchDiarySecret, fetchDiaryStats, fetchDiaryTags, fetchDiaryTimeline,
+  lockDiaryGate, removeDiaryEntry, revealDiaryFolder, searchDiary, setupDiaryGate, unlockDiaryGate,
 } from './diary-api.js';
 import { fetchAnnotations, fetchBooks, fetchStates } from './library-api.js';
 import { DiaryCalendar } from './DiaryCalendar.jsx';
+import { DiaryComposer } from './DiaryComposer.jsx';
 import { ViewSwitch } from './ViewSwitch.jsx';
 import { Icon } from './icons.jsx';
 
@@ -112,6 +124,25 @@ const AI_DAY_PROMPT = [
   '整理稿直接给我看，**不要**写回日记 —— 我自己决定要不要留。',
   '原文不要动。',
 ].join('\n');
+
+/**
+ * 面板里的快捷提示词 —— 与 AI 伴读那排胶囊同一个位置、同一个交互（点一下直接发）。
+ *
+ * ★ 第一条就是原来「AI 整理这一天」自动发出去的那句，所以「点按钮」这个动作
+ *   并没有丢：只是从「打开就发」变成「看得见才发」。
+ */
+const AI_ENTRY_CHIPS = [
+  { id: 'entry', title: '整理这一篇', body: AI_ENTRY_PROMPT },
+  { id: 'cut', title: '砍掉一半', body: '这一篇里哪些话可以删掉而不损失信息？直接给删完的版本。' },
+  { id: 'quote', title: '提炼一句', body: '用一句话说出这一篇真正想说的，不要套话。' },
+];
+
+const AI_DAY_CHIPS = [
+  { id: 'tidy', title: '整理成一整天', body: AI_DAY_PROMPT },
+  { id: 'three', title: '提炼三条', body: '把今天这几条压成三条，每条一句话，保留我的语气。' },
+  { id: 'unfinished', title: '找出没写完的', body: '哪几条只写了一半、或者情绪到了但事情没说清楚？指出来，先不要替我补。' },
+  { id: 'ask', title: '今天在想什么', body: '读完今天这几条，你觉得我今天在想什么？说结论，再给一句依据。' },
+];
 
 /** 读后感按篇整理：一篇就是一整篇文档，和「灵感按天整理」不是同一件事。 */
 const AI_ENTRY_PROMPT = [
@@ -219,6 +250,16 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
   const [listWidth, setListWidth] = useState(() => Number(localStorage.getItem('npr.diaryListWidth')) || 268);
   const [chat, setChat] = useState(null);
   const [chatError, setChatError] = useState('');
+  /** 面板开着但对话还没建好时也要能打开它（失败信息得有个地方落）。 */
+  const [aiOpen, setAiOpen] = useState(false);
+  /** 当前面板对着哪一篇读后感（`null` = 对这一天的灵感）。 */
+  const [aiEntry, setAiEntry] = useState(null);
+  /** 正在发送的那条快捷提示词（空串 = 没在发）。 */
+  const [aiSending, setAiSending] = useState('');
+  /** 对话区是不是还停在「开场空态」——决定要不要盖那张开场图。 */
+  const [emptyChat, setEmptyChat] = useState(false);
+  const [promptMount, setPromptMount] = useState(null);
+  const chatRoot = useRef(null);
   /**
    * AI 整理的失败原因。
    *
@@ -231,8 +272,15 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
   const [aiError, setAiError] = useState('');
   /** 时间轴上点了某一条之后要定位到的那条（`date-scope-index`），闪一下再褪。 */
   const [focusKey, setFocusKey] = useState('');
-  /** 私密模块里被显式「解密」的条目。默认空 = 全部遮罩。 */
-  const [revealed, setRevealed] = useState(() => new Set());
+  /**
+   * 私密日记的口令闸门。
+   *
+   * ★ 这一层是**权限**，不是显示效果。`set: false` 表示还没设过口令；
+   *   `unlocked: false` 时宿主根本不会把私密正文发过来（`body` 是空串），
+   *   所以界面除了画解锁框以外没有别的选择 —— 它想「先渲染再遮住」也做不到。
+   *   用户 2026-10-27：「私密日记点击就能查看还有什么私密，一定是只能本人查看啊。」
+   */
+  const [gate, setGate] = useState({ set: false, unlocked: false, available: true, busy: false, error: '', draft: '', confirm: '' });
   /** 侧栏时间轴里展开的那一天（同一次只展开一天）。 */
   const [openDay, setOpenDay] = useState('');
   const [stats, setStats] = useState(null);
@@ -439,8 +487,8 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
   const pick = (date) => {
     setSelected(date);
     setConfirmKey('');
-    // 换了日期就把「已显示」清空：同一份授权不该跨天继续生效。
-    setRevealed(new Set());
+    // 换一天**不**重新上锁：锁是「这个人现在在这台机器前」这件事，不是「这一天」。
+    // 换了天就掉锁会让连续翻阅十天的日记变成输十次口令。
     const parsed = parseMonthKey(date.slice(0, 7));
     if (parsed && (parsed.year !== month.year || parsed.month0 !== month.month0)) setMonth(parsed);
   };
@@ -536,38 +584,68 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
    *   已解锁的 Mac 打开」。
    */
   useEffect(() => {
-    if (moduleValue !== 'private') return;
+    if (moduleValue !== 'private') return undefined;
     let alive = true;
     fetchDiarySecret()
       .then((status) => { if (alive) setSecret({ mode: status.mode ?? '', error: status.error ?? '' }); })
       .catch((cause) => { if (alive) setSecret({ mode: 'error', error: cause.message }); });
-    return () => { alive = false; };
+    fetchDiaryGate()
+      .then((status) => {
+        if (!alive) return;
+        setGate((current) => ({
+          ...current,
+          set: status.set === true,
+          unlocked: status.unlocked === true,
+          available: status.available !== false,
+          error: '',
+        }));
+      })
+      .catch((cause) => { if (alive) setGate((current) => ({ ...current, error: cause.message })); });
+    // ★ **离开模块就上锁**。这是用户那句「只能本人查看」的落点：切到灵感或读后感
+    //   之后，私密正文不该还挂在宿主内存里等着被人点回来。返回清理函数里发请求，
+    //   不 await —— 组件已经在卸载路径上，等它等于把切换卡住。
+    return () => {
+      alive = false;
+      void lockDiaryGate()
+        .then(() => setGate((current) => ({ ...current, unlocked: false })))
+        .catch(() => {});
+    };
   }, [moduleValue]);
 
   /**
-   * 「AI 整理这一天」。
+   * 打开「AI 整理」面板。
+   *
+   * ★ **只开面板 + 绑上下文，不自动提问**（0.34 改）。用户 2026-10-27：
+   *   「AI 整理不是这样的，就入 AI 伴读一样，应该是针对今天的灵感记录打开这个窗口。」
+   *   0.33 的行为是点一下就 `sendPrompt(AI_DAY_PROMPT)` —— 面板还没画出来，
+   *   模型已经开始输出了，用户既没机会换个问法，也看不出上下文到底是哪一天。
+   *   现在与 `AskArticle` 完全一致：先开面板、显示「上下文是今天 N 条」，
+   *   想怎么问由下面那排快捷提示词或输入框决定。
    *
    * ★ `setDiaryContext` **不传 `target`** —— 那是整天模式的开关（见 `diaryContext`：
    *   `target === null` 时开场白直接写「处理对象是这一天的日记整体」）。
-   *   传了 `target` 就退回「一条一条整理」，正是用户 2026-10-27 否掉的做法。
    */
-  async function tidyDay() {
+  async function openAiPanel(entry = null) {
     if (aiRef.current) return;
     aiRef.current = true;
-    setAiKey('day');
-    setChatError('');
+    setAiKey(entry ? entryKey(entry) : 'day');
     setAiError('');
+    setChatError('');
+    setAiEntry(entry);
+    setAiOpen(true);
     let acquired = null;
     try {
       const workspaceId = api.defaultChatWorkspace?.();
       if (!workspaceId) throw new Error('Harness 里还没有打开工作区。先在左侧打开一个工作区，再回来点这颗按钮。');
       acquired = await api.openChat({ workspaceId });
-      await api.setDiaryContext({ sessionId: acquired.sessionId, date: selected });
+      // ★ 读后感是「一篇」的上下文，所以带 `target`；灵感是「这一整天」，不带。
+      await api.setDiaryContext(entry
+        ? { sessionId: acquired.sessionId, date: entry.date ?? selected, target: entry.index }
+        : { sessionId: acquired.sessionId, date: selected });
       chatRef.current?.release?.();
       chatRef.current = acquired;
       setChat(acquired);
       acquired = null;
-      await chatRef.current.sendPrompt(AI_DAY_PROMPT);
     } catch (cause) {
       const message = cause?.message ?? String(cause);
       // 面板与横幅两处都写：面板可能根本没打开（失败发生在 openChat / setDiaryContext）。
@@ -580,33 +658,24 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
     }
   }
 
-  /** 读后感按篇整理（一篇读后感本身就是一整篇文档，不存在「按天整理」）。 */
-  async function tidyEntry(entry) {
-    const key = entryKey(entry);
-    if (aiRef.current) return;
-    aiRef.current = true;
-    setAiKey(key);
+  /**
+   * 发一条整理指令。**面板已经打开之后**才可能被调用（快捷提示词 / 用户自己打字）。
+   * ★ 失败只写进面板内的 notice，不再往正文区顶部抛横幅 —— 那条横幅的用途是
+   *   「点了没反应」，而这里失败时用户人就在面板前面。
+   */
+  async function sendAiPrompt(text) {
+    if (!chatRef.current || aiSending !== '' || text.trim() === '') return;
+    setAiSending(text);
     setChatError('');
-    setAiError('');
-    let acquired = null;
     try {
-      const workspaceId = api.defaultChatWorkspace?.();
-      if (!workspaceId) throw new Error('Harness 里还没有打开工作区。先在左侧打开一个工作区，再回来点这颗按钮。');
-      acquired = await api.openChat({ workspaceId });
-      await api.setDiaryContext({ sessionId: acquired.sessionId, date: entry.date ?? selected, target: entry.index });
-      chatRef.current?.release?.();
-      chatRef.current = acquired;
-      setChat(acquired);
-      acquired = null;
-      await chatRef.current.sendPrompt(AI_ENTRY_PROMPT);
+      await chatRef.current.sendPrompt(text);
     } catch (cause) {
       const message = cause?.message ?? String(cause);
-      setChatError(message);
-      setAiError(message);
-      acquired?.release?.();
+      setChatError(message.includes('已有草稿')
+        ? '输入框里已经有草稿。先发出去或清空，再用快捷提示词。'
+        : message);
     } finally {
-      aiRef.current = false;
-      setAiKey('');
+      setAiSending('');
     }
   }
 
@@ -615,6 +684,68 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
     chatRef.current = null;
     setChat(null);
     setChatError('');
+    setAiOpen(false);
+    setAiEntry(null);
+    setPromptMount(null);
+    setEmptyChat(false);
+  }
+
+  /**
+   * 面板里「对话是不是还空着」+「快捷提示词该插在哪」。
+   *
+   * ★ 抄的是 `AskArticle` 的做法（那边已经跑了一年）：宿主原生对话把输入框画在
+   *   `[data-composer-seat]`，把提示词条 portal 到它**前面**，才是「在输入框上方」
+   *   而不是在面板底部叠一层。`data-content-phase="hero"` 是宿主自己报的「还没开始
+   *   聊」，用它决定要不要盖开场图，比数 DOM 里的消息节点稳。
+   */
+  useEffect(() => {
+    if (!chat || !SessionProvider) return undefined;
+    const root = chatRoot.current;
+    if (!root) return undefined;
+    const mount = document.createElement('div');
+    mount.className = 'npr-companion-prompt-anchor';
+    let placed = false;
+    const place = () => {
+      const seat = root.querySelector('[data-composer-seat]');
+      if (seat?.parentNode) {
+        if (mount.nextSibling !== seat) seat.parentNode.insertBefore(mount, seat);
+        if (!placed) { placed = true; setPromptMount(mount); }
+      }
+      setEmptyChat(root.querySelector('[data-content-phase]')?.getAttribute('data-content-phase') === 'hero');
+    };
+    const observer = new MutationObserver(place);
+    observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-content-phase'] });
+    place();
+    return () => { observer.disconnect(); mount.remove(); setPromptMount(null); setEmptyChat(false); };
+  }, [chat, SessionProvider]);
+
+  /** 设口令 / 解锁 / 上锁三件事共用一个提交口（表单 onsubmit 走这里）。 */
+  async function submitGate(event) {
+    event.preventDefault();
+    if (gate.busy) return;
+    const text = gate.draft;
+    if (text.length < 4) { setGate((current) => ({ ...current, error: '口令至少 4 位' })); return; }
+    if (!gate.set && text !== gate.confirm) { setGate((current) => ({ ...current, error: '两次输入不一致' })); return; }
+    setGate((current) => ({ ...current, busy: true, error: '' }));
+    try {
+      if (gate.set) await unlockDiaryGate(text);
+      else await setupDiaryGate(text);
+      setGate((current) => ({ ...current, set: true, unlocked: true, busy: false, draft: '', confirm: '' }));
+      await refresh();
+      notify?.(gate.set ? '已解锁' : '口令设好了，这一页只有你知道怎么打开');
+    } catch (cause) {
+      setGate((current) => ({ ...current, busy: false, error: cause.message }));
+    }
+  }
+
+  /** 手动上锁（离开模块时也会自动锁，这颗按钮是「我现在要起身了」）。 */
+  async function lockNow() {
+    try {
+      await lockDiaryGate();
+    } catch { /* 宿主没接上闸门时不需要报错：本来就锁不住 */ }
+    setGate((current) => ({ ...current, unlocked: false, draft: '', confirm: '' }));
+    setDraft('');
+    notify?.('私密日记已上锁');
   }
 
   async function runSearch(query) {
@@ -629,11 +760,22 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
     }
   }
 
-  /** 点一个标签 = 搜 `#标签`（宿主侧的搜索就是正文子串，标签本来就在正文里）。 */
+  /**
+   * 点一个标签 = 按 `#标签` 检索（宿主侧的搜索就是正文子串，标签本来就在正文里）。
+   *
+   * ★ 这里**不设 `open: true`**：点标签是「筛一下」，不是「开始搜索」。把输入框
+   *   顶出来会让用户以为界面换了模式，而它其实只是换了个查询词。
+   *   输入框只由 🔍 按钮与 Esc 控制（`searchTag` 与 `toggleSearch` 两个入口分开）。
+   */
   function searchTag(tag) {
     const query = `#${tag}`;
-    setSearch((current) => ({ ...current, open: true, query }));
+    setSearch((current) => ({ ...current, open: false, query }));
     void runSearch(query);
+  }
+
+  /** 退出筛选：连查询词一起清掉，侧栏回到「标签 / 时间轴 / 挂在书上」三块检索器。 */
+  function clearFilter() {
+    setSearch((current) => ({ ...current, open: false, query: '', hits: [], scanned: 0, truncated: false }));
   }
 
   async function reveal() {
@@ -774,7 +916,19 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
       moduleValue === 'private' ? '本地加密' : '',
     ].filter(Boolean).join(' · ');
 
-  const showSearchResults = search.open && search.query.trim() !== '';
+  /**
+   * ★ 搜索结果的显示**不再依赖 `open`**（输入框是否展开）。
+   *
+   * 0.34 之前两者绑死，于是「点侧栏标签」必须顺手把搜索框顶出来 ——
+   * 用户的原话是「这换一句话、换一个名字的输入框是什么鬼东西，为什么三个
+   * 功能页都有，而且是在灵感页点击标签之后出现的」。
+   *
+   * 拆开之后是两个动作：
+   *   · **筛选**（点标签）：不展开输入框，只在结果上方给一条可清除的筛选条；
+   *   · **搜索**（点 🔍 / ⌘F）：展开输入框，随时能改写关键词。
+   * 两者共用同一份 `hits`，因为宿主侧本来就是同一次查询。
+   */
+  const showSearchResults = search.query.trim() !== '';
 
   return (
     <div className={`npr-workarea${chat ? ' has-companion' : ''}`}>
@@ -783,8 +937,12 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
           {/* ★ 这一条 `data-window-drag` 是**布局必需**：没有它，在日记页按住空白处拖不动窗口。 */}
           <div className="npr-sidebar-toolbar" data-window-drag>
             <ViewSwitch mode="diary" onChange={(next) => { if (next !== 'diary') onExit?.(next); }} showLibrary />
+            {/* ★ 收起搜索 = 退出检索，连查询词一起清掉。否则输入框没了、结果还在，
+                用户既看不到自己搜的词，也没有地方改 —— 是一处走不出去的角落。 */}
             <button type="button" className="npr-icon" title="搜索日记" aria-label="搜索日记"
-              onClick={() => setSearch((current) => ({ ...current, open: !current.open }))}><Icon name="search" /></button>
+              onClick={() => setSearch((current) => (current.open
+                ? { ...current, open: false, query: '', hits: [], scanned: 0, truncated: false }
+                : { ...current, open: true }))}><Icon name="search" /></button>
             <button type="button" className="npr-icon" title="打开日记文件夹" aria-label="打开日记文件夹" onClick={() => void reveal()}><Icon name="folder" /></button>
             <button type="button" className="npr-icon" title="导出全部日记（单文件 Markdown）" aria-label="导出全部日记" onClick={() => void exportAll()}><Icon name="download" /></button>
           </div>
@@ -806,6 +964,16 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
 
           {showSearchResults ? (
             <div className="npr-list">
+              {/* 筛选态（输入框没展开）时，这条负责回答「列表为什么变了」并给出出口。
+                  搜索态不显示：关键词就在输入框里，再说一遍是噪音。 */}
+              {!search.open && (
+                <div className="npr-diary-filterbar">
+                  <span className="npr-diary-filterbar-text">
+                    按 <b>{search.query}</b> 找到{search.busy ? '…' : ` ${search.hits.length} 条`}
+                  </span>
+                  <button type="button" className="npr-diary-filterbar-clear" onClick={clearFilter}>全部</button>
+                </div>
+              )}
               {search.busy && <div className="npr-empty">正在找…</div>}
               {!search.busy && search.hits.length === 0 && (
                 <div className="npr-empty">
@@ -834,7 +1002,7 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
              */
             <div className="npr-diary-panel">
               <section className="npr-diary-sect">
-                <h3 className="npr-diary-sect-head">标签</h3>
+                <h2 className="npr-diary-sect-head">标签</h2>
                 {tagIndex.busy && <p className="npr-diary-sect-note">正在数标签…</p>}
                 {!tagIndex.busy && tagIndex.tags.length === 0 && (
                   <p className="npr-diary-sect-note">正文里写 #灵感 这样的词，它就会出现在这里。</p>
@@ -852,7 +1020,7 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
               </section>
 
               <section className="npr-diary-sect">
-                <h3 className="npr-diary-sect-head">时间轴</h3>
+                <h2 className="npr-diary-sect-head">时间轴</h2>
                 {timeline.busy && <p className="npr-diary-sect-note">正在读…</p>}
                 {!timeline.busy && recentDays.length === 0 && (
                   <p className="npr-diary-sect-note">还没有灵感。右边写一句就行。</p>
@@ -899,7 +1067,7 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
 
               {linked.length > 0 && (
                 <section className="npr-diary-sect">
-                  <h3 className="npr-diary-sect-head">挂在书上</h3>
+                  <h2 className="npr-diary-sect-head">挂在书上</h2>
                   <p className="npr-diary-sect-note">读书时按 L 记的灵感，自动挂到那本书上。</p>
                   {linked.map((item) => (
                     <button key={item.title} type="button" className="npr-diary-dayrow"
@@ -918,7 +1086,7 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                 selected={selected} today={today}
                 onPick={pick} onShift={(delta) => setMonth(shiftMonth(month.year, month.month0, delta))} onToday={() => pick(today)} />
               <section className="npr-diary-sect">
-                <h3 className="npr-diary-sect-head">这个月</h3>
+                <h2 className="npr-diary-sect-head">这个月</h2>
                 {writtenDays.length === 0 && <p className="npr-diary-sect-note">这个月还没有私密日记。</p>}
                 {writtenDays.map(([date, count]) => {
                   const tone = marks.moods?.[date]?.private;
@@ -946,7 +1114,7 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
 
               {!books.busy && books.error === '' && (
                 <section className="npr-diary-sect">
-                  <h3 className="npr-diary-sect-head">读完的<span className="npr-diary-sect-badge">{readBooks.length}</span></h3>
+                  <h2 className="npr-diary-sect-head">读完的<span className="npr-diary-sect-badge">{readBooks.length}</span></h2>
                   {readBooks.length === 0 && (
                     <p className="npr-diary-sect-note">还没有读完的书。在书架里读完一本、点「标记读完」，它就会出现在这里。</p>
                   )}
@@ -995,7 +1163,7 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
             {moduleValue === 'inspiration' && (
               <button type="button" className="npr-diary-ai" disabled={aiKey !== '' || inspirationEntries.length === 0}
                 title={inspirationEntries.length === 0 ? '今天还没有可整理的灵感' : '把今天所有灵感一起交给 AI 整理'}
-                onClick={() => void tidyDay()}>
+                onClick={() => void openAiPanel()}>
                 <Icon name="wand-sparkles" size={13} />
                 <span>{aiKey === 'day' ? '正在打开…' : 'AI 整理这一天'}</span>
               </button>
@@ -1021,36 +1189,40 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
               <div className="npr-diary-sheet">
                 {/* ---- 写入口：三种模块三种形态 ------------------------------ */}
                 {moduleValue === 'inspiration' && (
-                  <section className="npr-diary-write">
-                    <textarea ref={draftRef} className="npr-diary-input npr-diary-input-quick" value={draft} aria-label="灵感"
-                      placeholder="这一刻想到什么？写 #标签 可以自动归类。"
-                      onChange={(event) => setDraft(event.target.value)}
-                      onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); void saveQuick(); } }} />
-                    {/* ★ 灵感模块**没有情绪行**。用户 2026-10-27：「灵感不需要有情绪追踪」。
-                        情绪追踪是私密日记本的能力（见日记功能需求），灵感是速记，
-                        多一行五档情绪只会让「写一句话」这件事变重。 */}
-                    <div className="npr-diary-writefoot">
-                      <span className="npr-diary-foot-hint">{draft.replace(/\s/g, '').length} 字 · ⌘/Ctrl + Enter</span>
-                      <button type="button" className="npr-diary-save" onClick={() => void saveQuick()} disabled={saving || draft.trim() === ''}>
-                        {saving ? '正在保存…' : '记下来'}
-                      </button>
-                    </div>
-                  </section>
+                  /* ★ 灵感模块**没有情绪行**。用户 2026-10-27：「灵感不需要有情绪追踪」。
+                     情绪追踪是私密日记本的能力，灵感是速记 —— 多一行五档情绪只会让
+                     「写一句话」这件事变重。 */
+                  <DiaryComposer
+                    variant="quick"
+                    value={draft}
+                    onChange={setDraft}
+                    onSubmit={() => void saveQuick()}
+                    busy={saving}
+                    inputRef={draftRef}
+                    maxHeight={300}
+                    placeholder="这一刻想到什么？"
+                  />
                 )}
 
-                {moduleValue === 'private' && (
+                {/*
+                  * ★ 私密模块的写入口**在锁着时不出现**：宿主此刻根本没把正文发过来，
+                  *   给一个能写但看不到自己昨天写了什么的框，是在骗人。
+                  *   `gate.available === false`（宿主没接闸门）时照常显示 —— 那种情况下
+                  *   本来就没有口令这层，不该画一个点不动的锁。
+                  */}
+                {moduleValue === 'private' && (gate.available === false || gate.unlocked) && (
                   <section className="npr-diary-write">
-                    <textarea ref={draftRef} className="npr-diary-input" value={draft} aria-label="私密日记"
-                      placeholder="这一页只留在本机，写进加密文件。"
-                      onChange={(event) => setDraft(event.target.value)}
-                      onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); void saveQuick(); } }} />
-                    <MoodRow value={mood} onChange={setMood} label="今天的心情" />
-                    <div className="npr-diary-writefoot">
-                      <span className="npr-diary-foot-hint">{draft.replace(/\s/g, '').length} 字 · ⌘/Ctrl + Enter</span>
-                      <button type="button" className="npr-diary-save" onClick={() => void saveQuick()} disabled={saving || draft.trim() === ''}>
-                        {saving ? '正在保存…' : '记下来'}
-                      </button>
-                    </div>
+                    <DiaryComposer
+                      variant="private"
+                      value={draft}
+                      onChange={setDraft}
+                      onSubmit={() => void saveQuick()}
+                      busy={saving}
+                      inputRef={draftRef}
+                      maxHeight={360}
+                      placeholder="这一页只留在本机。"
+                      extra={<MoodRow value={mood} onChange={setMood} label="今天的心情" />}
+                    />
                     {/* 加密说明只在**出错**时展开；正常态收成一行 —— 它每次都在，
                         常驻三行会把写日记的地方挤掉。
                         ★ 不带 🔒 之类的 emoji：这一行是 11px 的辅助说明，
@@ -1091,20 +1263,24 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                             <strong>{readLabel}</strong><span>读到</span>
                           </span>
                         </div>
-                        <textarea ref={refRef} className="npr-diary-input npr-diary-input-tall" value={refDraft} aria-label="读后感"
-                          placeholder="一句话总结、核心收获、行动指南、金句摘录 —— 或者就写你想写的。"
-                          onChange={(event) => setRefDraft(event.target.value)}
-                          onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); void saveReflection(); } }} />
-                        <div className="npr-diary-writefoot">
-                          <span className="npr-diary-foot-hint">
-                            {refDraft.replace(/\s/g, '').length} 字
-                          </span>
-                          <button type="button" className="npr-diary-linkish" onClick={() => setRefDraft(REFLECTION_TEMPLATE)}>套用模板</button>
-                          <button type="button" className="npr-diary-linkish" onClick={() => setRefDraft('')}>清空</button>
-                          <button type="button" className="npr-diary-save" onClick={() => void saveReflection()} disabled={saving || refDraft.trim() === ''}>
-                            {saving ? '正在保存…' : '记下来'}
-                          </button>
-                        </div>
+                        <DiaryComposer
+                          variant="reflection"
+                          value={refDraft}
+                          onChange={setRefDraft}
+                          onSubmit={() => void saveReflection()}
+                          busy={saving}
+                          inputRef={refRef}
+                          maxHeight={420}
+                          placeholder="写下这本书留给你的东西。"
+                          actions={(
+                            <>
+                              <button type="button" className="npr-diary-linkish" onClick={() => setRefDraft((current) => (current.trim() === '' ? REFLECTION_TEMPLATE : `${current.replace(/\s+$/, '')}\n\n${REFLECTION_TEMPLATE}`))}>
+                                套用模板
+                              </button>
+                              <button type="button" className="npr-diary-linkish" onClick={() => setRefDraft('')}>清空</button>
+                            </>
+                          )}
+                        />
                       </section>
                     ) : (
                       <div className="npr-diary-blocked">
@@ -1115,7 +1291,7 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                   ) : (
                     <div className="npr-diary-blank">
                       <p>先在左边选一本书。</p>
-                      <p>左边只列**读完**的书 —— 没读完的书，左边是灰的。</p>
+                      <p>只列<strong>读完</strong>的书 —— 没读完的不会出现在左边。</p>
                       <p>也可以反过来：在书里读着读着，点顶部那颗「写读后感」，直接带着这本书落到这一页。</p>
                     </div>
                   )
@@ -1124,14 +1300,54 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                 {/* ---- 条目列表 --------------------------------------------- */}
                 {moduleValue !== 'reflection' && (
                   <>
-                    {moduleValue === 'private' && privateEntries.length > 0 && (
-                      <div className="npr-diary-veilbar">
-                        <span>{revealed.size > 0 ? `已显示 ${revealed.size} / ${privateEntries.length} 条` : `${privateEntries.length} 条私密 · 默认遮罩`}</span>
-                        <button type="button" className="npr-diary-action"
-                          onClick={() => setRevealed(revealed.size > 0 ? new Set() : new Set(privateEntries.map(entryKey)))}>
-                          {revealed.size > 0 ? '全部隐藏' : '全部显示'}
-                        </button>
+                    {moduleValue === 'private' && gate.unlocked && privateEntries.length > 0 && (
+                      <div className="npr-diary-gatebar">
+                        <span>已解锁 · {privateEntries.length} 条私密</span>
+                        <button type="button" className="npr-diary-action" onClick={() => void lockNow()}>锁定</button>
                       </div>
+                    )}
+                    {/*
+                      * ★ 锁着的时候这里画**解锁卡**，而且只画它：`visibleEntries` 里私密
+                      *   条目的 body 是空串（宿主摘掉的），画出来是一串空壳，比不画更糟。
+                      */}
+                    {moduleValue === 'private' && gate.available !== false && !gate.unlocked && (
+                      <section className="npr-gate" aria-label="私密日记已上锁">
+                        <div className="npr-gate-icon" aria-hidden="true"><Icon name="eye-off" size={20} /></div>
+                        <h2>{gate.set ? '这一页上锁了' : '给私密日记设一道口令'}</h2>
+                        <p>
+                          {gate.set
+                            ? '输入口令才能看。口令只在这台机器上校验，不出本机、不进模型。'
+                            : '设一道只有你知道的口令。它不参与文件加密（文件本来就是密文），只决定「谁能翻开这一页」。'}
+                        </p>
+                        <form className="npr-gate-form" onSubmit={(event) => void submitGate(event)}>
+                          <input
+                            type="password"
+                            autoComplete={gate.set ? 'current-password' : 'new-password'}
+                            aria-label="口令"
+                            placeholder={gate.set ? '口令' : '设一个口令（至少 4 位）'}
+                            value={gate.draft}
+                            autoFocus
+                            onChange={(event) => setGate((current) => ({ ...current, draft: event.target.value, error: '' }))} />
+                          {!gate.set && (
+                            <input
+                              type="password"
+                              autoComplete="new-password"
+                              aria-label="再输一次口令"
+                              placeholder="再输一次"
+                              value={gate.confirm}
+                              onChange={(event) => setGate((current) => ({ ...current, confirm: event.target.value, error: '' }))} />
+                          )}
+                          <button type="submit" className="npr-gate-submit" disabled={gate.busy || gate.draft === ''}>
+                            {gate.busy ? '正在校验…' : gate.set ? '解锁' : '设好并打开'}
+                          </button>
+                        </form>
+                        {gate.error !== '' && <p className="npr-gate-error" role="alert">{gate.error}</p>}
+                        <small>
+                          {gate.set
+                            ? '忘记口令不会丢日记：删掉 diary/gate.json 就能重设，文字还在。'
+                            : '换了这台机器也没有：密钥在这台机器的登录钥匙串里。'}
+                        </small>
+                      </section>
                     )}
                     {loading && <div className="npr-empty">正在读这一天…</div>}
                     {!loading && visibleEntries.length === 0 && (
@@ -1149,12 +1365,13 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                       const key = entryKey(entry);
                       const entryMood = firstMood(entry.meta?.mood);
                       /*
-                       * ★ 私密条目默认**不把正文渲染进 DOM**。
-                       *   用户 2026-10-27：「撰写的日记显示不能是明文，要解密才能看」。
-                       *   注意这里不是把文字加 CSS 模糊 —— 模糊只是看不见，`textContent`
-                       *   仍然可读（复制、截图、读屏都会把明文带出去）。要么渲染，要么不渲染。
+                       * ★ 私密条目现在**由宿主决定给不给正文**（见 `gate`）。
+                       *   0.33 这里是「逐条遮罩 + 点击显示」，用户 2026-10-27 一针见血：
+                       *   「点击就能查看还有什么私密」。遮罩只挡眼睛，不挡人 —— 真正该拦在
+                       *   前面的是「你有没有权利看这一页」，而那件事只有宿主能判。
+                       *   所以这里不再有 veiled：锁着时这一整块根本不会渲染（上面画的是解锁卡）。
                        */
-                      const veiled = privateSide && !revealed.has(key);
+                      const empty = privateSide && entry.body === '';
                       return (
                         <article className={`npr-diary-entry${focusKey === key && privateSide ? ' is-focus' : ''}`}
                           key={key} data-diary-key={key}>
@@ -1169,11 +1386,6 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                             {privateSide && <span className="npr-diary-lock" title="私密：本地加密存储">私密</span>}
                             {entry.source && <span className="npr-diary-source-tag" title={entry.source}>引自 {entry.source}</span>}
                             <span className="npr-diary-entry-actions">
-                              {veiled && (
-                                <button type="button" className="npr-diary-action"
-                                  title="解密并显示这一条"
-                                  onClick={() => setRevealed((current) => new Set(current).add(key))}>显示</button>
-                              )}
                               {confirmKey === key ? (
                                 <button type="button" className="npr-diary-action is-danger" disabled={busyKey !== ''}
                                   onClick={() => void removeAt(entry)}>
@@ -1185,15 +1397,12 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                               )}
                             </span>
                           </header>
-                          {veiled ? (
-                            <button type="button" className="npr-diary-veil" onClick={() => setRevealed((current) => new Set(current).add(key))}>
-                              <span className="npr-diary-veil-bars" aria-hidden="true" />
-                              <span className="npr-diary-veil-hint">内容已加密 · 点击显示</span>
-                            </button>
-                          ) : (html
-                            ? <div className="npr-diary-body" dangerouslySetInnerHTML={{ __html: html }} />
-                            : <p className="npr-diary-body npr-diary-body-plain">{entry.body}</p>)}
-                          {!veiled && tags.length > 0 && (
+                          {empty
+                            ? <p className="npr-diary-body npr-diary-body-plain">这一条还在锁里。</p>
+                            : (html
+                              ? <div className="npr-diary-body" dangerouslySetInnerHTML={{ __html: html }} />
+                              : <p className="npr-diary-body npr-diary-body-plain">{entry.body}</p>)}
+                          {!empty && tags.length > 0 && (
                             <div className="npr-diary-tagrow">
                               {tags.map((tag) => (
                                 <button key={tag} type="button" className="npr-diary-tag"
@@ -1224,7 +1433,7 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                             {entryMood && <span className="npr-diary-mood" title="写这一篇时的心情">{entryMood}</span>}
                             <span className="npr-diary-entry-actions">
                               <button type="button" className="npr-diary-action" title="让 AI 整理这一篇" disabled={aiKey !== ''}
-                                onClick={() => void tidyEntry(entry)}>
+                                onClick={() => void openAiPanel(entry)}>
                                 {aiKey === key ? '正在打开…' : 'AI 整理这一篇'}
                               </button>
                               {confirmKey === key ? (
@@ -1247,10 +1456,18 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
                   </>
                 )}
 
-                {stats && (
+                {/*
+                  * ★ 这条页脚只属于「日记」本身（灵感 / 私密），**不能进读后感**。
+                  *   用户 2026-10-27 的截图里，读后感模块底部挂着
+                  *   「日记共 4 天（私密 1 天）· 1 KB · 存在 /Users/…/diary 连私密一起导出」
+                  *   —— 那是两个模块的数据串在了一起：他在看一本书的读后感，却被报了
+                  *   日记的天数、磁盘路径，还给了一个导出日记的入口。同一个 `<p>` 覆盖了
+                  *   三个模块，就必然在其中一个里是错的。
+                  */}
+                {stats && moduleValue !== 'reflection' && (
                   <p className="npr-diary-foot">
                     日记共 {stats.days} 天{stats.privateDays > 0 ? `（私密 ${stats.privateDays} 天）` : ''} · {(stats.bytes / 1024).toFixed(0)} KB · 存在 {stats.root}
-                    {stats.privateDays > 0 && (
+                    {stats.privateDays > 0 && gate.unlocked && (
                       <button type="button" className="npr-diary-linkish" onClick={() => void exportWithPrivate()}>
                         {exportArmed ? '再点一次：明文会写进下载目录' : '连私密一起导出'}
                       </button>
@@ -1292,22 +1509,80 @@ export function DiaryApp({ onExit, notify, api, SessionProvider, renderSlot, int
         </section>
       </div>
 
-      {chat && (
-        <aside className="npr-companion" aria-label="AI 整理">
+      {/*
+        * ★ 面板**只要点过就打开**（`aiOpen`），不等 `chat` 建好。
+        *   0.33 的写法是 `{chat && <aside>}` —— 于是 `openChat` / `setDiaryContext`
+        *   任何一步失败，用户看到的是「点了没反应」，而真正的原因被关在从未渲染的
+        *   面板里。这与 AI 伴读的行为也不一致：伴读是先出面板、再在面板里报错。
+        */}
+      {aiOpen && (
+        <aside className="npr-companion npr-diary-companion" aria-label="AI 整理">
           <header className="npr-companion-header">
-            <strong>AI 整理</strong>
-            <button type="button" className="npr-icon" title="关闭" aria-label="关闭 AI 整理" onClick={closeChat}><Icon name="x" /></button>
+            <strong>{aiEntry ? 'AI 整理这一篇' : 'AI 整理'}</strong>
+            <button className="npr-icon" title="换一个对话" aria-label="换一个对话"
+              disabled={aiKey !== ''} onClick={() => { closeChat(); void openAiPanel(); }}>
+              <Icon name="plus" />
+            </button>
+            <button className="npr-icon" title="关闭" aria-label="关闭 AI 整理" onClick={closeChat}><Icon name="x" /></button>
           </header>
           <div className="npr-companion-context">
-            <strong>{dayLabel(selected, today)}</strong>
-            <small>上下文引用的是这一天的全部记录；整理稿只在这里给你看，不会写回日记。</small>
+            <strong>{aiEntry ? `${aiEntry.date ?? selected} · ${aiEntry.time}` : dayLabel(selected, today)}</strong>
+            <small>
+              {aiEntry
+                ? '读后感 · 这一篇'
+                : `${inspirationEntries.length} 条 · ${day.chars} 字 · 今天的全部灵感都在上下文里`}
+            </small>
           </div>
-          {chatError && <div className="npr-companion-error" role="alert"><strong>没能开始整理</strong><p>{chatError}</p></div>}
-          {SessionProvider && (
-            <div className="npr-native-chat">
-              <SessionProvider session={chat.reference}>{renderSlot('npie-reader.chat', {})}</SessionProvider>
+          {chatError && (
+            <div className="npr-companion-error" role="alert">
+              <strong>没能开始整理</strong>
+              <p>{chatError}</p>
+              <button type="button" onClick={() => void openAiPanel()}>重试</button>
             </div>
           )}
+          {!chat && !chatError && <div className="npr-companion-loading" role="status">正在打开对话…</div>}
+          {chat && SessionProvider && (
+            <div className="npr-native-chat" ref={chatRoot}>
+              <SessionProvider session={chat.reference}>{renderSlot('npie-reader.chat', {})}</SessionProvider>
+              {/*
+                * 开场图：与 AI 伴读那张同一个位置、同一个构图（书 + 一句题头 + 一句正文）。
+                * ★ 只在对话还是空的时候盖上去（宿主用 `data-content-phase="hero"` 报这件事）。
+                */}
+              {emptyChat && !chatError && (
+                <div className="npr-companion-opening" aria-label="开始整理">
+                  <div className="npr-companion-book" aria-hidden="true">
+                    <svg viewBox="0 0 112 88" fill="none">
+                      <path d="M56 72c-10-7-21-10-37-9V19c16-1 27 2 37 9 10-7 21-10 37-9v44c-16-1-27 2-37 9Z" />
+                      <path d="M56 28v44M25 29c9 .3 17 2.5 24 6M25 38c9 .3 17 2.5 24 6M63 35c7-3.5 15-5.7 24-6M63 44c7-3.5 15-5.7 24-6" />
+                      <path d="M11 68c18-3 33 0 45 9 12-9 27-12 45-9" />
+                      <circle cx="77" cy="13" r="2.5" className="npr-companion-book-spark" />
+                      <path d="M77 3v4M77 19v4M67 13h4M83 13h4" className="npr-companion-book-spark" />
+                    </svg>
+                  </div>
+                  <span className="npr-companion-opening-label">与今天对坐片刻</span>
+                  <h2>{aiEntry ? '这一篇，写完了吗？' : `${inspirationEntries.length} 条，一天。`}</h2>
+                  <p>{aiEntry ? '可以让我把这段理顺，也可以只挑出没说完的那句。' : '要不要把它们理一理？'}<br />也可以直接问我：今天的你，在想什么。</p>
+                </div>
+              )}
+            </div>
+          )}
+          {/*
+            * 快捷提示词：与 AI 伴读同一套（portal 到宿主输入框上方那排胶囊）。
+            * ★ 用 portal 而不是在面板底部再画一排按钮：宿主原生对话自己带输入框，
+            *   在它下面再叠一排「发这个 / 发那个」会让两个发送区看起来都能用。
+            */}
+          {promptMount && createPortal(
+            <div className="npr-companion-prompt-strip" role="group" aria-label="快捷提示词">
+              <div className="npr-companion-prompt-scroll">
+                {(aiEntry ? AI_ENTRY_CHIPS : AI_DAY_CHIPS).map((item) => (
+                  <button key={item.id} type="button" className="npr-companion-prompt-ghost"
+                    title={item.body} aria-label={`直接发送：${item.title}`}
+                    disabled={aiSending !== ''} onClick={() => void sendAiPrompt(item.body)}>
+                    {item.title}
+                  </button>
+                ))}
+              </div>
+            </div>, promptMount)}
         </aside>
       )}
     </div>

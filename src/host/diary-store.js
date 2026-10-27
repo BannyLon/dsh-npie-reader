@@ -23,6 +23,7 @@ import {
   isValidDateKey, isValidMonthKey, moodScore, normalizeMeta, parseDay, parseTags, removeEntryText,
   splitFrontmatter, timeKey,
 } from '../diary-format.js';
+import { createDiaryGate } from './diary-gate.js';
 import { createDiarySecret } from './diary-secret.js';
 import { pluginDataDir } from './store.js';
 
@@ -154,6 +155,8 @@ export function createDiaryStore(options = {}) {
   const log = options.log ?? (() => {});
   const now = options.now ?? (() => new Date());
   const secret = options.secret ?? createDiarySecret({ log, keyPath: join(diaryRoot(), 'secret.key') });
+  // 口令闸门：与磁盘加密**正交**。加密管「拷走也看不见」，闸门管「本机上点一下也看不见」。
+  const gate = options.gate ?? createDiaryGate({ root: diaryRoot(), log, now: () => now().getTime() });
   /** 每个文件一条队列：读-改-写必须串行，否则并发时后写覆盖先写。 */
   const queues = new Map();
 
@@ -638,6 +641,7 @@ export function createDiaryStore(options = {}) {
     exportAll,
     stats,
     secret,
+    gate,
     dropDayForTest,
     buildDay,
     splitFrontmatter,
