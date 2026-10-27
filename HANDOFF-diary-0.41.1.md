@@ -1,10 +1,10 @@
-# 交接：日记三个模块（0.41.0）—— 代码与静态验收已完成，**只差真机**
+# 交接：日记三个模块（0.41.1）—— 代码与静态验收已完成，**只差真机**
 
 > 自足的，不需要之前的对话。
 > **仓库**：`/Users/habhy/Documents/NPIE-program/dsh_plugins_desktop/dsh-npie-reader`
 > **注意是桌面端那棵树**（`dsh_plugins_desktop/`），不是 `dsh_plugins/`。
-> **版本**：`0.41.0`。**git**：0.29–0.40.1 已全部提交，0.41 见 `git log`。
-> **上一份交接**（`HANDOFF-diary-0.32.0.md`）已过期 8 个版本，挪到了 `.build/archive/`，**别再照它做**。
+> **版本**：`0.41.1`。**git**：0.29–0.41 已全部提交，0.41.1 见 `git log`。
+> **上一份交接**（`HANDOFF-diary-0.32.0.md`）已过期 9 个版本，挪到了 `.build/archive/`，**别再照它做**。
 
 ---
 
@@ -32,16 +32,17 @@ node scripts/check-classes.mjs
 node --test test/diary-*.test.mjs test/build.test.mjs test/client-runtime.test.mjs
 ```
 
-0.41.0 实测期望值：
+0.41.1 实测期望值：
 
 | 检查 | 期望 |
 | --- | --- |
 | 日记相关（8 个 `diary-*.test.mjs` + `build` + `client-runtime`） | **376 / 376 通过**（96 个 suite） |
-| `check-classes` | 定义 **598** / 使用 **625**，**双向 0 缺口**，4 个白名单语义钩子 |
-| 构建 | host **571.2 KB** / client **1164.4 KB** / vendor/editor 373.8 KB |
+| `check-classes` | 定义 **599** / 使用 **626**，**双向 0 缺口**，4 个白名单语义钩子 |
+| 构建 | host **571.2 KB** / client **1163.9 KB** / vendor/editor 373.8 KB |
 | 静态预览几何 | `node .build/preview/make-diary-preview.mjs && node .build/preview/measure.mjs` ⇒ `cols=268px 1px 911px`，标题与正文左缘差 **0** |
-| **侧栏几何（0.41 新增）** | `node .build/preview/measure-sidebar.mjs` ⇒ `ALL OK`：切换器 244×30、三档 79/79/79 铺满 240px 槽、面板 525px 可滚 525px、胶囊 x=215..234 / chevron 右缘 255 / 行右缘 263 |
-| **侧栏反向对照（0.41 新增）** | `node .build/preview/check-sidebar-mutant.mjs` ⇒ `反向对照通过`（两条变异各自变红且理由对） |
+| **侧栏几何（0.41）** | `node .build/preview/measure-sidebar.mjs` ⇒ `ALL OK`：切换器 244×30、三档 79/79/79 铺满 240px 槽、面板 565px 可滚 565px、胶囊 x=215..234 / chevron 右缘 255 / 行右缘 263 |
+| **切换器钉住（0.41.1 新增）** | 同上脚本 ⇒ 打印 `滚动 277px 后：条顶 194 → 76（面板顶 76）`（按书本那帧是 319px）；不 sticky 时这里是 `-125` |
+| **侧栏反向对照** | `node .build/preview/check-sidebar-mutant.mjs` ⇒ `反向对照通过`（**三条**变异各自变红且理由对） |
 | 「挂到书」浮层几何 | `node .build/preview/measure-link.mjs` ⇒ `ALL OK`（三帧：卡片装进画框 / body 不滚 / 行高 31px） |
 | 浮层反向对照 | `node .build/preview/check-link-mutant.mjs` ⇒ `反向对照通过` |
 
@@ -139,8 +140,11 @@ README 曾明写「**没有** `diary_edit` / `diary_delete`，不是还没做，
 
 ### 改成了什么
 
-侧栏顶部一颗胶囊分段控制器（在 `.npr-diary-panel` **外面** —— 面板是 `overflow:auto`，
-放进去会跟着内容滚走，而「我现在按什么看」必须一直在）：
+侧栏顶部一颗胶囊分段控制器。★ 位置经过一次调整（0.41.1）：0.41.0 是「切换器在上、
+标签在下」，用户当天就说「调下位置，[切换器] 这部分放到标签下面」⇒ 现在是
+**标签 → 切换器 → 内容**，而切换器因此进了 `.npr-diary-panel`，改用
+`position: sticky; top: 0` + 不透明底色（`--npr-bg-2`）钉住 —— 面板是 `overflow:auto`，
+不钉的话「按书本」那串越读越长的列表会把切换器顶走，而它必须一直在。
 
 ```
 ⏱ 按时间   |   📖 按书本   |   📄 按文章
@@ -199,13 +203,16 @@ README 曾明写「**没有** `diary_edit` / `diary_delete`，不是还没做，
 - 新增断言做了**变异验证**（跑绿不算数），本轮共 6 次：
   - 追加→替换 ⇒ 红；去掉「拿到 0 天」守卫 ⇒ 红；`body` 改回必填 ⇒ 2 红。
   - 挖掉 `.is-compact` ⇒ 红（「三层嵌套滚动」）；挖掉 `flex: 0 0 auto` ⇒ 红（「行被压扁到 18px」）。
-  - **0.41**：`flex: 1 1 0` → `0 0 auto` ⇒ 红（「三档没铺满整条槽（184 vs 240）」）；
-    `nowrap` → `normal` ⇒ 红（「长书名没有被截断」）。
+- **0.41**：`flex: 1 1 0` → `0 0 auto` ⇒ 红（「三档没铺满整条槽（184 vs 240）」）；
+  `nowrap` → `normal` ⇒ 红（「长书名没有被截断」）；
+  **0.41.1**：`position: sticky` → `static` ⇒ 红（「条顶 -125 vs 面板顶 76」）。
 - 静态预览几何未回归：`cols=268px 1px 911px`、标题与正文左缘差 0。
 - **「挂到书」浮层三帧已静态量过**（真 Chrome）：卡片 464 / 536 / 463px 均装进 642px 画框、
   `body` 不滚、行高 31px、书列表 190/317 与章列表 190/253 真滚。
 - **0.41 侧栏几何已量过**（真 Chrome）：切换器 244×30、三档 79/79/79 铺满 240px 槽、
-  面板 525px 可滚 525px（无横向溢出）、胶囊 x=215..234 / chevron 右缘 255 / 行右缘 263。
+  面板 565px 可滚 565px（无横向溢出）、胶囊 x=215..234 / chevron 右缘 255 / 行右缘 263。
+- **0.41.1 切换器「钉住」已量过**（真 Chrome，**真的滚了一下**）：面板压到 160px 逼出滚动条，
+  滚 277px（按书本帧 319px）后条顶仍是 76 = 面板顶；不 sticky 时是 -125。
 - 15 帧逐帧出图，`m1.png`（按时间）、`m11.png`（按书本）、`m12.png`（按文章）已目视确认。
 
 ### 未验证（**这就是接手后的第一件事**）
@@ -238,7 +245,7 @@ README 曾明写「**没有** `diary_edit` / `diary_delete`，不是还没做，
 | 2 | 版式 | 标题与正文左缘目视对齐；建议 CDP 量一次 `getBoundingClientRect()`，差应为 0 |
 | 3 | AI 整理 | 点日期栏那颗 → 带进去的是**整天**（不是前 8 条）；提示词里有「今天这一整天」 |
 | 4 | 灵感侧栏 · 时间轴 | 标签点得动；时间轴展开当天；「加载更早」能翻出更早的天 |
-| 5 | **视图切换器（0.41 新）** | 点「按书本」侧栏**局部**换成书列表（不是整页刷新/白屏）；切换器**不随内容滚走**；切回来默认档是「按时间」 |
+| 5 | **视图切换器（0.41）** | 顺序是「标签 → 切换器 → 内容」；点「按书本」侧栏**局部**换成书列表（不是整页刷新/白屏）；**把侧栏往下滚到底，切换器还钉在顶上**；切回来默认档是「按时间」 |
 | 6 | **二级展开（0.41 新）** | 点一本书就地展开它的灵感；再点收起；同时只开一个；展开区里「打开这本书 ›」能真跳；书已删时是一句解释而不是死按钮 |
 | 7 | **长书名截断（0.41 新）** | 拿一本超长书名的书：单行省略号、不换行、悬停出完整书名；条数胶囊在**右侧**且不把标题挤变形 |
 | 8 | **挂到书（0.40）** | 条目行那颗书图标 → 选书 → 选章（电子书 / PDF 各试一本）→ 挂上去 → 条目头出现「引自 …」且侧栏「按书本」里多一行 |
@@ -339,8 +346,8 @@ README 曾明写「**没有** `diary_edit` / `diary_delete`，不是还没做，
 | 十五帧模块图 | `.build/preview/m1.png` … `m15.png`（2 倍图） |
 | ↳ 帧号对照 | `m1` 按时间 · `m11` 按书本 · `m12` 按文章 · `m13`–`m15`「挂到书」三态（刚选完书 / 读过目录 / 没有目录） |
 | 量几何（整体） | `node .build/preview/measure.mjs`（JSON：`cols` / 对齐 / 选中格 computed 值） |
-| **量侧栏几何（0.41）** | `node .build/preview/measure-sidebar.mjs`（切换器 / 三档宽度 / 横向溢出 / 胶囊与行右缘） |
-| **侧栏反向对照（0.41）** | `node .build/preview/check-sidebar-mutant.mjs`（挖掉 `flex` 与 `nowrap`，各自必须变红） |
+| **量侧栏几何（0.41）** | `node .build/preview/measure-sidebar.mjs`（切换器 / 三档宽度 / 横向溢出 / 胶囊与行右缘 / **压扁面板滚到底后切换器是否还钉住**） |
+| **侧栏反向对照** | `node .build/preview/check-sidebar-mutant.mjs`（挖掉 `flex` / `nowrap` / **`sticky`**，三条各自必须变红） |
 | 量浮层几何 | `node .build/preview/measure-link.mjs`（卡片 / body / 两个列表 / 行高；末行打印判据） |
 | 浮层反向对照 | `node .build/preview/check-link-mutant.mjs`（挖掉两条 CSS 守卫，各自必须变红） |
 | 出图 | `node .build/preview/shoot.mjs`（逐帧截图；自带「三列必须是三列」闸门） |
