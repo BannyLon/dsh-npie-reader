@@ -93,8 +93,12 @@ const PANEL_CSS = `
 .npr-channel-label{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
 .npr-channel-label + svg{flex:0 0 auto;color:var(--npr-muted)}
 .npr-filters{display:flex;gap:4px;align-items:center;padding:0 12px 8px}
-.npr-root .npr-filters button{height:26px;padding:2px 10px;font:inherit;font-size:11px;color:var(--npr-muted);background:transparent;border:0;border-radius:5px;cursor:pointer}
-.npr-root .npr-filters button[aria-pressed=true]{background:var(--npr-hover);color:var(--npr-fg)}
+/* 几何走 refinements.css 的「切换控件」那一节（0.44.5 统一两档）：这里是
+   **兜底值**，样式表没加载时筛选条也还是 26 / 6 / 12 那一套。两处写的是同一组数字 ——
+   这是有意为之：一致靠的是「同源变量」，不是靠谁比谁后加载赢一次层叠。
+   ★ 注释里一个反引号都不能有：这段在**模板字符串内部**，反引号会提前闭合它。 */
+.npr-root .npr-filters button{height:var(--npr-tab-h,26px);padding:0 9px;font:inherit;font-size:var(--npr-tab-font-sm,12px);font-weight:400;color:var(--npr-muted);background:transparent;border:0;border-radius:var(--npr-tab-r,6px);cursor:pointer}
+.npr-root .npr-filters button[aria-pressed=true]{background:var(--npr-tab-track,color-mix(in srgb,var(--npr-fg) 8%,var(--npr-bg)));color:var(--npr-fg);font-weight:600}
 /* ★ 设置齿轮在**工具栏**里（2026-10-23 用户定），不在筛选 chip 行里：
    它是「整个插件」的动作，而那一排 chip 是「对当前列表做一个筛选」——
    挂在 chip 行最右会被读成「筛选器的第四个选项」。margin-left:auto 把它推到最右；
