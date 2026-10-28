@@ -17,6 +17,8 @@ import { ChannelPicker, ChannelMark } from './ChannelPicker.jsx';
 import { ReadingAppearance } from './ReadingAppearance.jsx';
 import { SettingsPage } from './SettingsPage.jsx';
 import { resolveReadingVersion, shouldAutoTranslate } from './reading-version.js';
+import { activeIndex, outlineOf, scrollTarget } from './article-outline.js';
+import { pickVoice, speechChunks, SPEECH_RATES } from './article-speech.js';
 import { Discover } from './Discover.jsx';
 import { MediaDock } from './MediaDock.jsx';
 import { quoteRange, selectedPassage } from './selection.js';
@@ -185,6 +187,23 @@ const PANEL_CSS = `
 .npr-prose td,.npr-prose th{border:1px solid var(--npr-border);padding:8px}
 .npr-prose a{color:var(--npr-accent-strong);text-underline-offset:3px}
 .npr-root[data-images=false] .npr-prose img{display:none}
+/* ---- 文章大纲（0.44）----
+   浮在阅读区右上，**不挤压正文**：挤压会让 prose 重排、正在读的那一行跳走 ——
+   目录本来就是用来定位的，先把它自己的副作用去掉。
+   宽度 232px：标题超过 44 字在 JS 里就截断了，这个宽度刚好放得下两行以内。 */
+.npr-outline-toggle[aria-expanded="true"]{background:var(--npr-hover);color:var(--npr-fg)}
+.npr-outline-slot{position:sticky;top:52px;height:0;z-index:6}
+.npr-outline{position:absolute;top:0;right:18px;width:232px;max-height:min(62vh,520px);display:flex;flex-direction:column;border:1px solid var(--npr-border);border-radius:10px;background:var(--npr-bg);box-shadow:0 10px 28px rgba(0,0,0,.16);overflow:hidden}
+.npr-outline-head{display:flex;align-items:center;justify-content:space-between;gap:4px;padding:6px 6px 6px 12px;border-bottom:1px solid var(--npr-border);font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--npr-faint)}
+.npr-outline-head .npr-icon{width:24px;height:24px;padding:4px}
+.npr-outline-list{flex:1 1 auto;margin:0;padding:4px;overflow:auto;list-style:none}
+.npr-outline-list li{margin:0}
+.npr-outline-list button{display:block;width:100%;padding:4px 8px;border:0;border-radius:5px;background:transparent;color:var(--npr-muted);font:inherit;font-size:12.5px;line-height:1.5;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.npr-outline-list button:hover{background:var(--npr-hover);color:var(--npr-fg)}
+.npr-outline-list button.is-current{color:var(--npr-accent-strong);background:color-mix(in srgb,var(--npr-accent) 9%,transparent);font-weight:600}
+.npr-outline-list li[data-level="2"] button{padding-left:20px}
+.npr-outline-list li[data-level="3"] button{padding-left:32px;font-size:12px}
+.npr-outline-list li[data-level="4"] button{padding-left:44px;font-size:12px;color:var(--npr-faint)}
 .npr-missing{margin-top:24px;padding:22px;border:1px dashed var(--npr-border-strong);border-radius:10px;text-align:center;color:var(--npr-muted);font-size:13px;line-height:1.8}
 .npr-translating{display:flex;align-items:center;gap:8px;margin-top:14px;padding:9px 12px;border:.5px solid var(--npr-border-strong);border-radius:9px;background:var(--npr-hover);color:var(--npr-muted);font-size:12px;line-height:1.6}
 .npr-translating svg{flex:none;animation:npr-spin 1.4s linear infinite}
@@ -218,6 +237,13 @@ const PANEL_CSS = `
 .npr-menu button:hover:not(:disabled){background:var(--npr-hover)}
 .npr-menu button:disabled{opacity:.45;cursor:default}
 .npr-menu hr{margin:5px 4px;border:0;border-top:.5px solid var(--npr-border)}
+/* 语速那一行。★ 选择器必须带 .npr-menu 前缀：.npr-menu button 是 flex + 7px 内边距，
+   直接写 .npr-menu-seg button 会被它压过去，四颗档位会各自撑成一整行。
+   ★ 这段在模板串里，注释里不能出现反引号。 */
+.npr-menu-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 10px 7px;font-size:12px;color:var(--npr-muted)}
+.npr-menu .npr-menu-seg{display:flex;gap:2px;padding:2px;border-radius:6px;background:var(--npr-hover)}
+.npr-menu .npr-menu-seg button{padding:2px 7px;font-size:11.5px;border-radius:4px;color:var(--npr-muted);background:transparent}
+.npr-menu .npr-menu-seg button.is-on{background:var(--npr-bg);color:var(--npr-fg);font-weight:600}
 .npr-modal-backdrop{position:fixed;inset:0;background:var(--npr-scrim);display:flex;align-items:center;justify-content:center;z-index:55}
 .npr-modal{width:min(480px,92vw);max-height:86vh;display:flex;flex-direction:column;gap:10px;padding:18px;background:var(--npr-surface);border:.5px solid var(--npr-border-strong);border-radius:14px;color:var(--dsw-alias-label-primary);overflow:auto}
 .npr-modal.is-wide{width:min(620px,94vw)}
@@ -1270,6 +1296,129 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     : ''), [activeArticle, active, versions]);
   // 标题行：译文 / 改写用它们自己的中文标题（正文里的 H1 已在生成时被去掉）。
   const title = readerTitle({ active, versions, article: activeArticle?.article });
+
+  /* ---- 文章大纲（0.44）------------------------------------------------
+   * ★ 标题从**渲染后的 DOM** 里取，不从 HTML 字符串里正则匹配：`sanitizeHtml` 会丢掉
+   *   它不认识的标签与属性，正则数出来的标题可能根本不在页面上；译文 / 改写两条路径
+   *   的标签结构也不一样。DOM 是唯一的真相。
+   * ★ 每次 `bodyHtml` 变化都重扫：切版本会整块重建 DOM，旧 id 全部作废 ——
+   *   不重扫就会出现「点目录没反应」，而且不报错。
+   */
+  const [outline, setOutline] = useState([]);
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  const [outlineActive, setOutlineActive] = useState(-1);
+  useEffect(() => {
+    const host = proseRef.current;
+    if (!host) { setOutline([]); setOutlineActive(-1); return; }
+    const nodes = [...host.querySelectorAll('h1, h2, h3, h4')];
+    const next = outlineOf(nodes);
+    // ★ 用 data 属性当锚点，不用 id：`id` 会被类名检查脚本当成类名（`npr-h-` 报缺口），
+    //   而 id 还可能和文章自带的锚点撞名 —— data 属性两边都不占。
+    // ★ 按 `at`（输入下标）打回节点，不是按目录下标：中间夹着空标题时两者不相等。
+    next.forEach((item) => { nodes[item.at].dataset.outline = item.key; });
+    setOutline(next);
+    setOutlineActive(next.length ? 0 : -1);
+    // 换文章 / 换版本时收起：继续开着会让人以为看的是上一版的目录
+    setOutlineOpen(false);
+  }, [bodyHtml]);
+
+  /** 滚动跟踪：当前读到哪一节。用 rAF 节流，scroll 事件本身是高频的。 */
+  useEffect(() => {
+    const host = proseRef.current;
+    const scroller = host?.closest('.npr-reader');
+    if (!host || !scroller || outline.length === 0) return undefined;
+    let frame = 0;
+    const sync = () => {
+      frame = 0;
+      const top = scroller.getBoundingClientRect().top;
+      // 每个标题相对滚动容器顶部的距离 —— 判定「读到哪一节」的策略在 activeIndex 里
+      const tops = outline.map((item) => {
+        const node = host.querySelector(`[data-outline="${item.key}"]`);
+        return node ? node.getBoundingClientRect().top - top : Infinity;
+      });
+      setOutlineActive(activeIndex(tops));
+    };
+    const onScroll = () => { if (frame === 0) frame = requestAnimationFrame(sync); };
+    sync();
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => { scroller.removeEventListener('scroll', onScroll); if (frame !== 0) cancelAnimationFrame(frame); };
+  }, [outline]);
+
+  /* ---- 朗读（0.44）----------------------------------------------------
+   * ★ 只做「播 / 暂停 / 继续 / 停 / 变速」，**不做逐句高亮**：高亮要把正文切成
+   *   一句一个 span，而正文是 dangerouslySetInnerHTML 塞进去的 —— 切一次整棵子树
+   *   重建，滚动位置会跳、选中会丢、划线也失效。用「好看」换掉「能好好读」不划算。
+   * ★ 一次 speak() 只喂一块（speechChunks 切好的）：Chromium 对超长 utterance 会
+   *   静默截断，用户听完开头就静音、还以为读完了。
+   */
+  const [speaking, setSpeaking] = useState(false);
+  const [speechRate, setSpeechRate] = useState(() => {
+    const saved = Number(localStorage.getItem('npr.speechRate'));
+    return SPEECH_RATES.some((item) => item.rate === saved) ? saved : 1;
+  });
+  const speechRun = useRef(null);
+  // ★ 语速用 ref 读，不用 state 闭包：speakAt 是在 toggleSpeech 里创建的一次性闭包，
+  //   它捕获的 speechRate 是**点击那一刻**的值 —— 播放中改语速要等下一篇才生效，
+  //   而用户会以为「改了没用」。
+  const speechRateRef = useRef(speechRate);
+  useEffect(() => { speechRateRef.current = speechRate; }, [speechRate]);
+
+  const stopSpeech = () => {
+    if (speechRun.current) speechRun.current.cancelled = true;
+    speechRun.current = null;
+    globalThis.speechSynthesis?.cancel();
+    setSpeaking(false);
+  };
+
+  const toggleSpeech = () => {
+    const synth = globalThis.speechSynthesis;
+    if (!synth || typeof globalThis.SpeechSynthesisUtterance !== 'function') {
+      notify('这个环境不支持朗读（没有语音合成能力）', true);
+      return;
+    }
+    // 已经在念：点一下暂停；暂停中：点一下继续
+    if (synth.speaking && !synth.paused) { synth.pause(); setSpeaking(false); return; }
+    if (synth.paused) { synth.resume(); setSpeaking(true); return; }
+    const chunks = speechChunks(proseRef.current?.innerText ?? '');
+    if (chunks.length === 0) { notify('这篇没有可朗读的正文'); return; }
+    const picked = pickVoice(synth.getVoices(), localStorage.getItem('npr.speechVoice') ?? '');
+    // 没有中文语音就明说，不退回英语：那会把中文念成噪音，比不念更糟
+    if (!picked) { notify('这台机器没有中文语音，中文文章读不了', true); return; }
+    const run = { cancelled: false };
+    speechRun.current = run;
+    const speakAt = (at) => {
+      if (run.cancelled) return;
+      if (at >= chunks.length) { setSpeaking(false); speechRun.current = null; return; }
+      const utter = new globalThis.SpeechSynthesisUtterance(chunks[at]);
+      utter.lang = picked.lang;
+      utter.rate = speechRateRef.current;
+      const voice = synth.getVoices().find((item) => item.name === picked.name);
+      if (voice) utter.voice = voice;
+      utter.onend = () => speakAt(at + 1);
+      utter.onerror = () => { if (!run.cancelled) { setSpeaking(false); speechRun.current = null; } };
+      synth.speak(utter);
+    };
+    setSpeaking(true);
+    speakAt(0);
+  };
+
+  // 换文章 / 换版本必须停：上一篇会继续念，而屏幕上已经是另一篇
+  useEffect(() => () => stopSpeech(), [selected?.article?.key, active]);
+
+  /**
+   * 跳到某一节。
+   * ★ 不用 `scrollIntoView`：它会把**外层所有**可滚动祖先一起滚（宿主的页面容器也在
+   *   其中），滚完左侧列表也跟着跳，用户会以为点错了。自己算差值只动这一格。
+   */
+  const jumpToHeading = (key) => {
+    const host = proseRef.current;
+    const node = host?.querySelector(`[data-outline="${key}"]`);
+    const scroller = host?.closest('.npr-reader');
+    if (!node || !scroller) return;
+    // 差值算法在 scrollTarget 里（纯函数、可测）—— 算错了不报错，只会滚到别处
+    const top = scrollTarget(scroller.scrollTop, node.getBoundingClientRect().top, scroller.getBoundingClientRect().top);
+    scroller.scrollTo({ top, behavior: 'smooth' });
+  };
   useEffect(() => { if (askContext && activeArticle?.article) setAskContext(previous => ({ ...previous, key: activeArticle.article.key, title: activeArticle.article.titleZh || activeArticle.article.title, version: active, selection: previous.key === activeArticle.article.key && previous.version === active ? previous.selection : '', quoteId: previous.key === activeArticle.article.key && previous.version === active ? previous.quoteId : undefined })); }, [activeArticle?.article?.key, active]);
   const openCompanion = (quote = '') => { if (!activeArticle) return; setFocused(false); setAskContext({ key: activeArticle.article.key, title: activeArticle.article.titleZh || activeArticle.article.title, version: active, selection: quote, quoteId: quote ? ++selectionSerial.current : undefined }); };
   const selectChannel = (key) => { if (key === channel) return; articleRequest.current++; setAskContext(null); setFocused(false); setSelected(undefined); setPassage(null); setFilter('all'); setQuery(''); setChannel(key); };
@@ -1497,6 +1646,15 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                     <Icon name={activeArticle.article.read ? 'circle-check' : 'circle'} />
                   </button>
                   <button type="button" className="npr-icon" title="AI 伴读" aria-label="AI 伴读" onClick={() => openCompanion(passage?.quote ?? '')}><Icon name="wand-sparkles" /></button>
+                  <button type="button" className="npr-icon" title={speaking ? '暂停朗读' : '朗读这篇文章'}
+                    aria-label={speaking ? '暂停朗读' : '朗读这篇文章'} aria-pressed={speaking}
+                    onClick={toggleSpeech}><Icon name={speaking ? 'pause' : 'play'} /></button>
+                  {/* 大纲：没有标题时**禁用并说明为什么** —— 点了什么都不发生的按钮
+                      就是「看起来像功能」（本项目记过好几次）。 */}
+                  <button type="button" className="npr-icon npr-outline-toggle"
+                    title={outline.length ? '文章大纲' : '这篇没有小标题，没有大纲'}
+                    aria-label="文章大纲" aria-expanded={outlineOpen} disabled={outline.length === 0}
+                    onClick={() => setOutlineOpen((current) => !current)}><Icon name="type" /></button>
                   <button type="button" className="npr-icon" title="更多操作" aria-label="更多操作"
                     aria-haspopup="menu" aria-expanded={menuOpen} ref={menuButtonRef}
                     onClick={() => setMenuOpen((open) => !open)}><Icon name="ellipsis" /></button>
@@ -1530,12 +1688,52 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                           <Icon name="refresh-cw" size={15} />{busyMenuLabel('重新加载文章', reloadingArticle)}
                         </button>
                       )}
+                      <hr />
+                      {/* 语速放在「更多」里而不是工具条上：它是一周改一次的东西，
+                          而工具条上每一颗按钮都在抢宽度（窄窗口下会先把文字砍掉）。 */}
+                      <div className="npr-menu-row" role="group" aria-label="朗读语速">
+                        <span>朗读语速</span>
+                        <div className="npr-menu-seg">
+                          {SPEECH_RATES.map((item) => (
+                            <button key={item.rate} type="button"
+                              className={item.rate === speechRate ? 'is-on' : ''}
+                              aria-pressed={item.rate === speechRate}
+                              onClick={() => { setSpeechRate(item.rate); localStorage.setItem('npr.speechRate', String(item.rate)); }}>
+                              {item.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <hr />
                       <button type="button" onClick={() => { setMenuOpen(false); setDialog('settings'); }}><Icon name="settings" size={15} />插件设置</button>
                       <button type="button" onClick={(event) => { setMenuOpen(false); openPicker(event); }}><Icon name="rss" size={15} />选择频道</button>
                     </div>
                   )}
                   {appearanceOpen && <ReadingAppearance settings={reading} onChange={applyReading} onClose={() => setAppearanceOpen(false)} />}
                 </div>
+              </div>
+              {/* 大纲槽：height:0 的 sticky 元素 —— 不占正文高度，但随滚动固定在视野里。
+                  ★ 不能直接 absolute 挂在 .npr-reader 上：那是 overflow:auto 的滚动容器，
+                    absolute 子元素会跟着内容一起滚走，读两屏目录就没了。 */}
+              <div className="npr-outline-slot">
+                {outlineOpen && outline.length > 0 && (
+                  <nav className="npr-outline" aria-label="文章大纲">
+                    <div className="npr-outline-head">
+                      <span>大纲</span>
+                      <button type="button" className="npr-icon" title="收起大纲" aria-label="收起大纲"
+                        onClick={() => setOutlineOpen(false)}><Icon name="x" size={13} /></button>
+                    </div>
+                    <ol className="npr-outline-list">
+                      {outline.map((item, index) => (
+                        <li key={item.key} data-level={Math.min(item.level, 4)}>
+                          <button type="button" className={index === outlineActive ? 'is-current' : ''}
+                            title={item.full} aria-current={index === outlineActive ? 'location' : undefined}
+                            onClick={() => jumpToHeading(item.key)}>{item.text}</button>
+                        </li>
+                      ))}
+                    </ol>
+                  </nav>
+                )}
               </div>
               <article className="npr-article">
                 <div className="npr-article-head">
