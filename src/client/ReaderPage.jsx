@@ -92,13 +92,23 @@ const PANEL_CSS = `
 .npr-root .npr-channel:hover{color:var(--npr-accent)}
 .npr-channel-label{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
 .npr-channel-label + svg{flex:0 0 auto;color:var(--npr-muted)}
-.npr-filters{display:flex;gap:4px;align-items:center;padding:0 12px 8px}
-/* 几何走 refinements.css 的「切换控件」那一节（0.44.5 统一两档）：这里是
-   **兜底值**，样式表没加载时筛选条也还是 26 / 6 / 12 那一套。两处写的是同一组数字 ——
-   这是有意为之：一致靠的是「同源变量」，不是靠谁比谁后加载赢一次层叠。
+.npr-filters{display:flex;align-items:center;gap:2px;margin:0 var(--npr-tab-inset,12px) 8px;padding:0 0 8px;background:transparent;border:0}
+/* 几何走 refinements.css 的「切换控件」那一节（0.44.6）：这里是**兜底值**，样式表没加载
+   时筛选条也还是 26 / 6 / 13 那一套。两处写的是同一组数字 —— 这是有意为之：
+   一致靠的是「同源变量」，不是靠谁比谁后加载赢一次层叠。
+   ★ 筛选条是**二级**：没有槽（不画底座），宽度按文案走 —— 用户 2026-10-28 明确
+     「这部分不要统一，因为这部分是下一级，还保持原来的样子」。
+   ★ hover **只改字色**：无槽时若再画一块底色，就与「选中块」撞脸（截图里两块并排亮着）。
    ★ 注释里一个反引号都不能有：这段在**模板字符串内部**，反引号会提前闭合它。 */
-.npr-root .npr-filters button{height:var(--npr-tab-h,26px);padding:0 9px;font:inherit;font-size:var(--npr-tab-font-sm,12px);font-weight:400;color:var(--npr-muted);background:transparent;border:0;border-radius:var(--npr-tab-r,6px);cursor:pointer}
+.npr-root .npr-filters button{height:var(--npr-tab-h,26px);padding:0 10px;font:inherit;font-size:var(--npr-tab-font,13px);font-weight:400;color:var(--npr-muted);background:transparent;border:0;border-radius:var(--npr-tab-r,6px);cursor:pointer}
+.npr-root .npr-filters button:hover{color:var(--npr-fg);background:transparent}
 .npr-root .npr-filters button[aria-pressed=true]{background:var(--npr-tab-track,color-mix(in srgb,var(--npr-fg) 8%,var(--npr-bg)));color:var(--npr-fg);font-weight:600}
+/* 一级筛选（RSS 阅读页的 全部/未读/收藏）：与分页、日记三模块同一套 —— 有底座、等分。
+   这一页没有页面切换器，它自己就是顶层；书架页那条二级筛选仍然无底座、按文案定宽。 */
+.npr-root .npr-filters.npr-filters-primary{gap:var(--npr-tab-pad,2px);padding:var(--npr-tab-pad,2px);border:1px solid transparent;border-radius:8px;background:var(--npr-tab-track,color-mix(in srgb,var(--npr-fg) 8%,var(--npr-bg)))}
+.npr-root .npr-filters.npr-filters-primary button{flex:1 1 0;min-width:0}
+.npr-root .npr-filters.npr-filters-primary button:hover{background:var(--npr-hover,color-mix(in srgb,var(--npr-fg) 6%,var(--npr-bg)))}
+.npr-root .npr-filters.npr-filters-primary button[aria-pressed=true]{background:var(--npr-tab-thumb,var(--npr-bg));box-shadow:0 1px 2px rgba(0,0,0,.06)}
 /* ★ 设置齿轮在**工具栏**里（2026-10-23 用户定），不在筛选 chip 行里：
    它是「整个插件」的动作，而那一排 chip 是「对当前列表做一个筛选」——
    挂在 chip 行最右会被读成「筛选器的第四个选项」。margin-left:auto 把它推到最右；
@@ -1341,7 +1351,13 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                 而这个按钮管的是整个插件，混在一排 chip 末尾会被当成筛选器的第四个选项。 */}
             <button type="button" className="npr-icon npr-settings-button" title="插件设置" aria-label="插件设置" onClick={() => setDialog('settings')}><Icon name="settings" size={17} /></button>
           </div>
-          <div className="npr-filters" role="group">
+          {/* ★ 这条筛选是**一级**（2026-10-28 用户定）：RSS 阅读页没有「阅读/书架」那样的
+              页面切换器（左侧是图标视图开关），所以「全部/未读/收藏」就是这一页的顶层层级 ——
+              它要**有底座**，和 icon 开关、日记三模块同一套结构。
+              书架页那条 全部/在读/读完/弃读 在「阅读/书架」下面，是**二级**，保持无底座。
+              两者共用 `.npr-filters`，差别只由 `npr-filters-primary` 这一个修饰类表达 ——
+              「层级」是这一行字的位置属性，写在 JSX 里比在 CSS 里靠父子选择器去猜可靠。 */}
+          <div className="npr-filters npr-filters-primary" role="group">
             {[['all', '全部'], ['unread', '未读'], ['favorites', '收藏']].map(([value, label]) => (
               <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>
             ))}

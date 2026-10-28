@@ -75,62 +75,85 @@
 .npr-article-load-error button:hover { background: color-mix(in srgb, var(--npr-fg) 5%, var(--npr-bg)); }
 
 /* Reading surfaces keep their paper/dark theme through hover and selection. */
+/* ★ 筛选条的 hover **不在这里**（0.44.6）：它归「切换控件」那一节 —— hover 必须与
+   分页/日记模块同色（`--npr-hover`），否则同一个侧栏里两种「鼠标停一下」的反馈。
+   这一组只管「列表行」和「图标按钮」。 */
 .npr-root button.npr-entry:hover,
-.npr-root .npr-filters button:hover,
 .npr-root .npr-icon:hover { background: color-mix(in srgb, var(--npr-fg) 5%, var(--npr-bg)); color: var(--npr-fg); }
 .npr-root button.npr-entry.npr-selected { background: color-mix(in srgb, var(--npr-fg) 8%, var(--npr-bg)); box-shadow: inset 2px 0 0 color-mix(in srgb, var(--npr-fg) 58%, var(--npr-bg)); }
 
-/* ── 切换控件：只有两档，共用一套几何（0.44.5）─────────────────────────────
-   ★ 用户圈出三处「切换器」问为什么长得不一样，实测**不止三套**：
-       ① 侧栏顶部 全部/未读/收藏 —— 无槽的文字胶囊，26px / 圆角 5px / 11px；
-       ② 书架 阅读/书架 —— 满宽连体 + 选中描边，28px / 7px / 12px；
-       ③ 日记 灵感速记/私密日记/读后感 —— 下划线分页，30px / 直角 / 12.5px；
-       ④ 设置里的分段器 —— 28px / 5px / 11px、槽用 `--npr-bg-2`；
-       ⑤ 工具栏最左的图标视图开关 —— 22px 方块 / 6px / 槽用 8% 混 `--npr-bg-2`；
-       ⑥ 灵感侧栏 按时间/按书本/按文章 —— 26px / 6px / 11.5px、槽用 `--npr-hover`。
-     六套数字并排在一屏里，眼睛一对比就读出「这里没做完」。
-   现在收成**两档**：
+/* ── 切换控件：一套几何，两层结构（0.44.6）─────────────────────────────────
+   ★ 0.44.5 先把散落的六套数字收成两档：A 导航（有槽）/ B 筛选（无槽）。
+     0.44.6 用户连指三处，三句话拼起来才是完整规则：
+       ① 「这部分为什么没统一？格式要一致，字体、字体大小也都要统一」
+          —— 指着 RSS 阅读页的 全部/未读/收藏：**数字**要并成一个数；
+       ② 「这部分不要统一，因为这部分是下一级，还保持原来的样子」
+          —— 指着书架的 全部/在读/读完/弃读：结构别动，保持无底座；
+       ③ 「RSS 阅读下的这部分要统一啊。这是一级啊。这部分和阅读下的二级不能一致啊」
+          —— 把 ① 的对象点明：**同样三个字「全部/未读/收藏」，在 RSS 页是一级**
+             （那一页没有页面切换器，左侧是图标开关），在书架页是二级（在「阅读/书架」
+             下面）。所以「筛不筛选条」不是层级，**位置**才是。
+     结论：
+       · **数字**（高度 26 / 圆角 6 / 字号 13 / 内边距 10 / 选中字重 600 / 左缘 12）
+         六处**逐值相同**，只挂一组变量，谁都不许自己再写一个数；
+       · **结构**（有没有槽）表达层级，且由调用方在 JSX 上显式声明
+         （`npr-filters-primary` = 一级，无修饰 = 二级），不靠父选择器去猜。
 
-     A 档（导航）：换整页、换模块。**槽**（track）+ 选中块（thumb），13px / 600。
-     B 档（筛选）：筛当前列表。**没有槽**，只有选中块，12px / 600。
+   ★ 二级为什么 hover 只改字色、不画底色：没有槽时，选中块本身就是一块 8% 的
+     底色 + 白字，而 hover 若也画一块底色 + 白字，两者**长得一样** ——
+     0.44.6 之前用户那张截图里 未读（选中）与 收藏（鼠标停着）两块并排亮着，
+     看着就像同时选中了两项。一级不存在这个问题（hover 是槽里的淡水洗，
+     选中是槽里的一块实底），所以只有二级需要把 hover 收成字色。
 
-   高度（26px 按钮 / 32px 槽）、圆角（槽 8 / 按钮 6）、选中字重（600）**逐值相同**，
-   差别只有三处，而且每一处都有理由：有没有槽（层级）、13 与 12（一级与二级的字号）、
-   图标开关没有文字（所以不比字号）。这道判据写在 `scripts/check-tabs.mjs`，
-   量的是渲染后的值，六处一起比 —— 任何一处单独改数字都会立刻变红。
-   ★ 它**进库**（不是 `.build/` 草稿区）：自己从 `ReaderPage.jsx` 抽 `PANEL_CSS`、
-     直读本文件，不依赖预览帧 —— 帧是快照，量到的是上次生成时的样式（0.44.4 吃过亏）。
-
-   ★ 为什么 A 档不用「选中描边」：描边在深色主题里几乎看不见
+   ★ 为什么不用「选中描边」：描边在深色主题里几乎看不见
      （`--npr-border-strong` 与底色只差一档）。「槽里的块」靠**两块底色之差**成立，
      两个主题都读得出来 —— 这也是 macOS 分段控件的做法。
    ★ 选中块用 `--npr-bg`（页面底色）而不是更亮的一档：浅色主题下就是白块浮在
      浅灰槽上；深色主题下是「凹进去的选中块」，正是深色界面的常规处理，
      不必为深色单写一套。
-   ★ 数字挂在 `.npr-root` 的变量上：至少让「改一处、留五处」变成一件必须显式
-     去做的事 —— 六个控件引用同一组变量，改一个数就整族一起动。 */
+   ★ 数字挂在 `.npr-root` 的变量上：改一处就六处一起动；想只改一处，得显式去写
+     一个不引用变量的值 —— 那道坎就是这道守卫的成本。
+   ★ 判据在 `scripts/check-tabs.mjs`，量的是渲染后的值（高度 / 圆角 / 字号 / 字体 /
+     字重 / 边界 / 有没有槽 / 会不会溢出），六处一起比。它**进库**（不是 `.build/`
+     草稿区）：自己从 `ReaderPage.jsx` 抽 `PANEL_CSS`、直读本文件，不依赖预览帧 ——
+     帧是快照，量到的是上次生成时的样式（0.44.4 吃过亏）。
+   ★ 横向内边距六处统一 12px（与工具栏的左内边距同一条）：筛选条、分页、日记模块
+     三行在同一个侧栏里上下排，左缘必须落在同一条竖线上。 */
 .npr-root {
   --npr-tab-h: 26px;
   --npr-tab-r: 6px;
-  --npr-tab-font: 13px;      /* A 档：导航，一级 */
-  --npr-tab-font-sm: 12px;   /* B 档：筛选，二级 */
+  --npr-tab-font: 13px;
   --npr-tab-pad: 2px;
+  --npr-tab-inset: 12px;
   --npr-tab-track: color-mix(in srgb, var(--npr-fg) 8%, var(--npr-bg));
   --npr-tab-thumb: var(--npr-bg);
 }
 
-/* A 档：导航（阅读/书架、灵感速记/私密日记/读后感、按时间/按书本/按文章、设置里的分段器） */
+/* ── 一级：有槽（RSS 阅读页的 全部/未读/收藏 / 分页 / 日记三模块 / 灵感二级视图 /
+   设置分段器；图标开关见下面单独那条）
+   ★ `.npr-filters-primary` 与 `.npr-filters` 是**同一条筛选条的两个层级**，不是两套控件：
+     · RSS 阅读页没有页面切换器（左侧是图标视图开关），「全部/未读/收藏」就是这一页的
+       顶层层级 —— 它是**一级**，要底座、要等分（用户 2026-10-28：「RSS 阅读下的这部分
+       要统一啊。这是一级啊」）；
+     · 书架的「全部/在读/读完/弃读」在「阅读/书架」下面 —— 它是**二级**，无底座、
+       按文案定宽（同一轮：「这部分不要统一，因为这部分是下一级」）。
+     层级写在 JSX 的类名上，不靠父选择器去猜。 */
 .npr-root .npr-libtabs,
+.npr-root .npr-filters-primary,
 .npr-root .npr-diary-modes,
 .npr-root .npr-diary-views,
 .npr-segmented {
   display: flex; gap: 2px; padding: var(--npr-tab-pad);
-  border: 1px solid transparent;   /* 与 B 档的按钮同高：1px 边框也吃进容器高度 */
+  border: 1px solid transparent;   /* 让槽高 = 26 + 2×2 + 2×1 = 32，五处逐值相同 */
   border-radius: 8px;
   background: var(--npr-tab-track);
   flex-shrink: 0;
 }
+/* 一级筛选条自带留白：不靠 PANEL_CSS 给 `.npr-filters` 的那条 margin —— 一旦那边改了值，
+   这条一级筛选条会静默贴边（左缘判据在 check-tabs 里）。 */
+.npr-root .npr-filters-primary { margin: 0 var(--npr-tab-inset) 8px; }
 .npr-root .npr-libtabs > button,
+.npr-root .npr-filters-primary > button,
 .npr-root .npr-diary-modes > button,
 .npr-root .npr-diary-views > button,
 .npr-segmented button,
@@ -141,12 +164,18 @@
   font: inherit; font-size: var(--npr-tab-font); font-weight: 400;
   white-space: nowrap; cursor: pointer;
 }
+.npr-root .npr-libtabs > button,
+.npr-root .npr-filters-primary > button,
+.npr-root .npr-diary-modes > button,
+.npr-root .npr-diary-views > button { flex: 1 1 0; min-width: 0; }
 .npr-root .npr-libtabs > button:hover,
+.npr-root .npr-filters-primary > button:hover,
 .npr-root .npr-diary-modes > button:hover,
 .npr-root .npr-diary-views > button:hover,
 .npr-segmented button:hover,
 .npr-settings-content .npr-segmented button:hover { background: var(--npr-hover); color: var(--npr-fg); }
 .npr-root .npr-libtabs > button[aria-pressed=true],
+.npr-root .npr-filters-primary > button[aria-pressed=true],
 .npr-root .npr-diary-modes > button[aria-pressed=true],
 .npr-root .npr-diary-views > button.is-on,
 .npr-segmented button[aria-pressed=true],
@@ -155,21 +184,32 @@
   font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.06);
 }
 
-/* B 档：筛选（全部/未读/收藏、书架的筛选条）。没有槽，只有选中块 ——
-   「有槽 = 换内容，没槽 = 筛当前内容」，这就是两档之间唯一的差别。
-   ★ 选中块用 `--npr-tab-track` 那个色：它在 A 档是「凹下去的槽」，在 B 档是
-     「填起来的块」，同一个色阶两种用法 —— 两档之间只有**几何**不同，颜色不另开一档。
-   ★ 这里原来还剩一条「`[aria-pressed=true] { background: 8% 混色 }`」写在文件前面
-     （第 82 行附近）。现在并进来：同一条规则写两处，改一处忘了另一处，就会变成
-     「字重变了、底色没变」这种半截状态，而且它看着像一条独立的历史遗留。 */
-.npr-root .npr-filters button {
-  height: var(--npr-tab-h); padding: 0 9px;
+/* ── 二级：无槽（书架的 全部/在读/读完/弃读、全部/已加入阅读）
+   同一组数字（26 / 6 / 13px / 10px 内边距 / 选中 600），但**没有底座**：
+   它在「阅读/书架」下面，是「筛当前列表」，不是「换一页」。宽度也不等分 ——
+   一块只包住自己那几个字的块，比铺满一段更像「筛选项」而不是「页签」。
+   ★ 选择器带 `:not(.npr-filters-primary)`：同一条筛选条的两个层级，规则互不重叠，
+     不靠「谁写在后面」赢。 */
+.npr-root .npr-filters:not(.npr-filters-primary) {
+  display: flex; align-items: center; gap: 2px;
+  margin: 0 var(--npr-tab-inset) 8px;
+  padding: 0 0 8px;          /* 与 0.44.5 的 34px 行高一致，列表起点不动 */
+  background: transparent; border: 0; border-radius: 0;
+}
+.npr-root .npr-filters:not(.npr-filters-primary) > button {
+  height: var(--npr-tab-h); padding: 0 10px;
   border: 0; border-radius: var(--npr-tab-r);
   background: transparent; color: var(--npr-muted);
-  font: inherit; font-size: var(--npr-tab-font-sm); font-weight: 400;
+  font: inherit; font-size: var(--npr-tab-font); font-weight: 400;
   white-space: nowrap; cursor: pointer;
 }
-.npr-root .npr-filters button[aria-pressed=true] { background: var(--npr-tab-track); color: var(--npr-fg); font-weight: 600; }
+/* ★ hover 只改字色：无槽时若画底色，就与选中块（8% 底 + 白字 + 600）撞脸 ——
+   0.44.6 之前那张截图里 未读（选中）与 收藏（鼠标停着）两块并排亮着就是这个。
+   有槽那一档不存在这个问题（hover 是槽里的淡水洗，选中是槽里的一块实底）。 */
+.npr-root .npr-filters:not(.npr-filters-primary) > button:hover { background: transparent; color: var(--npr-fg); }
+.npr-root .npr-filters:not(.npr-filters-primary) > button[aria-pressed=true] {
+  background: var(--npr-tab-track); color: var(--npr-fg); font-weight: 600;
+}
 .npr-prose::selection, .npr-prose *::selection, ::highlight(npr-reading-selection) { background: color-mix(in srgb, var(--npr-fg) 17%, var(--npr-bg)); color: var(--npr-fg); }
 
 /* Searchable, anchored channel switcher. */
@@ -752,7 +792,10 @@
    ★ 分隔线走 ::after、并且**绝对定位到盒子外面**：一是 `role="group"` 里凭空多一个
      空节点对读屏是噪声（生成内容不进无障碍树）；二是它若留在流内，轨道的填充会
      连同它一起被染成一块「带线的灰尾巴」，看着像轨道画歪了。 */
-.npr-viewswitch { position: relative; display: inline-flex; flex: 0 0 auto; align-items: center; gap: 1px; padding: var(--npr-tab-pad); margin-right: 16px; border: 1px solid transparent; border-radius: 8px; background: var(--npr-tab-track); }
+/* ★ 间距 1px → 2px（0.44.6）：其余五处槽内间距都是 2px（`--npr-tab-pad` 撑出来的
+   槽内留白同量级），只有这里差 1px —— 图标按钮之间那点缝在深色主题下几乎看不见，
+   但「六处一套」要么逐值成立、要么不成立，留一个例外就是给下一个例外开口子。 */
+.npr-viewswitch { position: relative; display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; padding: var(--npr-tab-pad); margin-right: 16px; border: 1px solid transparent; border-radius: 8px; background: var(--npr-tab-track); }
 /* 8px 空 + 1px 线 + 9px 空（含工具栏的 2px gap）= 两侧视觉等距 */
 .npr-viewswitch::after { content: ''; position: absolute; left: 100%; top: 50%; width: 1px; height: 16px; margin-left: 8px; transform: translateY(-50%); background: var(--npr-border-strong); }
 /* 0.44.5：尺寸与「切换控件：两档」一节同源（26px 高 / 圆角 6px）。
@@ -840,11 +883,12 @@
      判据的两半，改一处必须改两处（那边会当场红）。 */
 .npr-lib-dir select { max-width: 176px; padding-right: 14px; }
 
-/* 分页（阅读 / 书架）。**外观**统一在文件靠前的「切换控件：两档」一节；
-   这里只留它自己的两条版式：两侧 10px 留白、两枚**等分**整条宽度。
-   ★ 0.44.5 之前这里还有一套自己的 28px / 7px / 选中描边 —— 那是三套数字里的第二套。 */
-.npr-root .npr-libtabs { margin: 0 10px 8px; }
-.npr-root .npr-libtabs > button { flex: 1 1 0; min-width: 0; }
+/* 分页（阅读 / 书架）。**外观**统一在文件靠前的「切换控件：一套几何」一节；
+   这里只留它自己的版式：两侧 12px 留白（与工具栏左内边距同一条竖线）、下 8px。
+   ★ 0.44.5 之前这里还有一套自己的 28px / 7px / 选中描边 —— 那是三套数字里的第二套。
+   ★ 等分（flex: 1 1 0）也不在这里了：六处的等分写在同一个选择器组里，
+     免得「三条规则各写一份、改一处漏两处」。 */
+.npr-root .npr-libtabs { margin: 0 var(--npr-tab-inset) 8px; }
 
 /* 一行两个按钮：主按钮（打开这本书）＋右缘的「阅读 / 已在阅读」切换。
    行本身是 div 而不是 button —— `<button>` 里套 `<button>` 是非法 HTML，
@@ -2769,8 +2813,12 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
    这里只留它自己的两条：三等分、图标与文字之间 4px。
    ★ 选择器仍写 `.npr-diary-view`（不是 `> button`）：这个类名在 JSX 里带着，
      `check-classes` 两头都查 —— 只在元素选择器里出现等于「定义了却没人用」。 */
-.npr-root .npr-diary-views { margin: 6px 12px 4px; }
-.npr-root .npr-diary-views > .npr-diary-view { flex: 1 1 0; display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 0; padding: 0 4px; }
+.npr-root .npr-diary-views { margin: 6px var(--npr-tab-inset) 4px; }
+/* ★ 这里保留 `padding: 0 4px`（不走统一的 0 10px）：这三段里是「图标 + 文字」，
+   内容居中，内边距不改观感；而 268px 下三段各 78px，图标 14 + gap 4 + 三字 39
+   再加 20px 内边距正好顶到 78 —— 统一内边距会把这一段挤到溢出。等分（flex）已由
+   上面那一组统一给出，这里不再重复写。 */
+.npr-root .npr-diary-views > .npr-diary-view { display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 0 4px; }
 
 /* ── 来源行（书 / 文章）与它的二级展开 ────────────────────────────────
    ★ 行本身是 `.npr-diary-dayrow`（与时间轴同一套 hover/选中），只把「条数」换成胶囊。
@@ -3138,8 +3186,7 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
      不是再把这三个做成第三种控件。
    ★ 版式：两侧 12px（与工具栏同一条内边距），上方 6px 与工具栏断开、下方 8px 与
      列表分开 —— 这样它不再和右侧那排图标挤在同一条视觉带里。 */
-.npr-root .npr-diary-modes { margin: 6px 12px 8px; }
-.npr-root .npr-diary-modes > button { flex: 1 1 0; min-width: 0; }
+.npr-root .npr-diary-modes { margin: 6px var(--npr-tab-inset) 8px; }
 
 /* 私密的说明文字：不能省。`mode: 'file'` 与钥匙串是**两种不同的安全等级**，
    不写出来就等于让用户以为两者一样。
