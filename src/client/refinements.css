@@ -3365,9 +3365,46 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
  */
 .npr-diary-flow { position: relative; flex: 1; min-width: min(320px, 100%); min-height: 0; display: flex; flex-direction: column; }
 .npr-diary-marks { flex: 0 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 8px; overflow: auto; overscroll-behavior: contain; padding: 10px 12px 20px; border-left: 1px solid var(--npr-border); }
-.npr-diary-marks-head { display: flex; align-items: baseline; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--npr-border); }
+/*
+ * ★ 0.44.7 收起态（用户 2026-10-28：「划线侧边栏应该可以收缩起来，写读后感的
+ *   区域自适应」）。
+ *   · 宽度 34px 是**量出来的下限**，不是随手取的：轨里最宽的元素是 26px 的按钮
+ *     （14px 图标 + 竖排 11px 文字），两侧各留 4px；再窄按钮就要贴住左边框，
+ *     而它右边一片空白，看起来像没对齐。
+ *   · `flex: 0 0 34px`（收起）对 `0 1 300px`（展开）：收起之后**不许**再被压缩，
+ *     否则 AI 面板一开就把 34px 压成十几像素，竖排文字会被切成一条缝。
+ *   · 收起态的 `align-items: center` 只对这条轨生效：展开态那些列表项必须
+ *     撑满整宽（否则每条划线的分隔虚线只画一半）。
+ *   · `overflow: hidden` 是给竖排文字兜底的：`writing-mode: vertical-rl` 在某些
+ *     字体下会把行高撑得比 34px 宽，溢出到相邻的正文列上就是「文字压着正文」。
+ */
+.npr-root .npr-diary-marks.is-collapsed { flex: 0 0 34px; align-items: center; gap: 0; padding: 8px 0 0; overflow: hidden; }
+.npr-root .npr-diary-marks-rail {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  width: 26px; padding: 4px 0 10px;
+  border: 1px solid transparent; border-radius: 7px;
+  background: transparent; color: var(--npr-muted);
+  font: inherit; font-size: 11px; line-height: 1.2; cursor: pointer;
+}
+.npr-root .npr-diary-marks-rail:hover { border-color: var(--npr-border); background: var(--npr-hover); color: var(--npr-fg); }
+/* 竖排：中文在 `vertical-rl` 里天然自上而下。
+   ★ 必须同时写 `text-orientation: upright`：默认值 `mixed` 把**拉丁数字整体旋转
+     90°**，于是「划线 12」里的 12 变成两个横躺的字符 —— 深色截图里看着像个「已」字
+     （0.44.7 第一版就是这么翻车的）。`upright` 让每个字保持直立、只改排列方向。 */
+.npr-diary-marks-rail-label { writing-mode: vertical-rl; text-orientation: upright; letter-spacing: .04em; }
+.npr-diary-marks-head { display: flex; align-items: center; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--npr-border); }
 .npr-diary-marks-head strong { font-size: 12px; color: var(--npr-fg); }
 .npr-diary-marks-head span { margin-left: auto; font-size: 11px; color: var(--npr-muted); }
+/* 收起按钮：22px 见方，与 `.npr-diary-modal-close`（26px）不是同一个尺码 ——
+   它挂在**行内标题**右侧，26px 会把标题行从 18px 撑到 26px，让「划线 12 条」
+   这一行看起来突然变厚。22px 只比行高多 4px，视觉上仍是「贴着标题的一颗小按钮」。 */
+.npr-root .npr-diary-marks-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; margin-left: 2px; padding: 0;
+  border: 1px solid transparent; border-radius: 6px;
+  background: transparent; color: var(--npr-muted); cursor: pointer; flex-shrink: 0;
+}
+.npr-root .npr-diary-marks-toggle:hover { border-color: var(--npr-border); color: var(--npr-fg); }
 .npr-diary-mark { padding: 8px 0; border-bottom: 1px dashed var(--npr-border); cursor: grab; }
 /* 拖起来的时候换光标：`grabbing` 是「已经抓在手里」的唯一视觉反馈。 */
 .npr-diary-mark:active { cursor: grabbing; }

@@ -280,6 +280,41 @@ describe('读后感工作台：书 → 模板 → 引用划线', () => {
   it('★ 模板只在正文为空时预填（否则会覆盖用户已经改过的内容）', () => {
     assert.match(diary, /current\.trim\(\) === '' \? REFLECTION_TEMPLATE : current/);
   });
+
+  /*
+   * 用户 2026-10-28：「读后感这部分，划线侧边栏应该可以收缩起来，写读后感的区域自适应」。
+   * ★ 这里是**源码级**的粗判据（结构在不在）；几何与「正文真的变宽了」在
+   *   `scripts/check-diary-marks-collapse.mjs` 里量渲染结果。
+   */
+  it('★ 划线侧栏可收起：两态都有入口，状态记在本机', () => {
+    assert.match(diary, /npr-diary-marks-toggle/, '没有收起按钮');
+    assert.match(diary, /npr-diary-marks-rail/, '没有展开用的窄轨 —— 收起来就再也打不开');
+    assert.match(diary, /aria-expanded="true"/);
+    assert.match(diary, /aria-expanded="false"/);
+    // 默认**展开**：划线是写读后感的主要素材，收起是主动动作。
+    assert.match(diary, /localStorage\.getItem\('npr\.diaryMarksOpen'\) !== '0'/,
+      '默认态不是展开');
+    assert.match(diary, /localStorage\.setItem\('npr\.diaryMarksOpen'/,
+      '收起状态没记住 —— 每次重开都复位');
+  });
+
+  it('★ 收起态：不渲染列表、窄轨 34px、竖排直立', () => {
+    // ★ 用 `diaryCss`（= `read('refinements.css')`，已剥注释）：不剥注释的话，
+    //   注释里出现「text-orientation: upright」这几个字就能把这条判据蒙绿。
+    const css = diaryCss;
+    // 列表必须在 `marksPanelOpen ?` 的真值分支里。用下标比，不玩正则花活。
+    const gate = diary.indexOf('marksPanelOpen ? (');
+    const list = diary.indexOf('annotations.items.map((item) => (');
+    assert.ok(gate > 0 && list > 0, '找不到开关或列表');
+    assert.ok(list > gate, '划线列表写在开关之前 —— 收起时它照样渲染在 DOM 里');
+    assert.match(css, /\.npr-root \.npr-diary-marks\.is-collapsed \{[^}]*flex: 0 0 34px/,
+      '收起态不锁宽 —— AI 面板一开就把窄轨压成一条缝');
+    // 展开态那一条不能被顺手删掉：划线栏要能让位（0.44.1 的教训）。
+    assert.match(css, /\.npr-diary-marks \{[^}]*flex: 0 1 300px/);
+    // 竖排里数字必须直立，否则「12」被转 90° 看起来像另一个字。
+    assert.match(css, /\.npr-diary-marks-rail-label \{[^}]*text-orientation: upright/,
+      '竖排标签没写 text-orientation: upright');
+  });
 });
 
 describe('`L` 灵感浮层：只有一个输入框', () => {

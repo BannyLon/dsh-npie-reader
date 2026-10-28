@@ -501,6 +501,29 @@ export function DiaryApp({
   const [book, setBook] = useState(null);
   const [bookEntries, setBookEntries] = useState({ items: [], busy: false });
   const [annotations, setAnnotations] = useState({ items: [], busy: false, error: '' });
+  /**
+   * 右栏「划线」是否展开。
+   *
+   * ★ 用户 2026-10-28：「读后感这部分，划线侧边栏应该可以收缩起来，写读后感的
+   *   区域自适应」。收起之后正文列（`.npr-diary-flow`）是 `flex: 1`，会自己把
+   *   让出来的 266px 全部吃掉 —— 「自适应」不需要另写一条宽度计算。
+   * ★ 收起**不是整块消失**，而是留一条 34px 的窄轨（`chevron-left` + 竖排
+   *   「划线 N」）。这一页没有第二个「打开划线」的入口（不像阅读页还有工具栏
+   *   按钮），整块消失就变成「收起来之后叫不回来」。
+   * ★ 默认**展开**：划线是写读后感的主要素材（拖拽与「引用」都从这儿取），
+   *   默认收起等于把主路径藏起来；收起是「我要专心写」时才主动做的事。
+   * ★ 存 localStorage 而不是纯内存：与 `npr.diaryListWidth` / `npr.companionWidth`
+   *   同属「这台机器上的界面偏好」，重开面板不该复位。
+   * ★ 名字带 `Panel` 是为了和日记自己的 `marks`（日历上那些有标记的日子）
+   *   分开 —— 两个 `marks` 只差一个单词，改错一次就是「点划线栏把日历清了」。
+   */
+  const [marksPanelOpen, setMarksPanelOpen] = useState(
+    () => localStorage.getItem('npr.diaryMarksOpen') !== '0',
+  );
+  const setMarksPanel = (next) => {
+    setMarksPanelOpen(next);
+    localStorage.setItem('npr.diaryMarksOpen', next ? '1' : '0');
+  };
   const [refDraft, setRefDraft] = useState('');
 
   const [exportArmed, setExportArmed] = useState(false);
@@ -2796,46 +2819,84 @@ export function DiaryApp({
               </div>
             </div>
 
-            {/* 读后感工作台的划线侧栏：这一整块只在这个模块出现。 */}
+            {/*
+              * 读后感工作台的划线侧栏：这一整块只在这个模块出现。
+              * ★ 用户 2026-10-28：「划线侧边栏应该可以收缩起来，写读后感的区域自适应」。
+              *   收起之后**留一条 34px 的窄轨**，而不是整块消失 —— 理由见
+              *   `marksPanelOpen` 上面那段：这一页没有第二个「打开划线」的入口。
+              *   「写读后感区域自适应」不用另算宽度：正文列是 `flex: 1`，
+              *   划线栏一让位，它就自己把让出来的 266px 全吃掉。
+              * ★ 收起态**不渲染**列表，而不是用 CSS 藏起来：几百条划线留在 DOM 里
+              *   看不见却还在，拖拽事件、`Range` 量测、读屏软件都还会摸到它。
+              */}
             {moduleValue === 'reflection' && book && (
-              <aside className="npr-diary-marks" aria-label="这本书的划线">
-                <header className="npr-diary-marks-head">
-                  <strong>划线</strong>
-                  <span>{annotations.items.length} 条</span>
-                </header>
-                {annotations.busy && <div className="npr-empty">正在读划线…</div>}
-                {!annotations.busy && annotations.error !== '' && (
-                  <div className="npr-empty"><p>划线取不到：{annotations.error}</p></div>
+              <aside className={`npr-diary-marks${marksPanelOpen ? '' : ' is-collapsed'}`}
+                aria-label={marksPanelOpen ? '这本书的划线' : '划线（已收起）'}>
+                {marksPanelOpen ? (
+                  <>
+                    <header className="npr-diary-marks-head">
+                      <strong>划线</strong>
+                      <span>{annotations.items.length} 条</span>
+                      {/* 箭头朝右 = 往右让位；与收起态那个朝左的箭头互为镜像。 */}
+                      <button type="button" className="npr-diary-marks-toggle"
+                        title="收起划线，让写读后感的地方更宽" aria-label="收起划线面板"
+                        aria-expanded="true" onClick={() => setMarksPanel(false)}>
+                        <Icon name="chevron-right" size={14} />
+                      </button>
+                    </header>
+                    {annotations.busy && <div className="npr-empty">正在读划线…</div>}
+                    {!annotations.busy && annotations.error !== '' && (
+                      <div className="npr-empty"><p>划线取不到：{annotations.error}</p></div>
+                    )}
+                    {!annotations.busy && annotations.error === '' && annotations.items.length === 0 && (
+                      <div className="npr-empty"><p>这本书还没有划线。</p><p>在书里选中一段就能划线。</p></div>
+                    )}
+                    {annotations.items.map((item) => (
+                      <div className="npr-diary-mark" key={item.id ?? `${item.page}-${item.start}`}
+                        /*
+                         * ★ 整张卡可拖：用户 2026-10-28 要的是「边看划线边写」——
+                         *   拖拽比「先找光标再点引用」少两个动作。
+                         * ★ `text/plain` 里放的就是插入正文的那段 markdown（与「引用」
+                         *   按钮同一份，见 `quoteSnippet`），所以拖到别处（例如聊天框）
+                         *   也仍然是一段可读的引用，而不是一串 JSON。
+                         */
+                        draggable
+                        onDragStart={(event) => {
+                          const snippet = quoteSnippet(item);
+                          event.dataTransfer.setData('text/plain', snippet);
+                          event.dataTransfer.effectAllowed = 'copy';
+                        }}
+                        title="拖进右边的编辑框，或点「引用」插到光标处">
+                        <p className="npr-diary-mark-quote">{item.quote}</p>
+                        {item.note && <p className="npr-diary-mark-note">{item.note}</p>}
+                        <div className="npr-diary-mark-foot">
+                          <span>{Number.isInteger(item.page) ? `第 ${item.page} 页` : ''}</span>
+                          <button type="button" className="npr-diary-action" disabled={!book.readable}
+                            title="插到正文的光标处（Markdown 引用块）"
+                            onClick={() => quoteAnnotation(item)}>引用</button>
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                ) : (
+                  /*
+                   * 窄轨。**计数留在轨上**：收起之后还要能看出「这本书到底有没有划线」
+                   * —— 一条都没有的话，用户没必要为它展开一次。
+                   * 整条轨就是一个按钮（而不是「图标可点、空白不可点」）：
+                   * 34px 宽的靶子本来就小，再切一半就更容易点空。
+                   * ★ 文案用 `划线·12` 而不是 `划线 12`：空格在竖排 + `text-orientation:
+                   *   upright` 下会占掉整整一个「字」的高度，于是「线」和「1」之间空出
+                   *   一格半，看着像漏了一个字。间隔点只占半个字，读起来是
+                   *   「划线 · 12」一条完整的标签。
+                   */
+                  <button type="button" className="npr-diary-marks-rail"
+                    title={`展开划线面板（${annotations.items.length} 条）`}
+                    aria-label="展开划线面板" aria-expanded="false"
+                    onClick={() => setMarksPanel(true)}>
+                    <Icon name="chevron-left" size={14} />
+                    <span className="npr-diary-marks-rail-label">划线·{annotations.items.length}</span>
+                  </button>
                 )}
-                {!annotations.busy && annotations.error === '' && annotations.items.length === 0 && (
-                  <div className="npr-empty"><p>这本书还没有划线。</p><p>在书里选中一段就能划线。</p></div>
-                )}
-                {annotations.items.map((item) => (
-                  <div className="npr-diary-mark" key={item.id ?? `${item.page}-${item.start}`}
-                    /*
-                     * ★ 整张卡可拖：用户 2026-10-28 要的是「边看划线边写」——
-                     *   拖拽比「先找光标再点引用」少两个动作。
-                     * ★ `text/plain` 里放的就是插入正文的那段 markdown（与「引用」
-                     *   按钮同一份，见 `quoteSnippet`），所以拖到别处（例如聊天框）
-                     *   也仍然是一段可读的引用，而不是一串 JSON。
-                     */
-                    draggable
-                    onDragStart={(event) => {
-                      const snippet = quoteSnippet(item);
-                      event.dataTransfer.setData('text/plain', snippet);
-                      event.dataTransfer.effectAllowed = 'copy';
-                    }}
-                    title="拖进右边的编辑框，或点「引用」插到光标处">
-                    <p className="npr-diary-mark-quote">{item.quote}</p>
-                    {item.note && <p className="npr-diary-mark-note">{item.note}</p>}
-                    <div className="npr-diary-mark-foot">
-                      <span>{Number.isInteger(item.page) ? `第 ${item.page} 页` : ''}</span>
-                      <button type="button" className="npr-diary-action" disabled={!book.readable}
-                        title="插到正文的光标处（Markdown 引用块）"
-                        onClick={() => quoteAnnotation(item)}>引用</button>
-                    </div>
-                  </div>
-                ))}
               </aside>
             )}
           </div>
