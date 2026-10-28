@@ -45,6 +45,7 @@ import { extname, join, normalize, sep } from 'node:path';
 import { FIND_QUERY_MAX } from '../book-find.js';
 import { BOOKS_PAGE_LIMIT, EDITOR_VENDOR_PREFIX, LIBRARY_API_PREFIX, PDFJS_VENDOR_PREFIX, isBookId, isReadable } from '../library.js';
 import { contentRange, formatRange, mimeForExtension, parseRange, unsatisfiedContentRange } from '../range.js';
+import { MAX_COVER_BYTES, epubCoverImage } from './book-cover.js';
 import { segmentBook } from './segment.js';
 import { overlayOcrPages } from './page-text.js';
 import { digestOutline, findInEbook, pagesOf, sectionIndex } from './ebook/index.js';
@@ -68,6 +69,20 @@ const PROBE_LIMIT = 256 * 1024;
 
 /** 小于这个体积的文件**绝不能截断** —— 客户端会把整个响应当作完整数据读走。 */
 const RANGE_MIN_SIZE = 2 * 256 * 1024;
+
+/**
+ * 解出来的封面在内存里留几份。
+ *
+ * 只在「读完的书」那一栏用到，实际并发量是个位数；留 24 份是为了来回切书时不用
+ * 反复把整本 EPUB 读进来解压（解一本 3 MB 的书约几毫秒，但它要读全文件）。
+ * ★ 不落盘：封面是**可再生的**，为它维护一个缓存目录要多一套清理与配额规则，
+ *   而 `cache-budget.js` 那套规则是给「删了就没了」的内容准备的。
+ */
+const COVER_CACHE_LIMIT = 24;
+const coverCache = new Map();
+
+/** 超过这个体积的书不解封面：读全文件只为了拿封面，代价与收益不成比例。 */
+const COVER_BOOK_MAX_BYTES = 128 * 1024 * 1024;
 
 const VENDOR_MIME = {
   '.mjs': 'text/javascript; charset=utf-8',
@@ -580,6 +595,63 @@ export function makeLibraryRoutes(handlers) {
         if (method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
         await reload();
         return bookList(res);
+      }
+      /*
+       * ---- GET /cover/:id ---------------------------------------------------
+       * 读后感侧栏那张封面。**只有 EPUB 走这条**（宿主能解 zip）；PDF 的首页封面
+       * 由客户端用 pdf.js 渲染 —— 宿主没有 canvas，在 Node 里画首页要另引一套
+       * native canvas，那是另一个量级的依赖。
+       *
+       * ★ 解不出来就回 **404**，不回「200 + 空图」：界面靠状态码决定「回落生成式
+       *   封面」，而一个 0 字节的 image/png 会被浏览器画成一块破图。
+       * ★ 失败**不缓存**：用户重扫书源之后同一个 id 可能换了一本书。
+       */
+      if (rest.startsWith('/cover/')) {
+        if (method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+        const id = decodeURIComponent(rest.slice('/cover/'.length));
+        if (!isBookId(id)) return sendJson(res, 400, { ok: false, error: '无效的书 id', code: 'BAD_BOOK_ID' });
+        const book = await bookById(id);
+        if (book === undefined) return sendJson(res, 404, { ok: false, error: '没有这本书', code: 'NO_BOOK' });
+        if (String(book.ext ?? '').toLowerCase() !== 'epub') {
+          return sendJson(res, 404, { ok: false, error: '这种格式的封面不由宿主提供', code: 'NO_COVER_ROUTE' });
+        }
+        // ★ 网盘书要先把整本拖下来才拿得到封面 —— 为侧栏一张图拖一本书，不值。
+        //   这个 404 在界面上回落成生成式封面，不弹错。
+        if (book.source !== 'local' || !(book.size > 0)) {
+          return sendJson(res, 404, { ok: false, error: '网盘书的封面还没有接', code: 'REMOTE_COVER' });
+        }
+        if (book.size > COVER_BOOK_MAX_BYTES) {
+          return sendJson(res, 404, { ok: false, error: '书太大，不为一张封面读全文件', code: 'BOOK_TOO_BIG' });
+        }
+        const etag = `W/"${id}-${book.size}"`;
+        if (String(req.headers['if-none-match'] ?? '') === etag) {
+          res.writeHead(304, { etag, 'cache-control': 'private, max-age=604800' });
+          return res.end();
+        }
+        let cover = coverCache.get(etag) ?? null;
+        if (cover === null) {
+          try {
+            const buffer = await readBytes(book, 0, book.size - 1);
+            cover = epubCoverImage(Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer));
+          } catch (error) {
+            log(`[书架] ${id} 取封面失败：${error.message}`);
+            cover = null;
+          }
+          if (cover === null || cover.bytes.length > MAX_COVER_BYTES) {
+            return sendJson(res, 404, { ok: false, error: '这本书里没有可用的封面图', code: 'NO_COVER' });
+          }
+          coverCache.set(etag, cover);
+          while (coverCache.size > COVER_CACHE_LIMIT) {
+            coverCache.delete(coverCache.keys().next().value);
+          }
+        }
+        res.writeHead(200, {
+          'content-type': cover.mime,
+          'content-length': String(cover.bytes.length),
+          'cache-control': 'private, max-age=604800',
+          etag,
+        });
+        return res.end(cover.bytes);
       }
       // ---- 缓存占用 / 清理（2026-10-25）------------------------------------
       //
