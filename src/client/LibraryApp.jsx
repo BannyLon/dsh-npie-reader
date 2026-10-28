@@ -247,14 +247,24 @@ export const BookRow = memo(function BookRow({
           ★ 两种形态**恰好互斥**（`actions` 与 `statusLabel` 有一个为空），
             由 `bookRowView` 保证、`test/library.test.mjs` 遍历断言。
           文案与语义见 `bookRowView`（那里是唯一一份）。 */}
+      {/* ★ 多个动作**竖着排**（0.44.4）。用户 2026-10-28 带图的原话是「写读后感和
+          重新阅读能否垂直排列」—— 并排时两枚胶囊在 268px 的侧栏里要吃掉 150px，
+          书名被压到 106px，最后一枚还贴着行尾。竖排后整列只占最宽那枚的宽度
+          （「写读后感」约 76px），省下的一半全还给书名。
+          ★ 单动作（`+ 阅读`）也照样包一层：容器本身没有外观，包着不会多出一个盒子，
+          而少一条「一个不包、两个才包」的条件，就不用担心哪天变成三个时忘了改。 */}
       {view.statusLabel !== null ? (
         <span className="npr-bookrow-status" title={view.statusLabel.title}>{view.statusLabel.text}</span>
-      ) : view.actions.map((action) => (
-        <button key={action.kind} type="button" className={`npr-bookrow-action${added ? ' is-on' : ''}`}
-          aria-label={action.label} title={action.title} onClick={runners[action.kind]}>
-          {action.text}
-        </button>
-      ))}
+      ) : (
+        <span className="npr-bookrow-acts">
+          {view.actions.map((action) => (
+            <button key={action.kind} type="button" className={`npr-bookrow-action${added ? ' is-on' : ''}`}
+              aria-label={action.label} title={action.title} onClick={runners[action.kind]}>
+              {action.text}
+            </button>
+          ))}
+        </span>
+      )}
     </div>
   );
 });

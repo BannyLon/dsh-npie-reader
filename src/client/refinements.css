@@ -798,14 +798,27 @@
 .npr-bookrow-source.is-other { border: 1px dashed var(--npr-border-strong); color: var(--npr-faint); }
 /* 加入 / 移出「阅读」。沿用探索页「订阅 / 已订阅」的写法：**显示状态、点它是切换**。
    未加入时是低调的描边胶囊（2634 行都挂着一个醒目按钮会很吵），已加入才用强调色。
-   ★ 0.9.4 起「弃读」那一行有**两个**（「+ 阅读」+「移出」）：`.npr-bookrow` 的
-     `gap: 2px` 是给「正文 ↔ 动作」用的，两枚胶囊之间照它摆会**粘成一片** ——
-     所以在第二个动作上再补 4px（合计 6px），两枚才读得出是两个独立按钮。
-     这条有真 Chrome 的几何断言守着（`scripts/check-library-sidebar-layout.mjs` 判据 ⑩）。 */
+   ★ 0.9.4 起「弃读」那一行有**两个**动作，0.44.4 起它们**竖着排**（见下面
+     `.npr-bookrow-acts`）。两枚之间的 4px 由容器的 `gap` 给，不再用
+     「相邻兄弟 margin-left」—— 理由写在容器那条规则上。
+     这条有真 Chrome 的几何断言守着（`scripts/check-library-sidebar-layout.mjs` 判据 ⑪）。 */
 .npr-root .npr-bookrow-action { flex: 0 0 auto; align-self: center; height: 24px; padding: 0 9px; border: 1px solid var(--npr-border); border-radius: 999px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; white-space: nowrap; cursor: pointer; }
 .npr-root .npr-bookrow-action:hover { border-color: var(--npr-border-strong); background: var(--npr-bg); color: var(--npr-fg); }
 .npr-root .npr-bookrow-action.is-on { border-color: var(--npr-accent-strong); color: var(--npr-accent-strong); }
-.npr-root .npr-bookrow-action + .npr-bookrow-action { margin-left: 4px; }
+/* ── 一行的动作位：竖排（0.44.4）────────────────────────────────────────
+   ★ 用户 2026-10-28 带图的原话是「写读后感和重新阅读能否垂直排列」。
+     并排时两枚胶囊在 268px 的侧栏里要吃掉约 150px：书名被压到 106px，
+     最后一枚贴着行尾几乎贴出边界。
+   ★ 用 column + stretch 而不是「给按钮写死宽度」：两枚**等宽**，宽度由最宽的
+     那枚（「写读后感」四字）自己决定 —— 换文案、换语言都不会错位。
+     整列约 76px，比并排省一半，省下的全还给书名。
+   ★ 容器本身**没有外观**（无边框、无底色、无内边距），只是摆放轴从横换成竖：
+     胶囊外观、hover、`is-on` 一个像素没动。
+   ★ 4px 用 `gap` 而不是「相邻兄弟 margin-left」：竖排后 `margin-left` 是横轴上的
+     偏移，对垂直间距完全无效 —— 留着它就是个骗人的声明。 */
+.npr-root .npr-bookrow-acts { display: flex; flex-direction: column; flex: 0 0 auto; align-self: center; gap: 4px; }
+/* 特异性（0,3,0）压得过上面那条的 `align-self: center`（0,2,0），两枚才会等宽拉伸。 */
+.npr-root .npr-bookrow-acts > .npr-bookrow-action { align-self: stretch; }
 /* 书架页「已加入」那一格是**状态标签**，不是按钮（用户 2026-10-09：「『+ 阅读』就变为
    『已开始阅读』」—— 说的是状态）。所以它**看起来不能像按钮**：没有边框、没有 hover
    变化、光标默认。左边那个「+ 阅读」才是有边框的胶囊 —— 两种维度不能用同一款样式。 */
@@ -2742,7 +2755,13 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
    所以落点必须**在拖动过程中**就可见，而不是松手后才发生。 */
 .npr-write[data-drop="yes"] { border-radius: 10px; background: color-mix(in srgb, var(--npr-accent) 6%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--npr-accent) 52%, transparent); }
 .npr-write-input { display: block; width: 100%; min-height: 76px; padding: 2px 0 6px; border: 0; outline: none; background: transparent; color: var(--npr-fg); font: inherit; font-size: 15px; line-height: 1.85; resize: none; overflow: auto; }
-.npr-write[data-variant=reflection] .npr-write-input { min-height: 140px; }
+/* 空态高度（0.44.4）。
+   ★ 原来 140px，实测下来是「一块空板」：纸面总高 241px，其中 140px 是空的
+     （见 `.build/preview/m4.png`），占位提示孤零零挂在顶上，整块像没加载完。
+   ★ 改成 96px ≈ 3.5 行正文（15px × 1.85），与「私密」那一页一致 ——
+     同一个东西不再有两个数。够让人看出「这儿能写」，又不至于空成一片。
+   ★ 下限只管**空态**：一旦有字，高度由内容撑开，两条规则都不会再起作用。 */
+.npr-write[data-variant=reflection] .npr-write-input { min-height: 96px; }
 .npr-write[data-variant=private] .npr-write-input { min-height: 96px; }
 /* ★ 占位符不能靠 `--npr-faint`（宿主 label-tertiary）：预览里实测白底只有 3.2:1，
    低于 4.5:1。而它是「这里能写字」的唯一提示 —— 太淡等于没有提示。
@@ -2758,7 +2777,10 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-write-rich { display: none; }
 .npr-write-rich[data-ready="yes"] { display: block; }
 .npr-write-rich .ProseMirror { min-height: 76px; max-height: 320px; overflow: auto; padding: 2px 0 6px; outline: none; color: var(--npr-fg); font-size: 15px; line-height: 1.85; }
-.npr-write[data-variant=reflection] .npr-write-rich .ProseMirror { min-height: 140px; }
+/* 同上（0.44.4）：140 → 96，富文本这条必须与 textarea 那条**逐字同值** ——
+   两者是同一个值的两个视图（见本段文件头），差一个像素就会在编辑器就绪的
+   那一瞬间看见纸面跳一下。 */
+.npr-write[data-variant=reflection] .npr-write-rich .ProseMirror { min-height: 96px; }
 .npr-write[data-variant=private] .npr-write-rich .ProseMirror { min-height: 96px; }
 .npr-write-rich .ProseMirror > * { margin: 0 0 .6em; }
 .npr-write-rich .ProseMirror > :last-child { margin-bottom: 0; }

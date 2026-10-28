@@ -229,15 +229,19 @@ const AFTER = `<aside class="npr-sidebar" id="after">
  *   少带一个量到的就不是真行。
  * ★ 0.20.4 起行内还有一枚**来源徽章**（`npr-bookrow-source is-pan`）：它也是真行的一部分，
  *   而且这是出图里唯一能看到它长什么样、会不会把元信息行撑坏的地方
- *   （判据 ⑪ 量的是两枚胶囊的水平间距，加一个 meta 子项不影响它）。
+ *   （判据 ⑪ 量的是两枚胶囊的**垂直**间距，加一个 meta 子项不影响它）。
+ * ★ 0.44.4 起两个动作包在 `npr-bookrow-acts` 里竖排 —— 夹具必须跟着长出这层容器，
+ *   否则量的是一条**已经不存在的**结构（并排），全绿也是假绿。
  */
 const droppedRow = (scope) => `<div class="npr-bookrow npr-bookrow-inert npr-bookrow-dim" id="row-${scope}">
     <button type="button" class="npr-bookrow-main" disabled>
       <span class="npr-bookrow-title">长安的荔枝</span>
       <span class="npr-bookrow-meta"><span class="npr-bookrow-source is-pan">网盘 · E书拾取</span><span class="npr-bookrow-badge npr-badge-dropped">弃读</span><span>EPUB</span><span>1.2 MB</span><span>要再读，点右边的「+ 阅读」</span></span>
     </button>
-    <button type="button" class="npr-bookrow-action" id="cap-${scope}-1">+ 阅读</button>
-    <button type="button" class="npr-bookrow-action" id="cap-${scope}-2">移出</button>
+    <span class="npr-bookrow-acts">
+      <button type="button" class="npr-bookrow-action" id="cap-${scope}-1">+ 阅读</button>
+      <button type="button" class="npr-bookrow-action" id="cap-${scope}-2">移出</button>
+    </span>
   </div>`;
 const ROWS = `<div class="rowsbox" id="rows-normal">${droppedRow('normal')}</div>
   <div class="rowsbox" id="rows-nogap">${droppedRow('nogap')}</div>`;
@@ -268,13 +272,13 @@ const BEFORE_CSS = `
 #grid .npr-lib-dir select, #grid .npr-lib-sort select { width: 100%; }`;
 
 /**
- * 反向对照：把那条 `margin-left` **抵消掉**。
- * ★ id 的特异性（1,0,0）压得过 `.npr-root .npr-bookrow-action + .npr-bookrow-action`
- *   那串类（0,3,0），所以这一条一定生效 —— 但脚本会**量出来核对**，不靠推理。
+ * 反向对照：把容器的 `gap` **抵消掉**（0.44.4 起间距由 `gap` 给，不再是 margin-left）。
+ * ★ `#rows-nogap .npr-bookrow-acts` 是（1,1,0），压得过 `.npr-root .npr-bookrow-acts`
+ *   的（0,2,0），所以这一条一定生效 —— 但脚本会**量出来核对**，不靠推理。
  * ★ 只抵消这一条：行与按钮的其余样式逐字相同。
  */
 const NOROWGAP_CSS = `
-#rows-nogap .npr-bookrow-action + .npr-bookrow-action { margin-left: 0; }`;
+#rows-nogap .npr-bookrow-acts { gap: 0; }`;
 
 const LABEL_CSS = `
 body { font: 12px -apple-system, "Helvetica Neue", sans-serif; color: #0f1115; }
@@ -418,9 +422,9 @@ const out = {
     sortFlex: (() => { const c = cs('#after-sort'); return { flex: c.flex, width: c.width }; })(),
   },
   /**
-   * 判据 ⑩：「弃读」行两枚胶囊的间距。
+   * 判据 ⑪：「弃读」行两枚胶囊的间距（0.44.4 起是**垂直**的）。
    * ★ 量 getBoundingClientRect() 的**外缘**（含 1px 边框），也就是眼睛看到的缝。
-   * ★ rows-nogap 那一组除了那条 margin-left 被抵消，**逐字相同** —— 反向对照。
+   * ★ rows-nogap 那一组除了容器那条 gap 被抵消，**逐字相同** —— 反向对照。
    * ★ 这段注释在**模板串内部**，所以一个反引号都不能有：反引号会提前闭合模板串，
    *   闭合之后剩下的**可能仍然语法合法**（本项目吃过一次「用例全绿、App 起不来」）。
    *   要引名字就用「」。
@@ -430,11 +434,11 @@ const out = {
     main: rect('#row-normal .npr-bookrow-main'),
     cap1: rect('#cap-normal-1'),
     cap2: rect('#cap-normal-2'),
-    capGapCss: (() => { const c = cs('#cap-normal-2'); return { marginLeft: c.marginLeft }; })(),
+    actsCss: (() => { const c = cs('#row-normal .npr-bookrow-acts'); return { gap: c.gap, flexDirection: c.flexDirection }; })(),
     offMain: rect('#row-nogap .npr-bookrow-main'),
     offCap1: rect('#cap-nogap-1'),
     offCap2: rect('#cap-nogap-2'),
-    offCapGapCss: (() => { const c = cs('#cap-nogap-2'); return { marginLeft: c.marginLeft }; })(),
+    offActsCss: (() => { const c = cs('#row-nogap .npr-bookrow-acts'); return { gap: c.gap, flexDirection: c.flexDirection }; })(),
   },
 };
 /**
@@ -460,9 +464,9 @@ document.getElementById('legend-before').textContent =
   + ' · 分类 top=' + fmt(out.before.dirSelect.top)
   + ' · 结果 top=' + fmt(out.before.status.top) + '（三者各不相同）';
 document.getElementById('legend-rowgap').textContent =
-  '两枚胶囊间距 ' + fmt(out.rows.cap2.left - out.rows.cap1.right) + 'px'
-  + ' · 正文↔首枚 ' + fmt(out.rows.cap1.left - out.rows.main.right) + 'px'
-  + ' · 去掉 margin-left 后 ' + fmt(out.rows.offCap2.left - out.rows.offCap1.right) + 'px';
+  '两枚胶囊垂直间距 ' + fmt(out.rows.cap2.top - out.rows.cap1.bottom) + 'px'
+  + ' · 正文↔动作列 ' + fmt(out.rows.cap1.left - out.rows.main.right) + 'px'
+  + ' · 去掉 gap 后 ' + fmt(out.rows.offCap2.top - out.rows.offCap1.bottom) + 'px';
 const pre = document.createElement('pre');
 pre.id = 'probe-out';
 pre.style.cssText = 'position:fixed;left:0;top:0;margin:0;visibility:hidden';
@@ -479,7 +483,7 @@ document.body.appendChild(pre);
  */
 const TEMPLATE_SENTINELS = [
   ['BEFORE_CSS', BEFORE_CSS, '#grid .npr-lib-dir select, #grid .npr-lib-sort select { width: 100%; }'],
-  ['NOROWGAP_CSS', NOROWGAP_CSS, '#rows-nogap .npr-bookrow-action + .npr-bookrow-action { margin-left: 0; }'],
+  ['NOROWGAP_CSS', NOROWGAP_CSS, '#rows-nogap .npr-bookrow-acts { gap: 0; }'],
   ['LABEL_CSS', LABEL_CSS, '.legend { margin: 6px 0 0; font-size: 11px; color: #61666b; }'],
   ['REFINEMENTS', REFINEMENTS, '.npr-lib-dir select, .npr-lib-sort select {'],
   ['BEFORE', BEFORE, 'id="before-list"'],
@@ -720,37 +724,48 @@ check('★ 反向对照：判据 ③ 的原式喂给 0.9.4 三行结构必须失
   `旧结构 排序中线=${cy(B.sortSelect).toFixed(1)} 分类中线=${cy(B.dirSelect).toFixed(1)}`
   + '（居然也「离开了分类那一行」？那判据 ③ 量不到这次改动）');
 
-console.log('--- 判据 ⑪：「弃读」行两枚胶囊（0.9.4）---');
+console.log('--- 判据 ⑪：「弃读」行两枚胶囊竖排（0.44.4）---');
 const R = out.rows;
 for (const key of ['row', 'main', 'cap1', 'cap2', 'offMain', 'offCap1', 'offCap2']) {
   const r = R[key];
   console.log(`  ${key.padEnd(9)} left=${r.left.toFixed(1)} right=${r.right.toFixed(1)} `
-    + `top=${r.top.toFixed(1)} h=${r.height.toFixed(1)}`);
+    + `top=${r.top.toFixed(1)} bottom=${r.bottom.toFixed(1)} h=${r.height.toFixed(1)}`);
 }
-console.log(`  marginLeft 正常=${R.capGapCss.marginLeft} / 对照=${R.offCapGapCss.marginLeft}`);
+console.log(`  flex-direction 正常=${R.actsCss.flexDirection} · gap 正常=${R.actsCss.gap} / 对照=${R.offActsCss.gap}`);
 
 /**
- * ★ 判据量的是**画出来的缝**（外缘到外缘），不是 `gap` 的 computed 值：
- *   `gap: 2px` + `margin-left: 4px` 是**两个来源的和**，只看 `gap` 会把 6px 读成 2px。
- * ★ 两个来源必须**都**断言到：若有人把 `gap` 直接改成 6px、顺手删掉那条 `margin-left`，
- *   只断言「两枚之间 = 6px」会全绿 —— 可它同时把「正文↔首枚」从 2px 撑成 6px，
- *   破坏了行内本来的节奏。所以这一条把两处间距一起钉住。
- * ★ 反向对照用的是**同一组判据的原式**（`near(…,2)` 与 `near(…,6)` 的合取取反），
- *   不是另写一条「没有 margin-left 时应该更窄」—— 后者只是在描述旧实现。
+ * ★ 判据量的是**画出来的缝**（外缘到外缘），不是 `gap` 的 computed 值 —— 两者
+ *   在没有人写 margin 时确实相等，但断言「画出来是 4px」才挡得住将来有人偷偷
+ *   在按钮上加 margin（computed gap 照样是 4px，眼睛看到的就不是了）。
+ * ★ 0.44.4 起两枚的间距在**纵轴**：`cap2.top − cap1.bottom`。
+ *   还**必须**同时钉住「等宽 + 左对齐」：竖排用 stretch 是为了让两枚一样宽，
+ *   若哪天有人改回 align-self:center，间距照样是 4px，可两颗胶囊会一宽一窄地
+ *   错开半格 —— 那正是这次要修掉的那种「看起来像渲染坏了」。
+ * ★ 水平那条（正文↔动作列 = 2px）**保留**：行容器的 gap 是横轴上的事，
+ *   竖排只换了动作列内部的摆放轴，没有动它与正文的距离。
+ * ★ 反向对照用的是**同一组判据的原式**（`near(…,4)` 的合取取反），
+ *   不是另写一条「没有 gap 时应该更窄」—— 后者只是在描述旧实现。
  */
 const bodyGap = R.cap1.left - R.main.right;
-const capGap = R.cap2.left - R.cap1.right;
+const capGap = R.cap2.top - R.cap1.bottom;
 const offBodyGap = R.offCap1.left - R.offMain.right;
-const offCapGap = R.offCap2.left - R.offCap1.right;
-check('⑪ 「弃读」行：正文↔首枚 = 2px，两枚之间 = 6px（2 + 4），且互不重叠',
-  near(bodyGap, 2, 0.6) && near(capGap, 6, 0.6)
-  && R.main.right <= R.cap1.left && R.cap1.right <= R.cap2.left,
-  `正文↔首枚=${bodyGap.toFixed(1)}（期望 2）· 两枚之间=${capGap.toFixed(1)}（期望 6）`
-  + ` · computed margin-left=${R.capGapCss.marginLeft}`);
-check('★ 反向对照：判据 ⑪ 的原式喂给「抵消掉 margin-left」的同款行必须失败',
-  !(near(offBodyGap, 2, 0.6) && near(offCapGap, 6, 0.6)),
-  `去掉后：正文↔首枚=${offBodyGap.toFixed(1)} · 两枚之间=${offCapGap.toFixed(1)}`
-  + `（两枚之间居然还是 6px？那这条 margin-left 根本没在起作用）`);
+const offCapGap = R.offCap2.top - R.offCap1.bottom;
+check('⑪ 「弃读」行：动作竖排，两枚之间 4px、等宽左对齐，正文↔动作列仍是 2px',
+  R.actsCss.flexDirection === 'column'
+  && near(bodyGap, 2, 0.6) && near(capGap, 4, 0.6)
+  && near(R.cap1.left, R.cap2.left, 0.6) && near(R.cap1.width, R.cap2.width, 0.6)
+  && R.cap1.bottom <= R.cap2.top,
+  `flex-direction=${R.actsCss.flexDirection}（期望 column）`
+  + ` · 正文↔动作列=${bodyGap.toFixed(1)}（期望 2）`
+  + ` · 两枚垂直间距=${capGap.toFixed(1)}（期望 4）`
+  + ` · 左=${R.cap1.left.toFixed(1)}/${R.cap2.left.toFixed(1)}`
+  + ` 宽=${R.cap1.width.toFixed(1)}/${R.cap2.width.toFixed(1)}`
+  + ` · computed gap=${R.actsCss.gap}`);
+check('★ 反向对照：判据 ⑪ 的原式喂给「gap 归零」的同款行必须失败',
+  !(R.offActsCss.flexDirection === 'column' && near(offBodyGap, 2, 0.6) && near(offCapGap, 4, 0.6)
+    && near(R.offCap1.left, R.offCap2.left, 0.6) && near(R.offCap1.width, R.offCap2.width, 0.6)),
+  `去掉 gap 后：正文↔动作列=${offBodyGap.toFixed(1)} · 两枚垂直间距=${offCapGap.toFixed(1)}`
+  + `（居然还是 4px？那这条 gap 根本没在起作用）`);
 
 // ---- 5. 出对照图，并自证 PNG 宽高 -----------------------------------------
 const pngPath = join(pluginRoot, 'test', '.build', 'library-sidebar-before-after.png');
