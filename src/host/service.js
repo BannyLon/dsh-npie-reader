@@ -427,6 +427,10 @@ export class RssService {
         updateEntry: entry => this.diary.updateEntry(entry),
         removeEntry: entry => this.diary.removeEntry(entry),
         listMonth: month => this.diary.listMonth(month),
+        // 侧栏「情绪罗盘 + 那年今日」。参数是一整个 options：`date`（那年今日的锚点）、
+        // `today`（连续天数的锚点）、`month`（统计月，跟着日历显示的那个月走）三者
+        // **各有所指**，合成一个就会让「翻看去年今天」把连续天数算成 0。
+        dashboard: options => this.diary.dashboard(options),
         search: options => this.diary.search(options),
         // ★ 必须把 `options` 透传下去：路由层靠 `includePrivate: true` 才看得到
         //   私密标签，写成 `tags: () => this.diary.tags()` 会把那个参数悄悄丢掉，

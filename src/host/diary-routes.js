@@ -174,7 +174,7 @@ function segment(value) {
  */
 export function makeDiaryRoutes(handlers = {}) {
   const {
-    read, readFull, append, updateEntry, removeEntry, listMonth, search, tags, timeline, byBook,
+    read, readFull, append, updateEntry, removeEntry, listMonth, dashboard, search, tags, timeline, byBook,
     exportAll, stats, secretStatus, reveal, gate,
     log = () => {},
   } = handlers;
@@ -234,6 +234,39 @@ export function makeDiaryRoutes(handlers = {}) {
         }
         try {
           return sendJson(res, 200, { ok: true, ...(await listMonth(month)) });
+        } catch (error) {
+          return fail(res, error);
+        }
+      }
+
+      // ---- GET /dashboard?date=YYYY-MM-DD&today=YYYY-MM-DD&month=YYYY-MM -----
+      //   私密那一侧的「本月情绪与足迹」+「那年今日」。
+      //   ★ 锁着时**只给不涉内容的那几个数**（几天、连续多少天），情绪 / 字数 / 摘要
+      //     一律不给 —— 这道闸门必须在**这一层**兜底，不能指望 store 的 decrypt 恰好失败：
+      //     万一钥匙还在内存里而闸门已经锁上，decrypt 是会成功的。
+      if (parts.length === 1 && parts[0] === 'dashboard') {
+        if (method !== 'GET') return methodNotAllowed(res);
+        const date = url.searchParams.get('date') ?? '';
+        const today = url.searchParams.get('today') ?? date;
+        const month = url.searchParams.get('month') ?? date.slice(0, 7);
+        if (!isValidDateKey(date) || !isValidDateKey(today) || !isValidMonthKey(month)) {
+          return sendJson(res, 400, { ok: false, error: '无效的日期', code: 'BAD_DATE' });
+        }
+        if (typeof dashboard !== 'function') {
+          return sendJson(res, 501, { ok: false, error: '自省面板没有接上' });
+        }
+        try {
+          const board = await dashboard({ date, today, month });
+          if (!gateAllow()) {
+            return sendJson(res, 200, {
+              ok: true,
+              date: board.date, month: board.month, today: board.today,
+              locked: true, days: board.days, streak: board.streak,
+              chars: null, moods: [], moodEntries: {},
+              onThisDay: board.onThisDay.map((cell) => ({ date: cell.date, years: cell.years, locked: true })),
+            });
+          }
+          return sendJson(res, 200, { ok: true, ...board });
         } catch (error) {
           return fail(res, error);
         }

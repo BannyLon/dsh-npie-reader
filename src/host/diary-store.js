@@ -57,6 +57,24 @@ async function readDirQuiet(dir) {
   }
 }
 
+/** 摘要：压掉空白、取前 60 字。侧栏 268px 只放得下一行多一点。 */
+function previewOf(body) {
+  return String(body ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
+}
+
+/**
+ * `YYYY-MM-DD` 前后挪几天。
+ * ★ 用 UTC 算：本地时区里跨夏令时的那两天是 23 / 25 小时，按毫秒加减会把
+ *   「昨天」算成前天或今天，而「连续记录」正是靠这个数一天天数出来的。
+ */
+function shiftDay(key, delta) {
+  const [year, month, day] = key.split('-').map(Number);
+  const at = new Date(Date.UTC(year, month - 1, day + delta));
+  const mm = String(at.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(at.getUTCDate()).padStart(2, '0');
+  return `${at.getUTCFullYear()}-${mm}-${dd}`;
+}
+
 /** 日记根目录。导出给路由与设置页显示（用户要知道东西在哪）。 */
 export function diaryRoot() {
   return join(pluginDataDir(), 'diary');
@@ -424,6 +442,124 @@ export function createDiaryStore(options = {}) {
   }
 
   /**
+   * 私密那一侧的自省面板：「本月情绪与足迹」+「那年今日」。
+   *
+   * ★ 为什么单开一个方法，不往 `listMonth` 里塞：`listMonth` 回答的是「哪几天写过、
+   *   各几条」，它跑在**每一次翻月**上。这里要的是按心情分档计数、连续天数、跨年同月日 ——
+   *   翻页用不上的东西不该让日历变慢。
+   * ★ 只读**私密**那半边。用户要的就是「私密日记多一份跨越时间的浪漫」；
+   *   把公开那半边也并进来，这一块会变成第二份时间轴。
+   * ★ `locked` 是**量出来的结果**，不是猜的：解不开就明说，界面据此把情绪与字数收起来。
+   *   连续天数只靠**文件名**，所以锁着也照样给 —— 它是这一块里唯一在锁着时还有意义的数。
+   *
+   * ★ 三个日期**各有所指，不能合并成一个**：
+   *   - `date`  → 「那年今日」的锚点（按它的月-日回溯往年）；
+   *   - `today` → 连续天数的锚点（真实今天；翻看去年某天时 `date ≠ today`）；
+   *   - `month` → 情绪分布与字数的统计月（**跟着日历显示的那个月走**）。
+   *   少传 `month` 就用 `date` 的月 —— 但界面在「按箭头翻到上个月、却没点任何一天」时
+   *   `selected` 仍停在上个月，此时若拿 `date` 当统计月，会出现「『这个月』列的是九月、
+   *   『本月情绪』说的是八月」这种两个数字对不上的样子。
+   */
+  async function dashboard({ date, today = date, month = String(date ?? '').slice(0, 7) } = {}) {
+    if (!isValidDateKey(date)) throw coded('BAD_DATE', `无效的日期：${date}`);
+    if (!isValidDateKey(today)) throw coded('BAD_DATE', `无效的今天：${today}`);
+    if (!isValidMonthKey(month)) throw coded('BAD_MONTH', `无效的月份：${month}`);
+    const keys = (await readDirQuiet(diaryPrivateDir()))
+      .filter((name) => name.endsWith('.md.enc'))
+      .map((name) => name.slice(0, -7))
+      .filter((key) => isValidDateKey(key))
+      .sort();
+    const keySet = new Set(keys);
+    const readPrivate = async (key) => secret.decrypt(
+      await readFile(join(diaryPrivateDir(), `${dayFileName(key)}.enc`), 'utf8'),
+    );
+    let locked = false;
+    let days = 0;
+    let chars = 0;
+    const counts = new Map();
+    const byMood = new Map();
+    for (const key of keys) {
+      if (!key.startsWith(month)) continue;
+      days += 1;
+      let text = '';
+      try {
+        text = await readPrivate(key);
+      } catch {
+        // 解不开就只算「那天写过」，不计字数与心情 —— 不能把 0 字当成真的 0 字。
+        locked = true;
+        continue;
+      }
+      const entries = parseDay(text).entries;
+      chars += dayCharCount(entries);
+      for (const entry of entries) {
+        const score = moodScore(entry.meta?.mood);
+        if (score === null) continue;
+        counts.set(score, (counts.get(score) ?? 0) + 1);
+        const bucket = byMood.get(score) ?? [];
+        if (bucket.length < 200) bucket.push({ date: key, time: entry.time, preview: previewOf(entry.body) });
+        byMood.set(score, bucket);
+      }
+    }
+    /*
+     * 连续记录：**今天没写就从昨天起算**。
+     * 直接从今天数的话，早上打开这一页会看到「连续 0 天」—— 而用户昨天明明写了、
+     * 昨天那一串也还在，一个还没到的日子不该把已有的记录判成断了。
+     */
+    let streak = 0;
+    let cursor = keySet.has(today) ? today : shiftDay(today, -1);
+    while (keySet.has(cursor) && streak < 3650) {
+      streak += 1;
+      cursor = shiftDay(cursor, -1);
+    }
+    /*
+     * 那年今日：同一个「月-日」、更早的年份，最多 5 年。
+     * ★ 这里给的是**摘要**不是全文：侧栏 268px 放不下正文，而这一块的用途是
+     *   「想起来还有那么一天」，点进去才是正文。
+     */
+    const mmdd = date.slice(5);
+    const year = Number(date.slice(0, 4));
+    const onThisDay = [];
+    for (const key of [...keys].reverse()) {
+      if (onThisDay.length >= 5) break;
+      if (key.slice(5) !== mmdd) continue;
+      const past = Number(key.slice(0, 4));
+      if (!Number.isInteger(past) || past >= year) continue;
+      const cell = { date: key, years: year - past, time: '', preview: '' };
+      try {
+        const first = parseDay(await readPrivate(key)).entries[0];
+        if (first) {
+          cell.time = first.time;
+          cell.preview = previewOf(first.body);
+        }
+      } catch {
+        cell.locked = true;
+      }
+      onThisDay.push(cell);
+    }
+    const moods = [...counts.entries()]
+      .map(([score, count]) => ({ score, count }))
+      .sort((left, right) => right.count - left.count || right.score - left.score);
+    return {
+      date,
+      month,
+      today,
+      locked,
+      days,
+      /*
+       * ★ 有哪怕一天解不开，字数就是 `null`（不知道），**不是 0**。
+       *   0 是一句确定的话：「这个月一个字都没写」—— 而真实情况是「有几天的锁着，
+       *   我没数到」。界面上 `0 字` 与 `—` 是两个完全不同的信息。
+       */
+      chars: locked ? null : chars,
+      streak,
+      moods,
+      // 点某一档情绪 → 右侧列出本月这一档的全部条目（只有摘要，点一行才回那一天）。
+      moodEntries: Object.fromEntries([...byMood.entries()].map(([score, rows]) => [String(score), rows])),
+      onThisDay,
+    };
+  }
+
+  /**
    * 扫一遍所有日记（默认只扫公开那半边），按日期倒序，对每一条回调。
    *
    * 三个功能共用它：搜索、标签索引、时间轴。分开写三遍的后果是「搜索能搜到、
@@ -726,6 +862,7 @@ export function createDiaryStore(options = {}) {
     updateEntry,
     removeEntry,
     listMonth,
+    dashboard,
     search,
     tags,
     timeline,

@@ -52,6 +52,25 @@ export async function fetchDiaryDay(date) {
 }
 
 /**
+ * 私密侧栏的自省面板：本月情绪分布 / 连续天数 / 本月字数 / 那年今日。
+ *
+ * ★ 三个日期都要传，而且**不能合并**：
+ *   - `date` 是用户正在看的那一天 —— 「那年今日」按它的月-日回溯；
+ *   - `today` 是真实的今天 —— 连续天数按它数；
+ *   - `month` 是日历**正在显示**的那个月 —— 情绪分布与字数按它统计。
+ *   翻到去年的今天、或者只按箭头翻月却没点任何一天时，这三者互不相同；
+ *   只传一个会让「连续 12 天」变成「连续 0 天」，或者「本月情绪」说的不是这个月。
+ * ★ 锁着时宿主会把 `chars` 收成 `null`、`moods` 收成 `[]`，并把 `onThisDay` 里每一条
+ *   降级成 `{ date, years, locked: true }`。界面据此显示锁态，别自己再猜一遍。
+ */
+export async function fetchDiaryDashboard({ date, today, month }) {
+  const params = new URLSearchParams({ date });
+  if (today) params.set('today', today);
+  if (month) params.set('month', month);
+  return await jsonRequest(`/dashboard?${params.toString()}`);
+}
+
+/**
  * 追加一条。
  *
  * `vis: 'private'` 写进**加密文件**（`private/YYYY-MM-DD.md.enc`），`meta` 是
@@ -159,7 +178,8 @@ export async function lockDiaryGate() {
 }
 
 /** 跨天搜。 */
-export async function searchDiary(query, limit) {  const params = new URLSearchParams({ q: query });
+export async function searchDiary(query, limit) {
+  const params = new URLSearchParams({ q: query });
   if (limit !== undefined) params.set('limit', String(limit));
   return await jsonRequest(`/search?${params.toString()}`);
 }

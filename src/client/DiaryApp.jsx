@@ -59,7 +59,7 @@ import {
   parseSource, parseTags, shiftMonth, sourceLabel,
 } from '../diary-format.js';
 import {
-  appendDiaryEntry, downloadDiaryBundle, fetchDiaryBook, fetchDiaryDay, fetchDiaryExport,
+  appendDiaryEntry, downloadDiaryBundle, fetchDiaryBook, fetchDiaryDashboard, fetchDiaryDay, fetchDiaryExport,
   fetchDiaryGate, fetchDiaryMonth, fetchDiarySecret, fetchDiaryStats, fetchDiaryTags, fetchDiaryTimeline,
   lockDiaryGate, patchDiaryEntry, removeDiaryEntry, revealDiaryFolder, searchDiary, setupDiaryGate, unlockDiaryGate,
 } from './diary-api.js';
@@ -415,6 +415,26 @@ export function DiaryApp({
     return parsed ?? { year: new Date().getFullYear(), month0: new Date().getMonth() };
   });
   const [marks, setMarks] = useState({ days: {}, publicDays: {}, privateDays: {}, moods: {}, total: 0 });
+  /**
+   * 私密侧栏那两块卡片的数据（`/dashboard`）。
+   *
+   * ★ 与 `marks` **分开存**：`marks` 是日历的点（每次翻月都要），`dash` 是侧栏的统计
+   *   （情绪分布 / 连续天数 / 那年今日）。合成一个会让「翻月」顺手把连续天数也重算一遍，
+   *   而那个数其实与月份无关。
+   * ★ `locked` 是**宿主量出来的**，不是这里猜的：锁着时 `chars` 是 `null`（不是 0），
+   *   `moods` 是空数组。把 `null` 当 0 显示会说出「本月写了 0 字」这种确定的假话。
+   */
+  const [dash, setDash] = useState({
+    busy: true, locked: false, days: 0, chars: null, streak: 0,
+    moods: [], moodEntries: {}, onThisDay: [], error: '',
+  });
+  /**
+   * 点中的那一档情绪（1..5，`null` = 没筛）。
+   *
+   * ★ 它**不改 `linkKey`**：那个是「按来源收窄**这一天**」，这里是「把**整月**摊成一张
+   *   列表」。共用同一个变量会让两个筛选互相清掉对方，而且清空按钮不知道该清哪个。
+   */
+  const [moodFilter, setMoodFilter] = useState(null);
   const [day, setDay] = useState({ date: today, exists: false, entries: [], chars: 0, publicCount: 0, privateCount: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -589,6 +609,8 @@ export function DiaryApp({
   const chatRef = useRef(null);
   const draftRef = useRef(null);
   const refRef = useRef(null);
+  /** 中间那张解锁卡。侧栏「那年今日」锁着时把人带到这里（见 `askUnlock`）。 */
+  const gateRef = useRef(null);
 
   const monthKey = monthKeyOf(month.year, month.month0);
 
@@ -605,6 +627,34 @@ export function DiaryApp({
       if (payload.privateError) setError(`有私密日记解不开：${payload.privateError}`);
     } catch (cause) {
       setError(cause.message);
+    }
+  }
+
+  /**
+   * 私密侧栏那两块卡片：本月情绪 / 连续天数 / 本月字数 / 那年今日。
+   *
+   * ★ 失败时**不清空**上一次的数（网络抖一下就变成三行「—」比留着旧数更糟），
+   *   但也绝不把旧数当成新数 —— 所以 `error` 单独记，界面在旁边写一句「刚才没读上来」。
+   * ★ 只在私密模块里发这个请求：`/dashboard` 读的是私密目录，别的模块没有这个语义。
+   */
+  async function loadDash() {
+    if (moduleValue !== 'private') return;
+    try {
+      const payload = await fetchDiaryDashboard({ date: selected, today, month: monthKey });
+      setDash({
+        busy: false,
+        locked: payload.locked === true,
+        days: payload.days ?? 0,
+        // ★ `chars` 锁着时是 **null**（不是 0）。留着 null，界面才能说「上锁了」而不是「0 字」。
+        chars: typeof payload.chars === 'number' ? payload.chars : null,
+        streak: payload.streak ?? 0,
+        moods: Array.isArray(payload.moods) ? payload.moods : [],
+        moodEntries: payload.moodEntries ?? {},
+        onThisDay: Array.isArray(payload.onThisDay) ? payload.onThisDay : [],
+        error: '',
+      });
+    } catch (cause) {
+      setDash((current) => ({ ...current, busy: false, error: cause.message }));
     }
   }
 
@@ -752,6 +802,15 @@ export function DiaryApp({
 
   useEffect(() => { void loadMonth(monthKey); }, [monthKey]);
   useEffect(() => { void loadDay(selected); }, [selected]);
+  /*
+   * 私密侧栏那两块卡片。四种变化都会让它的数不再成立：翻月（统计月变了）、
+   * 换天（那年今日的锚点变了）、解锁/上锁（宿主给不给内容变了）、切模块。
+   * ★ 不能只挂在 `monthKey` 上 —— 那会让「翻到去年今天」还显示今年的统计。
+   */
+  useEffect(() => {
+    if (moduleValue === 'private') void loadDash();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [moduleValue, monthKey, selected, gate.unlocked]);
   useEffect(() => { fetchDiaryStats().then(setStats).catch(() => {}); }, [day.chars, day.privateCount]);
 
   /**
@@ -789,6 +848,9 @@ export function DiaryApp({
     if (moduleValue === 'reflection') void loadBooks();
     // 切模块 = 换了一页，正在「看一次」的那条必须立刻收回，不能跟着用户走。
     hidePeek();
+    // 「只看本月某一档情绪」也是这一页的临时视图：切走再回来应该落在今天，
+    // 而不是落在一张三天前的筛选列表上。
+    setMoodFilter(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moduleValue]);
 
@@ -846,6 +908,8 @@ export function DiaryApp({
     await loadDay(selected);
     await loadMonth(monthKey);
     if (moduleValue === 'inspiration') await Promise.all([loadTags(), loadTimeline()]);
+    // 写完 / 删完，侧栏的「本月 N 字」「连续 N 天」「情绪占比」都变了。
+    if (moduleValue === 'private') await loadDash();
     if (moduleValue === 'reflection' && book) {
       try {
         const payload = await fetchDiaryBook(book.id);
@@ -872,6 +936,9 @@ export function DiaryApp({
     setFocusKey('');
     setDayAll(false);
     if (opts?.keepLink !== true) setLinkKey('');
+    // 情绪筛选也是「对着这个月的一档情绪」的临时视图 —— 换了天就该失效，
+    // 否则点进去看到的是那一天，而顶部还写着「只看本月 😄」。
+    setMoodFilter(null);
     // 换一天**不**重新上锁：锁是「这个人现在在这台机器前」这件事，不是「这一天」。
     // 换了天就掉锁会让连续翻阅十天的日记变成输十次口令。
     const parsed = parseMonthKey(date.slice(0, 7));
@@ -1298,6 +1365,9 @@ export function DiaryApp({
     } catch { /* 宿主没接上闸门时不需要报错：本来就锁不住 */ }
     hidePeek();
     setGate((current) => ({ ...current, unlocked: false, draft: '', confirm: '' }));
+    // 上锁时把「只看本月某一档情绪」也收掉：那张列表里全是宿主刚摘掉的正文摘要，
+    // 留着它等于让「已上锁」和满屏摘要同框。
+    setMoodFilter(null);
     setDraft('');
     notify?.('私密日记已上锁');
   }
@@ -1461,6 +1531,46 @@ export function DiaryApp({
     }
     return out;
   }, [marks.moods]);
+
+  /**
+   * 侧栏「本月情绪」那三格：占比最高的三档 + 各自占多少。
+   *
+   * ★ 分母是**记过心情的条数**，不是「这个月写了多少条」：没选心情的条目不进分布，
+   *   拿总条数当分母会让三档加起来永远不到 100%，看起来像统计坏了。
+   * ★ 只留前三档。五档全铺在 268px 里会变成五个几乎等宽的小方块，
+   *   而「这个月主要是开心，其次一般」这句话用三格就说得完。
+   */
+  const dashMoods = useMemo(() => {
+    const total = dash.moods.reduce((sum, cell) => sum + (cell.count ?? 0), 0);
+    return dash.moods.slice(0, 3).map((cell) => {
+      const meta = MOODS.find((item) => item.score === cell.score) ?? null;
+      return {
+        score: cell.score,
+        count: cell.count ?? 0,
+        share: total > 0 ? Math.round(((cell.count ?? 0) / total) * 100) : 0,
+        emoji: meta?.emoji ?? '·',
+        label: meta?.label ?? '未知',
+      };
+    });
+  }, [dash.moods]);
+
+  /** 点中的那一档情绪在右侧要摊开的那几行（宿主已经按日期倒序给好了）。 */
+  const moodRows = moodFilter === null ? [] : (dash.moodEntries?.[String(moodFilter)] ?? []);
+  const moodMeta = moodFilter === null ? null : (MOODS.find((item) => item.score === moodFilter) ?? null);
+
+  /**
+   * 「那年今日」被点了一下，但这一页还锁着。
+   *
+   * ★ 不自己画一个口令框：中间那块解锁卡已经在那儿了（`.npr-gate`），
+   *   再弹一个就是两处入口、两套错误提示。这里做的是**把人带到那一个**，
+   *   并把光标放进输入框 —— 用户点一下就能开始输。
+   */
+  function askUnlock() {
+    const box = gateRef.current;
+    if (!box) return;
+    box.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    box.querySelector('input')?.focus();
+  }
 
   /** 灵感侧栏的「时间轴」：日期 + 条数 + **当天的条目**（点开才展开，见 openDay）。 */
   const recentDays = timeline.days
@@ -1951,6 +2061,77 @@ export function DiaryApp({
                   );
                 })}
               </section>
+
+              {/* ---- 本月情绪与足迹 ------------------------------------------
+                  日历下面这块原本一直空着（268px 宽、半屏高）。放两块卡片：
+                  上面是「这个月的心情长什么样」，下面是「去年的今天写过什么」。
+                  ★ 两块都做成卡片（微边框 + 比侧栏深一档的底），与上面的日历、
+                    「这个月」列表形成分界 —— 不然它们看起来像同一张列表的续行。 */}
+              <section className="npr-diary-card" aria-label="本月情绪与足迹">
+                <h2 className="npr-diary-card-head"><Icon name="sparkles" size={12} />本月情绪</h2>
+                {dash.busy && <p className="npr-diary-card-note">正在数这个月…</p>}
+                {/*
+                  * ★ 锁着时**不假装**「这个月没有心情」：宿主确实没给，但那是权限问题
+                  *   不是数据问题。所以这里说的是「解锁后才看得到」，而连续天数照常显示
+                  *   （它只靠文件名，宿主锁着也给）。
+                  */}
+                {!dash.busy && dash.locked && (
+                  <p className="npr-diary-card-note">上锁时只数天数。心情分布与字数要解锁后才看得到。</p>
+                )}
+                {!dash.busy && !dash.locked && dashMoods.length === 0 && (
+                  <p className="npr-diary-card-note">这个月还没记过心情。写的时候点一个表情，这里就长出来了。</p>
+                )}
+                {!dash.busy && !dash.locked && dashMoods.length > 0 && (
+                  <div className="npr-diary-moods">
+                    {dashMoods.map((cell) => (
+                      <button
+                        key={cell.score}
+                        type="button"
+                        className={`npr-diary-mood${moodFilter === cell.score ? ' is-on' : ''}`}
+                        aria-pressed={moodFilter === cell.score}
+                        title={`本月「${cell.label}」的条目 ${cell.count} 条，占记过心情的 ${cell.share}%`}
+                        onClick={() => setMoodFilter((current) => (current === cell.score ? null : cell.score))}>
+                        <span className="npr-diary-mood-emoji" aria-hidden="true">{cell.emoji}</span>
+                        <span className="npr-diary-mood-share">{cell.share}%</span>
+                        <span className="npr-diary-mood-label">{cell.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="npr-diary-facts">
+                  <span className="npr-diary-fact" title="从今天往前连着写了多少天。今天还没写就从昨天起算 —— 一个还没到的日子不该把已有的记录判成断了。">
+                    <strong>{dash.streak}</strong> 天连续
+                  </span>
+                  <span className="npr-diary-fact" title={dash.chars === null ? '上锁时不显示字数。' : '这个月私密日记的正文字数，不含时间戳与元信息。'}>
+                    <strong>{dash.chars === null ? '—' : dash.chars}</strong> 字
+                  </span>
+                </div>
+                {dash.error !== '' && <p className="npr-diary-card-note is-error">刚才没读上来：{dash.error}</p>}
+              </section>
+
+              {/* ---- 那年今日 ------------------------------------------------
+                  ★ 只列**更早年份**的同月同日，最多 5 条：今天写的日记不是「那年今日」。
+                  ★ 摘要由宿主给（60 字）。侧栏放不下正文，点一行才回到那一天。 */}
+              <section className="npr-diary-card" aria-label="那年今日">
+                <h2 className="npr-diary-card-head"><Icon name="clock" size={12} />那年今日</h2>
+                {dash.busy && <p className="npr-diary-card-note">正在翻旧账…</p>}
+                {!dash.busy && dash.onThisDay.length === 0 && (
+                  <p className="npr-diary-card-note">这一天，时光悄悄走过，还没有留下痕迹 ✨</p>
+                )}
+                {!dash.busy && dash.onThisDay.map((cell) => (
+                  <button
+                    key={cell.date}
+                    type="button"
+                    className={`npr-diary-echo${cell.locked ? ' is-locked' : ''}`}
+                    title={cell.locked ? '解锁后方可穿越时空' : `回到 ${cell.date}${cell.time ? ` ${cell.time}` : ''}`}
+                    onClick={() => (cell.locked ? askUnlock() : pick(cell.date))}>
+                    <span className="npr-diary-echo-when">📅 {cell.years} 年前的今天</span>
+                    <span className="npr-diary-echo-text">
+                      {cell.locked ? '解锁后方可穿越时空' : (cell.preview || '（那天没有留下正文）')}
+                    </span>
+                  </button>
+                ))}
+              </section>
             </div>
           ) : (
             <div className="npr-diary-panel">
@@ -2133,7 +2314,7 @@ export function DiaryApp({
                   *   `gate.available === false`（宿主没接闸门）时照常显示 —— 那种情况下
                   *   本来就没有口令这层，不该画一个点不动的锁。
                   */}
-                {moduleValue === 'private' && (gate.available === false || gate.unlocked) && (
+                {moduleValue === 'private' && (gate.available === false || gate.unlocked) && moodFilter === null && (
                   <section className="npr-diary-write">
                     <DiaryComposer
                       variant="private"
@@ -2249,8 +2430,41 @@ export function DiaryApp({
                   )
                 )}
 
+                {/* ---- 只看本月某一档情绪 --------------------------------------
+                    ★ 这块**替换**掉「这一天的条目」，不是叠在它上面：用户点的是
+                      「本月 😄 的所有日记」，那是一个跨天的列表，与「这一天写了什么」
+                      是两件事。两块同时在场，人会以为下面那堆也属于这个筛选。
+                    ★ 点一行就回到那一天 —— 想改哪一条都能在那边改，这里只负责找。 */}
+                {moodFilter !== null && (
+                  <section className="npr-diary-moodview" aria-label="本月这一档情绪">
+                    <div className="npr-diary-filterbar">
+                      <span className="npr-diary-filterbar-text">
+                        只看本月 <b>{moodMeta?.emoji} {moodMeta?.label}</b> · {moodRows.length} 条
+                      </span>
+                      <button type="button" className="npr-diary-filterbar-clear" onClick={() => setMoodFilter(null)}>全部</button>
+                    </div>
+                    {moodRows.length === 0 && (
+                      <div className="npr-diary-blank">
+                        <p>这个月已经没有这一档的记录了。</p>
+                        <p>可能是刚删掉，或者换了一个月。点上面的「全部」回到这一天。</p>
+                      </div>
+                    )}
+                    {moodRows.map((row, at) => (
+                      <button
+                        key={`${row.date}-${at}`}
+                        type="button"
+                        className="npr-diary-echo is-row"
+                        title={`回到 ${row.date}${row.time ? ` ${row.time}` : ''}`}
+                        onClick={() => pick(row.date)}>
+                        <span className="npr-diary-echo-when">{dayLabel(row.date, today)} · {row.time}</span>
+                        <span className="npr-diary-echo-text">{row.preview || '（没有正文）'}</span>
+                      </button>
+                    ))}
+                  </section>
+                )}
+
                 {/* ---- 条目列表 --------------------------------------------- */}
-                {moduleValue !== 'reflection' && (
+                {moduleValue !== 'reflection' && moodFilter === null && (
                   <>
                     {moduleValue === 'private' && gate.unlocked && privateEntries.length > 0 && (
                       <div className="npr-diary-gatebar">
@@ -2263,7 +2477,7 @@ export function DiaryApp({
                       *   条目的 body 是空串（宿主摘掉的），画出来是一串空壳，比不画更糟。
                       */}
                     {moduleValue === 'private' && gate.available !== false && !gate.unlocked && (
-                      <section className="npr-gate" aria-label="私密日记已上锁">
+                      <section className="npr-gate" aria-label="私密日记已上锁" ref={gateRef}>
                         <div className="npr-gate-icon" aria-hidden="true"><Icon name="eye-off" size={20} /></div>
                         <h2>{gate.set ? '这一页上锁了' : '给私密日记设一道口令'}</h2>
                         <p>

@@ -622,3 +622,102 @@ describe('byBook', () => {
     assert.equal(result.entries.some(entry => entry.body === '书里按 L 记的灵感'), false);
   });
 });
+
+/**
+ * 侧栏那两块卡片的数据源：`dashboard()`。
+ *
+ * ★ 用 2031 年这种**没人会碰**的月份：本文件所有用例共用一个临时 `$DSH_HOME`，
+ *   借用 2026 那几个月会让「这个月几天」「连续几天」跟着别的用例一起变。
+ * ★ 三个日期各测一次 —— `date` / `today` / `month` 一旦被合并成一个参数，
+ *   「翻看去年今天」就会把连续天数算成 0，而界面看起来完全正常。
+ */
+describe('dashboard：本月情绪 + 那年今日', () => {
+  const MOOD_MONTH = '2031-03';
+
+  before(async () => {
+    await secure.append({ date: '2031-03-01', time: '08:00', body: '开心一', vis: 'private', meta: { mood: '🙂' } });
+    await secure.append({ date: '2031-03-01', time: '09:00', body: '开心二', vis: 'private', meta: { mood: '🙂' } });
+    await secure.append({ date: '2031-03-01', time: '22:00', body: '低落一', vis: 'private', meta: { mood: '😔' } });
+    await secure.append({ date: '2031-03-02', time: '08:00', body: '很好一', vis: 'private', meta: { mood: '😄' } });
+    // 那年今日的料：同一个「03-02」、更早的两年
+    await secure.append({ date: '2029-03-02', time: '21:00', body: '两年前的今天写的', vis: 'private' });
+    await secure.append({ date: '2030-03-02', time: '21:30', body: '一年前的今天写的', vis: 'private' });
+    // ★ 反向对照：公开那半边的同月同日**不能**出现在「那年今日」里
+    await secure.append({ date: '2028-03-02', time: '20:00', body: '这是灵感不是私密' });
+    // 邻月：它必须不进 2031-03 的统计，但要参与「连续天数」
+    await secure.append({ date: '2031-02-28', time: '08:00', body: '二月最后一天', vis: 'private' });
+  });
+
+  it('只数本月、只数**记过心情**的条目；按条数降序、同数按分档降序', async () => {
+    const board = await secure.dashboard({ date: '2031-03-02', today: '2031-03-02', month: MOOD_MONTH });
+    assert.equal(board.locked, false);
+    assert.equal(board.days, 2, '本月的天数数错了（邻月那天不该进来）');
+    assert.deepEqual(board.moods, [
+      { score: 4, count: 2 },
+      { score: 5, count: 1 },
+      { score: 1, count: 1 },
+    ], '情绪分布错了：要么把没记心情的算进去了，要么排序不是「条数降序、同数分档降序」');
+    // 反向对照：没记心情的那天（2031-03-02 只有一条，记了 😄）不该出现 0 分的档。
+    assert.equal(board.moods.some((cell) => cell.score === 0 || cell.score === null), false);
+    assert.equal(board.moodEntries['4'].length, 2);
+    assert.equal(board.moodEntries['4'][0].date, '2031-03-01');
+    assert.equal(board.moodEntries['4'][0].preview, '开心一', '摘要没压成一行（侧栏只放得下一行多）');
+  });
+
+  it('★ 今天没写就从**昨天**起算（否则早上打开会看到「连续 0 天」）', async () => {
+    const written = await secure.dashboard({ date: '2031-03-02', today: '2031-03-02', month: MOOD_MONTH });
+    // 03-02 → 03-01 → 02-28 →（02-27 没有）⇒ 3 天，且**跨了月**：连续天数不该在月初归零。
+    assert.equal(written.streak, 3, '03-02 往前数错了（跨月那一天最容易漏）');
+    // 03-03 什么都没写：连续天数必须还是 3，而不是 0
+    const notYet = await secure.dashboard({ date: '2031-03-03', today: '2031-03-03', month: MOOD_MONTH });
+    assert.equal(notYet.streak, 3, '今天还没写就被判成「断了」—— 一个还没到的日子不该清掉已有的记录');
+    assert.equal(notYet.days, 2, '换了「今天」不该改本月天数');
+  });
+
+  it('★ `month` 决定统计月，`date` 只决定「那年今日」——两者不能合并', async () => {
+    // 站在 2031-03-02（那年今日有料），但统计月要二月
+    const board = await secure.dashboard({ date: '2031-03-02', today: '2031-03-02', month: '2031-02' });
+    assert.equal(board.month, '2031-02');
+    assert.equal(board.days, 1, '统计月没跟着 month 走（跟着 date 就会数成 2 天）');
+    assert.equal(board.moods.length, 0, '二月那条没记心情，情绪分布该是空的');
+    assert.equal(board.onThisDay.length, 2, '「那年今日」该按 date 的月-日回溯，不该被 month 带走');
+  });
+
+  it('那年今日：只要更早的年份、只要私密、最多 5 条、摘要来自第一条', async () => {
+    const board = await secure.dashboard({ date: '2031-03-02', today: '2031-03-02', month: MOOD_MONTH });
+    assert.deepEqual(board.onThisDay.map((cell) => [cell.date, cell.years]), [
+      ['2030-03-02', 1],
+      ['2029-03-02', 2],
+    ], '年份差算错了，或者把今年/公开那半边也收进来了');
+    assert.equal(board.onThisDay[0].preview, '一年前的今天写的');
+    assert.equal(board.onThisDay[0].time, '21:30');
+    assert.equal(board.onThisDay.some((cell) => cell.preview.includes('这是灵感不是私密')), false,
+      '公开那半边的条目混进了私密的「那年今日」');
+  });
+
+  it('★ 解不开时：天数照给、字数给 null（不是 0）、情绪与摘要一律不给', async () => {
+    // 故意用错钥匙：解密必然失败，且不碰真实钥匙串。
+    const blind = createDiaryStore({
+      log: () => {},
+      secret: createDiarySecret({ key: Buffer.alloc(32, 9), keyPath: join(home, 'wrong.key') }),
+    });
+    const board = await blind.dashboard({ date: '2031-03-02', today: '2031-03-02', month: MOOD_MONTH });
+    assert.equal(board.locked, true);
+    assert.equal(board.days, 2, '连续天数/天数只靠文件名，锁着也该给');
+    assert.equal(board.streak, 3, '连续天数锁着也该给（它不涉内容）');
+    assert.equal(board.chars, null, '锁着时给 0 字等于说「这个月一个字都没写」—— 那是假话');
+    assert.deepEqual(board.moods, []);
+    assert.deepEqual(board.moodEntries, {});
+    assert.equal(board.onThisDay.every((cell) => cell.locked === true), true);
+    assert.equal(board.onThisDay.every((cell) => cell.preview === ''), true, '锁着还漏了摘要');
+  });
+
+  it('日期/月份非法抛 BAD_DATE / BAD_MONTH', async () => {
+    await assert.rejects(() => secure.dashboard({ date: '2031-13-01', today: '2031-03-02', month: MOOD_MONTH }),
+      (error) => error.code === 'BAD_DATE');
+    await assert.rejects(() => secure.dashboard({ date: '2031-03-02', today: 'x', month: MOOD_MONTH }),
+      (error) => error.code === 'BAD_DATE');
+    await assert.rejects(() => secure.dashboard({ date: '2031-03-02', today: '2031-03-02', month: '2031-3' }),
+      (error) => error.code === 'BAD_MONTH');
+  });
+});

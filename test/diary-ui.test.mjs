@@ -1556,3 +1556,103 @@ describe('0.42：「挂到书」自动匹配这条原本挂在哪儿', () => {
       '没提醒「挂到书会换掉原来的文章出处」—— 用户会以为是在加一个出处');
   });
 });
+
+/**
+ * 0.43：私密侧栏日历下面那两块（本月情绪 / 那年今日）。
+ *
+ * 用户 2026-10-27 的原话：日历下面那一整块是空的，想放「情绪罗盘与微型统计」和
+ * 「那年今日」，让侧栏「告别空旷、充满生命力」。这里守四件事：
+ *   ① 两块卡片**排在「这个月」之后**（不是插到日历上面去）；
+ *   ② 占比的分母是「记过心情的条数」，且只取前三档；
+ *   ③ 锁着时**不编数**：字数给「—」而不是 0，「那年今日」点一下把人带到解锁卡；
+ *   ④ 点情绪 → 右侧**替换**成整月列表，而不是叠在当天条目上。
+ */
+describe('0.43：私密侧栏的「本月情绪」与「那年今日」', () => {
+  it('★ 两块卡片排在「这个月」之后（日历 → 这个月 → 本月情绪 → 那年今日）', () => {
+    const atSect = diary.indexOf('>这个月</h2>');
+    const atMood = diary.indexOf('>本月情绪</h2>');
+    const atEcho = diary.indexOf('>那年今日</h2>');
+    assert.ok(atSect > 0, '锚点失效：「这个月」那块找不到了');
+    assert.ok(atMood > atSect, '「本月情绪」没有排在「这个月」后面 —— 它该占日历下面那块空地');
+    assert.ok(atEcho > atMood, '「那年今日」该在本月情绪下面（先看这个月，再往回看）');
+    // 两块都是卡片容器（边框 + 淡底），不是又一串列表行
+    assert.equal((diary.match(/className="npr-diary-card"/g) ?? []).length, 2,
+      '两块卡片应该都用 .npr-diary-card 包着，否则它们看起来像「这个月」列表的续行');
+  });
+
+  it('★ 卡片底色用 color-mix(fg 3%)，不写死 rgba(255,255,255,…)', () => {
+    // ★ 写死的白色在浅色主题下是**完全看不见**的（白底 + 白 3%）。
+    assert.match(diaryCss, /\.npr-diary-card \{[^}]*background: color-mix\(in srgb, var\(--npr-fg\) 3%, transparent\)/,
+      '卡片底色没有跟着主题走 —— 浅色主题下会消失');
+    assert.match(diaryCss, /\.npr-diary-card \{[^}]*border: 1px solid var\(--npr-border\)/,
+      '卡片没有边框（需求原话是「微弱的边框」）');
+    assert.doesNotMatch(diaryCss, /\.npr-diary-card[^{]*\{[^}]*rgba\(255, ?255, ?255/,
+      '卡片底色写死了白色 —— 浅色主题下等于没有底色');
+  });
+
+  it('★ 占比的分母是「记过心情的条数」，且只取前三档', () => {
+    assert.match(diary, /dash\.moods\.slice\(0, 3\)/, '没有只取前三档（五档铺满 268px 会糊成一片）');
+    assert.match(diary, /const total = dash\.moods\.reduce\(\(sum, cell\) => sum \+ \(cell\.count \?\? 0\), 0\);/,
+      '占比的分母不是「记过心情的条数」—— 用总条数会让三档加起来永远不到 100%');
+  });
+
+  it('点一格筛右侧、再点同一格收回；悬停给占比明细', () => {
+    assert.match(diary, /onClick=\{\(\) => setMoodFilter\(\(current\) => \(current === cell\.score \? null : cell\.score\)\)\}/,
+      '点情绪格没有切换筛选（或者点了收不回来）');
+    assert.match(diary, /title=\{`本月「\$\{cell\.label\}」的条目 \$\{cell\.count\} 条，占记过心情的 \$\{cell\.share\}%`\}/,
+      '没有 Tooltip 说明这一格是多少条、占多少');
+    assert.match(diary, /aria-pressed=\{moodFilter === cell\.score\}/, '筛选态没有 aria-pressed');
+  });
+
+  it('★ 锁着时字数给「—」，不给 0', () => {
+    assert.match(diary, /<strong>\{dash\.chars === null \? '—' : dash\.chars\}<\/strong> 字/,
+      '字数没区分「不知道」与「0 字」—— 锁着时显示 0 字是一句确定的假话');
+    assert.doesNotMatch(diary, /\{dash\.chars \?\? 0\}/, '把 null 兜成了 0');
+    assert.match(diary, /上锁时只数天数。心情分布与字数要解锁后才看得到。/,
+      '锁着时没有说明「为什么这里是空的」');
+  });
+
+  it('★ 那年今日：空态文案照抄需求、锁着时点一下把人带到解锁卡', () => {
+    assert.match(diary, /这一天，时光悄悄走过，还没有留下痕迹 ✨/, '空态文案不是需求里那句');
+    assert.match(diary, /📅 \{cell\.years\} 年前的今天/, '没有「N 年前的今天」这一行');
+    assert.match(diary, /onClick=\{\(\) => \(cell\.locked \? askUnlock\(\) : pick\(cell\.date\)\)\}/,
+      '锁着的条目被点了没有分流 —— 要么跳到看不到的正文，要么毫无反应');
+    assert.match(diary, /function askUnlock\(\)[\s\S]{0,500}box\.querySelector\('input'\)\?\.focus\(\)/,
+      'askUnlock 没有把光标放进口令框（用户点一下还得自己再点一次输入框）');
+    // ★ 没有这个 ref，askUnlock 会在第一行 return，而按钮看起来「能点」。
+    assert.match(diary, /className="npr-gate" aria-label="私密日记已上锁" ref=\{gateRef\}/,
+      '解锁卡没有挂 ref —— 侧栏那颗「解锁后方可穿越时空」会静默失效');
+  });
+
+  it('★ 点情绪后右侧**替换**掉当天条目与写入口，不叠在上面', () => {
+    assert.match(diary, /\{moduleValue !== 'reflection' && moodFilter === null && \(/,
+      '筛选时当天的条目列表还在 —— 两块同时在场，人会以为下面那堆也属于这个筛选');
+    assert.match(diary, /\{moduleValue === 'private' && \(gate\.available === false \|\| gate\.unlocked\) && moodFilter === null && \(/,
+      '筛选时写入口还开着 —— 写进去会落到「今天」，而屏幕上是一张整月列表');
+    assert.match(diary, /\{moodFilter !== null && \(\s*\n\s*<section className="npr-diary-moodview"/,
+      '没有整月列表这一块');
+    assert.match(diary, /onClick=\{\(\) => pick\(row\.date\)\}/, '整月列表点一行没有回到那一天');
+  });
+
+  it('★ 换天 / 切模块 / 上锁都要退出情绪筛选', () => {
+    // 反向对照：漏掉任何一处，都会出现「人在 3 号，顶部却写着只看本月 😄」。
+    const pick = diary.slice(diary.indexOf('const pick = (date, opts = undefined) => {'));
+    assert.match(pick.slice(0, pick.indexOf('\n  };')), /setMoodFilter\(null\)/,
+      'pick() 没有退出情绪筛选');
+    assert.match(diary, /setMoodFilter\(null\);\s*\n\s*setDraft\(''\);/, 'lockNow() 没有退出情绪筛选');
+    assert.equal((diary.match(/setMoodFilter\(null\)/g) ?? []).length >= 3, true,
+      '退出筛选的地方少于三处（换天 / 切模块 / 上锁）');
+  });
+
+  it('★ 面板请求要带齐 date / today / month 三个日期', () => {
+    const api = read('diary-api.js');
+    assert.match(api, /export async function fetchDiaryDashboard\(\{ date, today, month \}\)/,
+      'fetchDiaryDashboard 的入参不是三个（date/today/month 各有各的用途）');
+    assert.match(api, /if \(month\) params\.set\('month', month\);/, '没有把 month 传给宿主');
+    assert.match(diary, /fetchDiaryDashboard\(\{ date: selected, today, month: monthKey \}\)/,
+      '调用点没把「正在看的那天 / 真实今天 / 日历显示的月」分开传');
+    // 三种变化都要重拉：翻月、换天、解锁
+    assert.match(diary, /\}, \[moduleValue, monthKey, selected, gate\.unlocked\]\);/,
+      '面板没跟着翻月 / 换天 / 解锁刷新 —— 数字会停在上一次');
+  });
+});

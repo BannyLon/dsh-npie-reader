@@ -557,3 +557,86 @@ describe('GET /day 与 DELETE 的 scope', () => {
     assert.match(res.json.error, /解不开|密钥/);
   });
 });
+
+/**
+ * 侧栏那两块卡片（0.43）：`GET /dashboard`。
+ *
+ * ★ 这一组里最要紧的一条是**闸门兜底**：store 手里有钥匙（`fullStore` 注入了密钥），
+ *   所以 decrypt **会成功**。若只靠「解不开就不给」，锁上闸门后照样会把心情分布、
+ *   字数、摘要一起发出去 —— 而界面看起来只是「显示得挺正常」。
+ *   所以断言必须构造「钥匙可用 + 闸门锁着」这个组合。
+ */
+describe('GET /dashboard', () => {
+  const DASH = '/dashboard?date=2026-08-02&today=2026-08-02&month=2026-08';
+
+  async function callDash(path, options = {}, { allow = true } = {}) {
+    // ★ 必须把 `ready` 要求的那几条也接上：只接 `dashboard` 会让 handler 在门口
+    //   就回 501「日记存储没有接上」，四条断言会一起变红，而看起来像路由没写。
+    const api2 = makeDiaryRoutes({
+      read: date => fullStore.read(date),
+      readFull: date => fullStore.readFull(date),
+      append: entry => fullStore.append(entry),
+      removeEntry: entry => fullStore.removeEntry(entry),
+      listMonth: month => fullStore.listMonth(month),
+      dashboard: opts => fullStore.dashboard(opts),
+      search: options2 => fullStore.search(options2),
+      exportAll: options2 => fullStore.exportAll(options2),
+      stats: () => fullStore.stats(),
+      gate: { allow: () => allow },
+      log: () => {},
+    });
+    const res = fakeRes();
+    await api2.handler(fakeReq({ url: `${API}${path}`, ...options }), res);
+    return res;
+  }
+
+  before(async () => {
+    await fullStore.append({ date: '2026-08-02', time: '08:00', body: '开心的一天', vis: 'private', meta: { mood: '🙂' } });
+    await fullStore.append({ date: '2026-08-02', time: '09:00', body: '还行吧', vis: 'private', meta: { mood: '😐' } });
+    await fullStore.append({ date: '2025-08-02', time: '21:00', body: '去年的今天', vis: 'private' });
+  });
+
+  it('没接上 dashboard ⇒ 501（不能让整个前缀挂掉）', async () => {
+    assert.equal((await call('/dashboard?date=2026-08-02')).status, 501);
+    assert.equal((await callFull('/dashboard?date=2026-08-02')).status, 501);
+  });
+
+  it('日期或月份非法 ⇒ 400', async () => {
+    assert.equal((await callDash('/dashboard?date=2026-13-01')).status, 400);
+    assert.equal((await callDash('/dashboard?date=2026-08-02&month=2026-8')).status, 400);
+    assert.equal((await callDash('/dashboard')).status, 400);
+  });
+
+  it('方法不对 ⇒ 405', async () => {
+    assert.equal((await callDash(DASH, { method: 'POST' })).status, 405);
+  });
+
+  it('闸门开着 ⇒ 200，情绪分布与那年今日都在', async () => {
+    const res = await callDash(DASH);
+    assert.equal(res.status, 200);
+    assert.equal(res.json.ok, true);
+    assert.equal(res.json.locked, false);
+    assert.deepEqual(res.json.moods, [{ score: 4, count: 1 }, { score: 3, count: 1 }]);
+    assert.equal(typeof res.json.chars, 'number');
+    assert.deepEqual(res.json.onThisDay.map(cell => [cell.date, cell.years]), [['2025-08-02', 1]]);
+    assert.equal(res.json.onThisDay[0].preview, '去年的今天');
+  });
+
+  it('★ 闸门锁着 ⇒ 只给天数与连续天数，正文/字数/情绪一律摘掉', async () => {
+    // ★ 反向对照写在同一个用例里：同一个 store、同一个请求，只翻 `allow` 这一位。
+    const open = await callDash(DASH);
+    assert.equal(open.json.locked, false);
+    assert.notEqual(open.json.chars, null, '闸门开着时字数该是个数');
+
+    const shut = await callDash(DASH, {}, { allow: false });
+    assert.equal(shut.status, 200);
+    assert.equal(shut.json.locked, true);
+    assert.equal(shut.json.chars, null, '锁着时给 0 或给真值都是漏 —— 必须是 null（不知道）');
+    assert.deepEqual(shut.json.moods, []);
+    assert.deepEqual(shut.json.moodEntries, {});
+    assert.deepEqual(shut.json.onThisDay, [{ date: '2025-08-02', years: 1, locked: true }],
+      '锁着时「那年今日」只该剩日期与年份差，摘要必须摘掉');
+    assert.equal(shut.json.days, open.json.days, '天数不涉内容，锁着也要给');
+    assert.equal(shut.json.streak, open.json.streak, '连续天数不涉内容，锁着也要给');
+  });
+});
