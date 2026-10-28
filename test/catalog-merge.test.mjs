@@ -267,10 +267,11 @@ describe('目录数据文件的自我一致性', () => {
   test('Newsletter 目录：条目数与地址形态正确、地址不重复', () => {
     // 9 = 2026-10-08 从公众号清单实测的 9 条 − 2026-10-09 停更超一年被裁掉的 2 条
     //     （AI Valley / Grace Leung）+ 同日用户补的 TLDR AI / Daily Dose of DS。
-    // （同日 The Neuron 因「正文永远抓不到」被摘除，见下一条。）
+    // 18 = 上面那 9 条 + 2026-10-28 用户问「还有哪些 AI Newsletter 你没收录」后
+    //     对 24 个候选直连实测、补入的 9 条（全部当轮有更新，最旧 2026-09-09）。
     // 数量写死是**故意**的：每条都得逐条真实请求测过才允许进目录，
     // 跟着文件自动变的话，「随手加一条从没测过的地址」就没人拦。
-    assert.equal(newsletters.items.length, 9, '内置 Newsletter 源是 9 个（每条都逐条实测过）');
+    assert.equal(newsletters.items.length, 18, '内置 Newsletter 源是 18 个（每条都逐条实测过）');
     const urls = newsletters.items.map((entry) => entry.url);
     assert.equal(new Set(urls).size, urls.length, '同一个地址两行会让「隐藏」看起来失灵');
     for (const entry of newsletters.items) {
@@ -310,13 +311,19 @@ describe('目录数据文件的自我一致性', () => {
   });
 
   test('The Neuron 摘除后不许再从 items 溜回来（它只能待在 unavailable 里）', () => {
-    // 摘除是 2026-10-09 用户看过实测结论后拍板的，不是「抓不到就删掉」：
-    // feed 是好的，坏的是文章页（Cloudflare 托管挑战）⇒ 点开永远是空正文 / 仅摘要。
+    // 摘除是 2026-10-09 用户看过实测结论后拍板的，不是「抓不到就删掉」。
+    // ★ 2026-10-28 复测**改了原因判定**：原先记 partial（「feed 好、正文抓不到」），
+    //   现在整站都在 Cloudflare 挑战后面 —— `/rss/` 返回 403 + `cf-mitigated: challenge`
+    //   + 正文「Just a moment...」，`/feed` 与 `/rss` 直接连不上。
+    //   也就是说**连 feed 本身都拿不到**，所以判 blocked 而不是 partial。
+    //   结论方向没变（照样摘除），变的是「为什么」—— 理由错了，将来想恢复的人会照着
+    //   错的方向去查（以为只要正文抓取修好就行，实际得先让 Cloudflare 放开 feed 路径）。
     const inItems = newsletters.items.some((entry) => entry.name === 'The Neuron');
-    assert.equal(inItems, false, 'The Neuron 不该在 items 里 —— 它的正文永远抓不到');
+    assert.equal(inItems, false, 'The Neuron 不该在 items 里 —— 整站都在 Cloudflare 挑战后面');
     const parked = newsletters.unavailable.find((entry) => entry.name === 'The Neuron');
     assert.ok(parked, '摘除不等于删记录，得留在 unavailable 里说明为什么');
-    assert.equal(parked.reason, 'partial', '它是「feed 好、正文抓不到」，不是「被墙」也不是「没开 feed」');
+    assert.equal(parked.reason, 'blocked', '2026-10-28 复测：feed 路径本身也是 Cloudflare 挑战（403）');
+    assert.match(parked.detail, /2026-10-28/, 'detail 必须写明是哪一次复测改的结论');
   });
 
   test('停更超一年被裁掉的两条不许悄悄溜回来，且必须留在 retired/ 里', () => {
@@ -357,12 +364,26 @@ describe('目录数据文件的自我一致性', () => {
     }
   });
 
-  test('pruned.to 与真实条目数一致（否则界面上那句「现留 N 条」就是假话）', () => {
+  test('pruned 是历史快照：裁剪后的数量 + 之后新增 = 当前条目数', () => {
+    // 独立博客：目录同步进来之后没再增删 ⇒ `to` 就是当前条目数，直接钉死。
     assert.equal(blogs.pruned.to, blogs.items.length);
     assert.ok(blogs.pruned.from > blogs.pruned.to);
-    // Newsletter 现在也走裁剪（删除线 365 天），同一个不变量要一起钉住。
-    assert.equal(newsletters.pruned.to, newsletters.items.length);
-    assert.ok(newsletters.pruned.from > newsletters.pruned.to);
+    // ★ Newsletter 不一样：`pruned.to` 记的是 **2026-10-09 那次裁完剩几条**，不等于当前条目数 ——
+    //   目录后来还会新增（2026-10-28 补了 9 条）。所以不能直接 `to === items.length`，
+    //   否则「新增一个源」就会被判成数据错乱。
+    //   要钉的是这条恒等式：**裁完的数量 + 之后记账的新增 = 现在几条**。
+    //   它比原来那条更强 —— 新增了源却不记账，这里就红，而 `pruned.to` 也就再也解释不清了。
+    assert.ok(newsletters.pruned.from > newsletters.pruned.to, '那次裁剪确实减少了条目');
+    const added = newsletters.pruned.addedSince?.count ?? 0;
+    assert.equal(
+      newsletters.items.length,
+      newsletters.pruned.to + added,
+      '条目数对不上「裁完剩几条 + 之后新增几条」—— 有人加了源却没在 pruned.addedSince 里记账',
+    );
+    // 反向对照：addedSince 存在时必须带日期，否则「什么时候加的」无从追溯。
+    if (newsletters.pruned.addedSince) {
+      assert.ok(Number.isFinite(Date.parse(newsletters.pruned.addedSince.at)), 'addedSince 缺 at');
+    }
   });
 
   test('体检快照与目录同口径：每条快照都还在目录里，顶层计数等于条目数', () => {

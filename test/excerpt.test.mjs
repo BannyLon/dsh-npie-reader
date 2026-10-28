@@ -35,11 +35,16 @@ describe('0.44.9：摘录 —— 载荷', () => {
     assert.equal(excerptEntry({}), null);
   });
 
-  it('source 是「标题 · 频道名」，缺哪个就少哪个', () => {
-    assert.equal(excerptEntry({ quote: 'x', title: '标题', channelName: '某博客' }).source, '标题 · 某博客');
-    assert.equal(excerptEntry({ quote: 'x', title: '标题' }).source, '标题');
-    assert.equal(excerptEntry({ quote: 'x', channelName: '某博客' }).source, '某博客');
-    assert.equal(excerptEntry({ quote: 'x' }).source, '');
+  it('source 是「摘录 · 标题 · 频道名」，缺哪个就少哪个', () => {
+    assert.equal(excerptEntry({ quote: 'x', title: '标题', channelName: '某博客' }).source, '摘录 · 标题 · 某博客');
+    assert.equal(excerptEntry({ quote: 'x', title: '标题' }).source, '摘录 · 标题');
+    assert.equal(excerptEntry({ quote: 'x', channelName: '某博客' }).source, '摘录 · 某博客');
+    // 一个来源都没有时只剩「摘录」—— 也不能是空串，否则标题行上看不出这是引来的
+    assert.equal(excerptEntry({ quote: 'x' }).source, '摘录');
+  });
+
+  it('★ 标题里的换行会被折叠（否则日记那一行断成两行）', () => {
+    assert.equal(excerptEntry({ quote: 'x', title: '第一行\n第二行' }).source, '摘录 · 第一行 第二行');
   });
 
   it('★ meta.article 能过宿主白名单（否则日记里回不到那篇文章）', () => {
@@ -72,9 +77,13 @@ describe('0.44.9：摘录 —— 载荷', () => {
 describe('0.44.9：摘录 —— 组件接线', () => {
   const reader = stripComments(readFileSync(join(pluginRoot, 'src', 'client', 'ReaderPage.jsx'), 'utf8'));
 
-  it('菜单里有「摘录选中段落到日记」', () => {
-    assert.match(reader, /摘录选中段落到日记/);
+  it('菜单里有「摘录到灵感」', () => {
+    assert.match(reader, /摘录到灵感/);
     assert.match(reader, /void excerptToDiary\(\)/);
+  });
+
+  it('★ 提示条说清写到哪个模块（用户看的是「私密日记」时不会以为坏了）', () => {
+    assert.match(reader, /已摘录到「灵感速记」/);
   });
 
   it('★ 只在有选中时渲染（不做「常驻 + disabled」）', () => {

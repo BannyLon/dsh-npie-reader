@@ -120,6 +120,14 @@ const OWNED_ATTRS = new Set([
   //   三者都只服务于本插件自己的样式，宿主完全不认识 —— 登记进 HOST_ANCHORS 会被
   //   上面那条「宿主产物里必须命中」的反向检查判红（`data-image` 尤其容易撞车）。
   'data-kind', 'data-image', 'data-drop',
+  // 文章大纲（0.44.8）自己写的两个：
+  //   `data-outline` —— 每个标题上的锚点下标（**不用 `id`**：`id` 会被类名检查脚本当成
+  //     类名报缺口，也可能和文章自带的锚点撞名），点目录时按它 `scrollTo`；
+  //   `data-level` —— 标题层级（1–4），自有 CSS 按它缩进目录行。
+  //   ★ 这两个是 0.44.8 引入时的**欠账**：当时没登记，守卫直到 0.45.0 跑
+  //     `contract-guard` 才报出来（同一轮里大纲按钮换了图标，但错误与图标无关）。
+  //     仍然是本插件自己的 DOM 契约，宿主完全不认识 ⇒ 不能进 HOST_ANCHORS。
+  'data-outline', 'data-level',
 ]);
 
 

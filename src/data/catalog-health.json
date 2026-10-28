@@ -1,16 +1,16 @@
 {
- "generatedAt": "2026-10-09T03:29:13.143Z",
+ "generatedAt": "2026-10-28T16:14:01.421Z",
  "checkedAt": {
   "独立博客": "2026-10-08T03:37:46.876Z",
-  "Newsletter": "2026-10-09T03:29:13.143Z"
+  "Newsletter": "2026-10-28T16:14:01.421Z"
  },
- "checked": 413,
- "total": 413,
- "reachable": 413,
- "withDate": 403,
- "usable30": 273,
- "stale90": 0,
- "failed": 0,
+ "checked": 422,
+ "total": 422,
+ "reachable": 421,
+ "withDate": 411,
+ "usable30": 169,
+ "stale90": 24,
+ "failed": 1,
  "recheckedAt": "2026-10-09T03:29:22.305Z",
  "recheck": {
   "attempts": 2,
@@ -2463,55 +2463,109 @@
    "url": "https://www.therundown.ai/feed",
    "category": "Newsletter",
    "ok": true,
-   "newestAt": 1791450000000
+   "newestAt": 1793181600000
   },
   {
    "url": "https://blog.google/rss",
    "category": "Newsletter",
    "ok": true,
-   "newestAt": 1791498600000
+   "newestAt": 1793196000000
   },
   {
    "url": "https://charonhub.deeplearning.ai/feed",
    "category": "Newsletter",
    "ok": true,
-   "newestAt": 1791388187000
+   "newestAt": 1793038860000
   },
   {
    "url": "https://www.technologyreview.com/topic/artificial-intelligence/feed",
    "category": "Newsletter",
    "ok": true,
-   "newestAt": 1791504504000
+   "newestAt": 1793188800000
   },
   {
    "url": "https://newsletter.towardsai.net/feed",
    "category": "Newsletter",
    "ok": true,
-   "newestAt": 1791392157000
+   "newestAt": 1792596498000
   },
   {
    "url": "https://www.latent.space/feed",
    "category": "Newsletter",
-   "ok": true,
-   "newestAt": 1791502183000
+   "ok": false,
+   "error": "This operation was aborted"
   },
   {
    "url": "https://www.itsmodernmillie.com/feed",
    "category": "Newsletter",
    "ok": true,
-   "newestAt": 1791408092000
+   "newestAt": 1793196039000
   },
   {
    "url": "https://tldr.tech/api/rss/ai",
    "category": "Newsletter",
    "ok": true,
-   "newestAt": 1791417600000
+   "newestAt": 1793145600000
   },
   {
    "url": "https://blog.dailydoseofds.com/feed",
    "category": "Newsletter",
    "ok": true,
-   "newestAt": 1791499162000
+   "newestAt": 1793145498000
+  },
+  {
+   "url": "https://www.oneusefulthing.org/feed",
+   "category": "Newsletter",
+   "ok": true,
+   "newestAt": 1792511879000
+  },
+  {
+   "url": "https://www.interconnects.ai/feed",
+   "category": "Newsletter",
+   "ok": true,
+   "newestAt": 1793192319000
+  },
+  {
+   "url": "https://www.ai-supremacy.com/feed",
+   "category": "Newsletter",
+   "ok": true,
+   "newestAt": 1793178937000
+  },
+  {
+   "url": "https://lastweekin.ai/feed",
+   "category": "Newsletter",
+   "ok": true,
+   "newestAt": 1791522418000
+  },
+  {
+   "url": "https://news.smol.ai/rss.xml",
+   "category": "Newsletter",
+   "ok": true,
+   "newestAt": 1788932679000
+  },
+  {
+   "url": "https://magazine.sebastianraschka.com/feed",
+   "category": "Newsletter",
+   "ok": true,
+   "newestAt": 1792840472000
+  },
+  {
+   "url": "https://simonwillison.net/atom/everything/",
+   "category": "Newsletter",
+   "ok": true,
+   "newestAt": 1793195715000
+  },
+  {
+   "url": "https://openai.com/news/rss.xml",
+   "category": "Newsletter",
+   "ok": true,
+   "newestAt": 1793179800000
+  },
+  {
+   "url": "https://deepmind.google/blog/rss.xml",
+   "category": "Newsletter",
+   "ok": true,
+   "newestAt": 1793116898000
   }
  ]
 }

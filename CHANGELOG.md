@@ -1,5 +1,112 @@
 # Changelog
 
+## 0.45.0 — 2026-10-28
+
+**主题：把「摘录」从三步压成一步，把图标语义摆回它该在的位置，把 Newsletter 目录补齐。**
+
+起因是用户看完 0.44.9 之后的四句话：①「有没有我的插件没有收录的 AI Newsletter，可以加进来」
+②「图标 T 改成点击打开的是阅读设置；然后大纲用这个图标」③「这一条新功能没成功啊」
+④「摘录选中段落到日记没有成功啊」—— 以及最后一句真正定方向的：
+**「现在的操作是我选中文本 → 点右上角「…」→ 菜单里选「摘录到灵感」，有没有更快捷的操作？」**
+
+### ① 选中文字就浮出操作条（不用再绕「…」菜单）
+
+选中正文任意一段，选区上方浮出一条小工具条：**「摘录到灵感」**（写进今天的灵感速记）与
+**「问 AI」**（带这段进右侧伴读）。三步变一步。
+
+- ★ **不再「一选中就自动打开伴读面板」**。以前 `captureSelection` 里是
+  `setPassage(found); if (found) openCompanion(found.quote);`。后果两个：① 面板一开，
+  `.npr-layout` 从两列变单列（`has-companion`），正文区整体变宽 —— 刚选中的那段
+  **在屏幕上跳一下**，浮出来的操作条也会锚在旧坐标上；② 只想记一句话的人，每次都要先
+  关掉一个面板。
+- ★ **但伴读面板本来就开着时仍跟随新选区**（`if (askContext) openCompanion(found.quote)`）。
+  那时布局早就是两列了，不存在跳动，而用户的意图明显是「就这段问 AI」。
+  不做这一条，「开着伴读选中却不跟随」会被当成回归。
+- ★ **定位抽成纯函数** `src/client/selection-bar.js` 的 `selectionBarPlacement(rect, viewport)`：
+  上方放不下翻到下方 / 上下都放不下贴底部 / 左右夹进窗口 / 空 range（0×0）不浮条。
+  这四条边界埋在组件里就只能靠肉眼在真机上碰；抽出去之后能直接喂矩形断言。
+- ★ **点工具条自己不算「点外面」**（`closest('.npr-selection-bar')`）—— 漏掉这一条，
+  按钮会在 `click` 之前就被卸载，症状正是用户报的那个「点了没反应」。
+- ★ 按下按钮 `preventDefault`：不这么做，那一下会把选区折叠掉，用户看到选中高亮在点下去的
+  瞬间消失，像点了个空。
+- ★ 收起条件**三条都要有**：点外面 / 滚动 / `Esc`。只写点外面的话，滚动时它会停在半空，
+  看着像贴在别的内容上。
+- 工具条按钮样式**逐条写死**：宿主的全局 `button` 规则会把它撑成整行（和 `.npr-menu button`
+  同一个理由）。
+
+### ② 图标语义归位：`T` = 阅读设置，列表树 = 大纲
+
+用户原话：「图标 T 改成点击打开的是阅读设置；然后大纲用这个图标」。
+
+- 在此之前 `T` 开着**文章大纲**、阅读设置藏在「…」菜单里。「T 是 typography」比
+  「T 是 table of contents」更直白，而大纲本来就该用一棵**列表树**表示。
+- 新增图标 `list-tree`（`src/client/icons.jsx`），大纲按钮换成它；`T` 那颗接
+  `setAppearanceOpen` 并带 `aria-expanded`。
+- ★ 这不是「换个图标」：两个按钮的**点击目标对调**了，所以断言钉的是
+  「`aria-label="阅读设置"` 的那颗用的是 `type` 图标」+「大纲那颗用的是 `list-tree`」，
+  而不是「文件里有 list-tree 这个图标」—— 后者换个地方用也能通过。
+
+### ③ Newsletter 目录补 9 条（9 → 18）
+
+用户第一句话是「你看看它收录了这几年常看的十多个 AI Newsletter，有没有我的插件没有收录的」。
+对着 24 个候选**直连实测**（Node 的 `fetch` 不读 `HTTP_PROXY`，所以这测的就是插件抓取的
+实际路径），补入当轮确有更新的 9 条：
+
+One Useful Thing（Ethan Mollick）· Interconnects（Nathan Lambert）· AI Supremacy ·
+Last Week in AI · AINews（smol.ai）· Ahead of AI（Sebastian Raschka）·
+Simon Willison's Weblog · OpenAI News · Google DeepMind Blog
+
+- ★ **探针加了一条判据：最新一条的日期**。能抓到不等于该收 —— The Gradient 最新一篇停在
+  2026-02-18（八个月）、Lilian Weng 四个月一篇，**收一个停更的源，用户只会以为插件坏了**。
+  同理 Alignment Forum 是讨论区不是电子报、Pragmatic Engineer 不写 AI，都没收。
+- ★ **同轮改了两条旧结论**：
+  - **The Neuron：`partial` → `blocked`**。原先记的是「feed 好、只是正文抓不到」，
+    复测发现整站都在 Cloudflare 挑战后面（`/rss/` 403 + `cf-mitigated: challenge` +
+    正文「Just a moment...」）。结论方向没变（照样摘除），变的是**为什么** ——
+    理由写错了，将来想恢复的人会照着错的方向查。
+  - **Ben's Bites：新增记 `no-feed`**。`/feed` 与 `/feed.xml` 都返回 200，但内容是
+    **82 KB 的 Substack 首页 HTML**，根元素不是 rss/feed。
+- ★ **`*.substack.com` 那批仍记为 `network`，不写成「源有问题」**：本机对整片 Substack 不通
+  （Algorithmic Bridge / Import AI / The Sequence / Data Machina / ChinAI 五条都是
+  `fetch failed`）。**这既不证明源坏了，也不证明插件取得到** —— 换个网络环境值得重测。
+- ★ `pruned` 加了 `addedSince` 记账：`pruned.to` 是「2026-10-09 那次裁完剩 9 条」，
+  **不等于当前条目数**。测试原来钉 `pruned.to === items.length`，一新增就红；
+  改成钉恒等式「裁完的数量 + 之后记账的新增 = 现在几条」—— 比原来更强，加了源却不记账就红。
+- ★ 体检快照跟着重跑（`--only Newsletter`）：18 条全部进快照，17 条抓到、
+  16 条 30 天内有更新。**新增的 9 条一条不落**，否则界面上它们永远没有「最新一篇 N 天前」。
+
+### ④ 体检失败会重试一次
+
+补源时踩出来的真问题：`www.latent.space/feed` 有 **1.38 MB**、单次要 **7.7 秒**，
+`blog.google/rss` 要 10 秒以上，而体检默认 12s 超时在并发 8 下必然把它们挤掉 ⇒
+快照记 `ok: false` ⇒ 界面上那行写「上次体检没抓到」。用户读到的是「这个源坏了」，可它好端端的。
+
+- 加一次重试（间隔 800ms）。同一轮从 **16/18 → 17/18**。
+- ★ 仍有一条过不去：`latent.space` 并发下两次 15s 都超时。它**不是死的**（单测 7.7 秒拿得到）。
+  判据是「快照是快照」：`ok: false` 只说明**那一次没抓到**，界面文案本来就不说「已停更」。
+  真要让它也说好，得单独调大超时或串行跑，代价是体检变慢 —— 暂时留着，写进 README。
+
+### 测试与反向对照
+
+| 文件 | 用例 |
+|---|---|
+| `test/selection-bar.test.mjs` | 18（新增） |
+| `test/excerpt.test.mjs` | 14 |
+| `test/catalog-merge.test.mjs` | 38 |
+
+反向对照 `.build/preview/check-selectionbar-mutant.mjs` **8 条**：上方贴边不翻转 / 横向不夹取 /
+空 range 也浮条 / 点工具条自己算点外面 / 滚动不收起 / 无条件开伴读 / 面板开着不跟随 /
+工具条按钮只关条不摘录 —— 全部必须变红**且报对理由**，跑完源码逐字节还原。
+
+其中一条最初**没有牙**：断言写的是全文件 `assert.match(/void excerptToDiary\(\)/)`，
+而「…」菜单里也有一份同样的调用 ⇒ 变异体「工具条按钮只关条不摘录」照样全绿。
+改成**先切片再断言**（从 `className="npr-selection-bar"` 切到 `npr-toast`），并加一条
+「切片长度 > 100 且含按钮文案」的守卫 —— 边界找错时它会先红，而不是让下面几条变成空转。
+
+另一条最初**红了但理由不对**：`if (askContext)` 那个判断被两条断言同时守着，
+顺序决定了报哪句 message。调成先 `doesNotMatch`（无条件）后 `match`（要跟随），
+两条变异才各自报对。
+
 ## 0.44.9 — 2026-10-28
 
 **主题：把「RSS 阅读」补齐到能日常用的程度 —— 阅读位置、可撤销隐藏、导出 Markdown、
@@ -42,16 +149,24 @@
   兜底入口是筛选行里那个「已隐藏 N」，只在真的有东西藏着时出现。
 - 老数据里 `hidden` 是数组时要归一成对象：`obj[key] = …` 挂到数组上既不报错也不生效。
 
-### ④ 选中段落 → 摘录到日记
+### ④ 选中段落 → 摘录到「灵感」
 
 以前想留一句原文：选中 → 唤起 AI 伴读 → 从对话里复制 → 再按 L 粘一遍，四步，而且中间
 那步会顺手把 AI 的回答也带进来。
 
+- ★ **不叫「摘录到日记」，也不新增条目类型**：日记页那三个是**功能模块**（灵感速记 /
+  私密日记 / 读后感），不是条目类型；`diary-format.js` 里 `ENTRY_KINDS` 只认
+  `灵感 / 日记 / 读后感`，不认的值会被**静默兜成「灵感」**。第一版传的是 `kind: '摘录'`，
+  于是条目真的写进去了、类型却被改写成「灵感」—— 用户报的「摘录选中段落到日记没有成功」
+  就是这个：他打开的是**私密日记**那一栏，而摘录进的是**公开**那一侧。
+  现在 `EXCERPT_KIND = '灵感'`、提示写「已摘录到「灵感速记」」并给一颗「去看看」。
 - 只在**真有选中**时渲染那一项（不做「常驻 + `disabled`」—— 本项目栽过「有 disabled 属性
   但看不出灰」的跟头）。
-- `source`（「标题 · 频道名」）给人看，`meta.article`（文章 key）给程序反查，两个都写。
+- `source`（「摘录 · 标题 · 频道名」）给人看，`meta.article`（文章 key）给程序反查，两个都写。
 - ★ 载荷构造抽成纯函数 `excerptEntry`，测试把它喂给宿主的 `normalizeMeta` 真跑一遍白名单
   —— 白名单会**静默丢掉**不认的键，只看客户端传了什么永远发现不了。
+- ★ 标题里的换行会把日记标题行断成两行，而宿主 `assertEntryInput` 只 `trim().slice(0,300)`、
+  **不挡换行** ⇒ `source` 各段自己 `.replace(/\s+/g, ' ').trim()`。
 
 ### ⑤ 导出 Markdown
 
@@ -89,7 +204,7 @@
 | `test/hidden-articles.test.mjs` | 21 |
 | `test/article-markdown.test.mjs` | 25 |
 | `test/channel-state.test.mjs` | 17 |
-| `test/excerpt.test.mjs` | 12 |
+| `test/excerpt.test.mjs` | 14 |
 
 反向对照三份（`.build/preview/check-readposition-mutant.mjs` 6 条 / `check-hidden-mutant.mjs`
 6 条 / `check-0449-mutant.mjs` 8 条）：改坏实现后测试必须变红**并报对理由**，

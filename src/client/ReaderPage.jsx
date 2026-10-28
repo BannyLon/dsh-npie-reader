@@ -24,6 +24,7 @@ import { articleToMarkdown, downloadText, markdownFileName } from './article-mar
 import { Discover } from './Discover.jsx';
 import { MediaDock } from './MediaDock.jsx';
 import { quoteRange, selectedPassage } from './selection.js';
+import { selectionBarPlacement } from './selection-bar.js';
 import { AskArticle } from './AskArticle.jsx';
 import { articleAudioUrl } from '../media.js';
 import { formatDay, formatFullDay } from './format-time.js';
@@ -256,6 +257,14 @@ const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--
    实心块会把这条提示读成「确认/取消」对话框，而它只是一句话加一个后悔的机会。 */
 .npr-toast-action{padding:2px 8px;font:inherit;font-size:12.5px;font-weight:600;color:var(--npr-accent-strong);background:var(--npr-hover);border:0;border-radius:6px;cursor:pointer}
 .npr-toast-action:hover{background:var(--npr-border-strong)}
+/* 选中文本后浮在选区上方的操作条（0.45.0）。
+   ★ 用 position:fixed 而不是 absolute：选区可能在滚动容器里，absolute 会跟着内容走。
+   ★ 按钮样式逐条写死：宿主的全局 button 规则会把它撑成整行（和 .npr-menu button 同一个理由）。
+   ★ 这段在模板串里，注释里不能出现反引号。 */
+.npr-selection-bar{position:fixed;z-index:70;display:flex;align-items:center;gap:2px;padding:3px;background:var(--npr-surface);border:.5px solid var(--npr-border-strong);border-radius:9px;box-shadow:var(--npr-elevation);transform:translateX(-50%)}
+.npr-selection-bar button{display:flex;align-items:center;gap:5px;padding:4px 9px;font:inherit;font-size:12.5px;color:var(--npr-fg);background:transparent;border:0;border-radius:6px;cursor:pointer;white-space:nowrap}
+.npr-selection-bar button:hover{background:var(--npr-hover)}
+.npr-selection-bar button.is-primary{color:var(--npr-accent-strong);font-weight:600}
 .npr-menu{position:absolute;top:36px;right:0;min-width:210px;padding:5px;background:var(--npr-surface);border:.5px solid var(--npr-border-strong);border-radius:10px;box-shadow:var(--npr-elevation);z-index:20;display:flex;flex-direction:column}
 .npr-menu button{display:flex;align-items:center;gap:9px;padding:7px 10px;font:inherit;font-size:13px;text-align:left;color:var(--npr-fg);background:transparent;border:0;border-radius:6px;cursor:pointer}
 .npr-menu button:hover:not(:disabled){background:var(--npr-hover)}
@@ -831,6 +840,8 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   const fetchingFullTextRef = useRef(false);
   const reloadingArticleRef = useRef(false);
   const [passage, setPassage] = useState(null);
+  /** 选中文本后浮在选区上方的那条操作栏：`{ top, left }`；`null` = 不显示。 */
+  const [selectionBar, setSelectionBar] = useState(null);
   const selectionSerial = useRef(0);
   const proseRef = useRef();
   const rootRef = useRef();
@@ -844,7 +855,7 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   //   写也就一起删 —— 只写不读的持久化会让人以为还有人在用，下次又照着它加回去。
   //   老用户 localStorage 里那几条记录**不动**：没人读，留着无害，专门去清理反而多一次写盘。
 
-  useEffect(() => { setPassage(null); }, [selected?.article?.key]);
+  useEffect(() => { setPassage(null); setSelectionBar(null); }, [selected?.article?.key]);
   useEffect(() => {
     const highlights = globalThis.CSS?.highlights;
     const HighlightType = globalThis.Highlight;
@@ -1466,15 +1477,20 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   };
 
   /**
-   * 把**选中的那一段**摘进今天的日记（0.44.9）。
+   * 把**选中的那一段**摘进「灵感速记」（0.44.9）。
    *
    * ★ 与「灵感速记（L）」的分工：速记记的是**你自己想的话**，摘录记的是**原文里
    *   那一段**。以前想留一句原文，只能先选中 → 唤起 AI 伴读 → 从对话里复制 → 再按 L
    *   粘一遍，四步；而且中间那一步会顺手把 AI 的回答也带进来。
+   * ★ 落到**灵感**而不是新开一个「摘录」类型：`ENTRY_KINDS` 是白名单
+   *   （`灵感 / 日记 / 读后感`），自造类型会被宿主**静默**改成「灵感」——
+   *   而 `src/diary-format.js` 里本来就写着「金句摘录属于读后感模板的一部分，
+   *   不是一种条目类型」。所以这里用 `kind: '灵感'`，靠 `source` 开头的「摘录」
+   *   在标题行上区分来源（见 `excerpt.js`）。
    * ★ `meta.article` 存文章的 key：日记里那条因此能反查到是哪一篇（`normalizeMeta`
    *   白名单认这个字段，见 `src/diary-format.js`）。`source` 是**给人看**的那一行，
    *   两个都写、各管一头。
-   * ★ 没选中就明说，而不是静默失败：菜单项在没选中时是禁用的，但快捷键/程序路径
+   * ★ 没选中就明说，而不是静默失败：菜单项在没选中时是条件渲染的，但程序路径
    *   仍可能走到这里 —— 点了什么都不发生是最难查的一种。
    */
   const excerptToDiary = async () => {
@@ -1488,7 +1504,11 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     if (!entry) { notify('先在正文里选中一段文字，再摘录', true); return; }
     try {
       await appendDiaryEntry(entry);
-      notify('已摘录到今天的日记');
+      /* ★ 必须说清**写到了哪个模块**：日记页有三个模块，摘录进的是「灵感速记」
+       *   （公开那一侧）。只说「已摘录到日记」，用户去「私密日记」里找就会看到
+       *   「今天 0 条」，然后合理地认为这个功能坏了 —— 0.44.9 第一版就是这样。
+       * ★ 顺手给一颗「去看看」：把「去哪儿看」从一句话变成一个动作。 */
+      notify('已摘录到「灵感速记」', false, { label: '去看看', onClick: () => setMode('diary') });
     } catch (error) {
       notify(`摘录失败：${error?.message ?? String(error)}`, true);
     }
@@ -1679,7 +1699,52 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     await loadPage(undefined, true);
     notify(`已订阅${label}`);
   };
-  const captureSelection = () => { const found = selectedPassage(proseRef.current); if (found?.quote === passage?.quote) return; setPassage(found); if (found) openCompanion(found.quote); };
+  /**
+   * 选中文本之后做什么（`onMouseUp` / `onKeyUp`）。
+   *
+   * ★ 0.45.0 改了交互：以前**一选中就自动打开右侧 AI 伴读面板**。后果有两个：
+   *   ① 面板一开，`.npr-layout` 从两列变成单列（`has-companion`），正文区整体变宽 ——
+   *      用户刚选中的那一段**在屏幕上跳了一下**，浮出来的操作条也会锚在旧坐标上；
+   *   ② 只是想把一句话记下来的用户，每次都要先关掉一个面板。
+   *   现在改成在选区上方浮一条小工具条（「摘录到灵感」/「问 AI」），点「问 AI」才开面板。
+   * ★ 定位用 `quoteRange`（高亮那套已经验证过的 range 重建），不是 `window.getSelection()`：
+   *   后者在 `onKeyUp` 那条路径上（用键盘扩选）已经不稳定。
+   */
+  const captureSelection = () => {
+    const found = selectedPassage(proseRef.current);
+    if (!found) { setPassage(null); setSelectionBar(null); return; }
+    if (found.quote === passage?.quote && selectionBar) return;
+    setPassage(found);
+    // 伴读面板**已经开着**时跟随新选区：布局早就两列了，不存在「跳一下」的问题，
+    // 而此刻用户的意图明显是「就这段问 AI」。面板没开则只浮工具条，等用户自己点。
+    if (askContext) openCompanion(found.quote);
+    const range = proseRef.current ? quoteRange(proseRef.current, found) : null;
+    const rect = range?.getBoundingClientRect?.();
+    // 定位规则全在 selectionBarPlacement 里（上方放不下翻下方 / 左右夹进窗口），
+    // 那四条边界在组件里写就只能靠肉眼碰，抽出去才能喂矩形断言。
+    setSelectionBar(selectionBarPlacement(rect ?? null, window));
+  };
+
+  /* 操作条的收起条件：点外面 / 滚动 / Esc。三条都要有 ——
+   * 滚动不收起的话它会停在半空，看着像贴在别的内容上。 */
+  useEffect(() => {
+    if (!selectionBar) return undefined;
+    const hide = () => setSelectionBar(null);
+    const onDown = (event) => {
+      // 点工具条自己不算「点外面」：漏掉这一条，按钮会在 click 之前就被卸载
+      if (event.target?.closest?.('.npr-selection-bar')) return;
+      hide();
+    };
+    const onKey = (event) => { if (event.key === 'Escape') hide(); };
+    document.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('scroll', hide, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('scroll', hide, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [selectionBar]);
   const theme = reading.readingTheme && reading.readingTheme !== 'auto' ? reading.readingTheme : null;
   const feedCount = countFeeds(channels);
   const emptyFailure = channelFailure(channel, channels);
@@ -1897,11 +1962,17 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                     aria-label={speaking ? '暂停朗读' : '朗读这篇文章'} aria-pressed={speaking}
                     onClick={toggleSpeech}><Icon name={speaking ? 'pause' : 'play'} /></button>
                   {/* 大纲：没有标题时**禁用并说明为什么** —— 点了什么都不发生的按钮
-                      就是「看起来像功能」（本项目记过好几次）。 */}
+                      就是「看起来像功能」（本项目记过好几次）。
+                      ★ 图标从 `type`（大写 T）换成 `list-tree`：T 在中文界面里只读得出
+                        「字体 / 字号」，用户 2026-10-28 直接把它当阅读设置点了。 */}
                   <button type="button" className="npr-icon npr-outline-toggle"
                     title={outline.length ? '文章大纲' : '这篇没有小标题，没有大纲'}
                     aria-label="文章大纲" aria-expanded={outlineOpen} disabled={outline.length === 0}
-                    onClick={() => setOutlineOpen((current) => !current)}><Icon name="type" /></button>
+                    onClick={() => setOutlineOpen((current) => !current)}><Icon name="list-tree" /></button>
+                  {/* 阅读设置：T 这个字形就是「字体」的通用符号，直接开阅读设置浮层
+                      （用户 2026-10-28 要求）。以前它藏在「更多操作」里，要点两次。 */}
+                  <button type="button" className="npr-icon" title="阅读设置" aria-label="阅读设置"
+                    aria-expanded={appearanceOpen} onClick={() => setAppearanceOpen((open) => !open)}><Icon name="type" /></button>
                   <button type="button" className="npr-icon" title="更多操作" aria-label="更多操作"
                     aria-haspopup="menu" aria-expanded={menuOpen} ref={menuButtonRef}
                     onClick={() => setMenuOpen((open) => !open)}><Icon name="ellipsis" /></button>
@@ -1915,7 +1986,7 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                           它也做不了任何事。 */}
                       {passage?.quote && (
                         <button type="button" onClick={() => { setMenuOpen(false); void excerptToDiary(); }}>
-                          <Icon name="highlighter" size={15} />摘录选中段落到日记
+                          <Icon name="highlighter" size={15} />摘录到灵感
                         </button>
                       )}
                       <hr />
@@ -2116,6 +2187,24 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
           articleTitle: readerTitle({ active, versions: activeArticle.versions, article: activeArticle.article }),
           channel: activeArticle.article.channelName ?? '',
         } : null)} />}
+      {/* 选中文本后浮在选区上方的操作条。
+          ★ `onPointerDown` 上 preventDefault：不这么做的话，按下按钮这一下会把
+            选区折叠掉 —— 有的浏览器随即清掉 selection，`passage` 虽然还在 state 里，
+            但用户会看到选中高亮在点下去的瞬间消失，像「点了个空」。 */}
+      {selectionBar && passage?.quote && (
+        <div className="npr-selection-bar" role="toolbar" aria-label="选中文字的操作"
+          style={{ top: `${selectionBar.top}px`, left: `${selectionBar.left}px` }}
+          onPointerDown={(event) => event.preventDefault()}>
+          <button type="button" className="is-primary"
+            onClick={() => { setSelectionBar(null); void excerptToDiary(); }}>
+            <Icon name="highlighter" size={14} />摘录到灵感
+          </button>
+          <button type="button"
+            onClick={() => { setSelectionBar(null); openCompanion(passage.quote); }}>
+            <Icon name="wand-sparkles" size={14} />问 AI
+          </button>
+        </div>
+      )}
       {/* 提示条。`toast.action` 存在时多一颗按钮（撤销 / 查看）—— 它自己会关掉这条提示
           再执行，否则「点了撤销、提示还挂着」会让人以为没生效。 */}
       {toast && (

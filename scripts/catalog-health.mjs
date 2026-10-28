@@ -86,22 +86,34 @@ export async function fetchText(url, timeoutMs) {
 }
 
 /** 体检一个地址：拿到「最新一篇」的毫秒数。导出给 `prune-catalog.mjs` 复检用。 */
-export async function checkOne(entry, { timeoutMs = TIMEOUT_MS } = {}) {
-  try {
-    const xml = await fetchText(entry.url, timeoutMs);
-    const parsed = parseFeed(xml, entry.url);
-    let newest = 0;
-    for (const item of parsed.entries ?? []) {
-      const ms = item.publishedAt ? Date.parse(item.publishedAt) : 0;
-      if (Number.isFinite(ms) && ms > newest) newest = ms;
+export async function checkOne(entry, { timeoutMs = TIMEOUT_MS, retry = 1 } = {}) {
+  let failure;
+  for (let attempt = 0; attempt <= retry; attempt += 1) {
+    try {
+      const xml = await fetchText(entry.url, timeoutMs);
+      const parsed = parseFeed(xml, entry.url);
+      let newest = 0;
+      for (const item of parsed.entries ?? []) {
+        const ms = item.publishedAt ? Date.parse(item.publishedAt) : 0;
+        if (Number.isFinite(ms) && ms > newest) newest = ms;
+      }
+      // 只写界面用得上的字段：这份 JSON 会**打进客户端 bundle**，
+      // 把 `name`/`title` 抄进去等于把目录再存一份（+100 KB），而它们在对齐时用不上 ——
+      // 目录与快照是按 `url` 对齐的。
+      return { url: entry.url, category: entry.category, ok: true, newestAt: newest || undefined };
+    } catch (error) {
+      failure = error;
+      /* ★ 重试一次：「慢」和「真的不通」必须分开。
+       *   实测 `www.latent.space/feed` 有 **1.38 MB**、单次要 **7.7 秒**，而体检默认 12s 超时
+       *   在并发 8 下必然被挤掉 ⇒ 快照记成「没抓到」⇒ 界面照实说「上次体检没抓到」，
+       *   用户就以为这个源坏了。可它好端端的。
+       *   同理 `blog.google/rss` 单次要 10s 以上。
+       *   给一次重试，让「慢」有机会过，留下的 ok:false 才更像「真的不通」。
+       *   代价：全量体检里每个失败源多花一次超时（几十条 ⇒ 多几十秒），换掉的是假话。 */
+      if (attempt < retry) await new Promise((resolve) => { setTimeout(resolve, 800); });
     }
-    // 只写界面用得上的字段：这份 JSON 会**打进客户端 bundle**，
-    // 把 `name`/`title` 抄进去等于把目录再存一份（+100 KB），而它们在对齐时用不上 ——
-    // 目录与快照是按 `url` 对齐的。
-    return { url: entry.url, category: entry.category, ok: true, newestAt: newest || undefined };
-  } catch (error) {
-    return { url: entry.url, category: entry.category, ok: false, error: error?.message ?? String(error) };
   }
+  return { url: entry.url, category: entry.category, ok: false, error: failure?.message ?? String(failure) };
 }
 
 /** 固定并发跑完一批。 */

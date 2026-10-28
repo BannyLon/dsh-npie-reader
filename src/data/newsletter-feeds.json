@@ -1,8 +1,8 @@
 {
- "verifiedAt": "2026-10-09",
- "verifiedBy": "逐条真实请求（HTTP 200 + XML 根元素 + 至少 1 个 item/entry）；探不通的另查 DNS 解析与 TCP 连通性。★ 必须用**直连**测（插件抓取不经过任何代理），借道能出去的通道测出的 200 不代表插件取得到 —— 「库里有、插件里没有」多半就差在这一步。",
+ "verifiedAt": "2026-10-28",
+ "verifiedBy": "逐条真实请求（HTTP 200 + XML 根元素 + 至少 1 个 item/entry）；探不通的另查 DNS 解析与 TCP 连通性。★ 必须用**直连**测（插件抓取不经过任何代理），借道能出去的通道测出的 200 不代表插件取得到 —— 「库里有、插件里没有」多半就差在这一步。★ 2026-10-28 这一轮补了两条判据：① 取第一个条目的 pubDate/published/updated，**停更的源不收**（收进去用户只会以为插件坏了）；② 用浏览器 UA 重试一次，因为 403 常常是 UA 拦的而不是源没了。",
  "source": "https://mp.weixin.qq.com/s/pssEPL5LEfmi0V0wKEoa9A",
- "note": "items 里是实测能直接抓到的；unavailable 里是没收录的，原因见 reason 字段。reason 取值互不重叠：network = 本机网络到不了（DNS 污染 / TCP 阻断）；partial = feed 抓得到但正文永远抓不到；blocked = 反爬拦截（应用层）；no-feed = 平台压根没开 feed。TLDR AI 与 Daily Dose of DS 由用户另行提供（不在上面那篇公众号清单里），2026-10-09 实测通过后补入。★ 这一目录 2026-10-09 起**也进体检**（快照是同目录的 catalog-health.json，category 为 Newsletter），删除线 365 天：停更超过一年直接裁掉，剪掉的条目先归档到 retired/newsletter-feeds-retired.json（AI Valley 停更 670 天、Grace Leung 727 天，已按此裁掉）。",
+ "note": "items 里是实测能直接抓到的；unavailable 里是没收录的，原因见 reason 字段。reason 取值互不重叠：network = 本机网络到不了（DNS 污染 / TCP 阻断）；partial = feed 抓得到但正文永远抓不到；blocked = 反爬拦截（应用层）；no-feed = 平台压根没开 feed。TLDR AI 与 Daily Dose of DS 由用户另行提供（不在上面那篇公众号清单里），2026-10-09 实测通过后补入。★ 2026-10-28 用户问「还有哪些 AI Newsletter 你没收」，对着 24 个候选直连实测：新增 9 条（One Useful Thing / Interconnects / AI Supremacy / Last Week in AI / AINews / Ahead of AI / Simon Willison / OpenAI News / Google DeepMind），全部当轮有更新（最旧的 2026-09-09）。同轮改了两条旧结论：**The Neuron 从 partial 改成 blocked**（/rss/ 也是 Cloudflare 挑战页，整站拿不到，不只是正文）、**Ben's Bites 记为 no-feed**（/feed 与 /feed.xml 都返回 82KB 的 Substack 首页 HTML）。★ 这一目录 2026-10-09 起**也进体检**（快照是同目录的 catalog-health.json，category 为 Newsletter），删除线 365 天：停更超过一年直接裁掉，剪掉的条目先归档到 retired/newsletter-feeds-retired.json（AI Valley 停更 670 天、Grace Leung 727 天，已按此裁掉）。★ 本轮新增的 9 条还没进体检快照 ⇒ 界面上暂时不显示「最新一篇几天前」，下次跑 scripts/catalog-health.mjs --only Newsletter 会补上。",
  "items": [
   {
    "name": "The Rundown AI",
@@ -62,6 +62,69 @@
    "description": "数据科学与 ML 日报：两分钟讲清一个不太常见的技术点",
    "frequency": "每日",
    "note": "Avi Chawla 主笔的 Daily Dose of Data Science（订阅页在 avichawla.substack.com）。★ 地址故意不写订阅页所在的那个子域 —— `*.substack.com` 在本机被 DNS 污染 + TCP 阻断，而这条自定义域（Cloudflare 托管）是**直连 200**。经插件自己的解析器（parseFeed）实测：RSS 2.0、**20 条全部带正文**（`content:encoded`，最长一条正文 5.08 万字符）⇒ 列表里就能读全文，不依赖再抓原文页。"
+  },
+  {
+   "name": "One Useful Thing（Ethan Mollick）",
+   "url": "https://www.oneusefulthing.org/feed",
+   "description": "AI 到底怎么改变工作和学习 —— 宾大教授的实验与观察，长文为主",
+   "frequency": "每周",
+   "note": "2026-10-28 实测：直连 200、RSS 2.0、20 条、最新一条 2026-10-20。这是「AI 应用」这一侧最值得读的一支，写的是用法与后果，不是模型参数"
+  },
+  {
+   "name": "Interconnects（Nathan Lambert）",
+   "url": "https://www.interconnects.ai/feed",
+   "description": "开源模型与后训练的一线分析，AI 研究圈里少见的「讲清取舍」",
+   "frequency": "每周",
+   "note": "2026-10-28 实测：直连 200、RSS 2.0、20 条、最新一条 2026-10-28（当日更新）。作者在 Ai2 做后训练，写的是模型能力边界从哪来"
+  },
+  {
+   "name": "AI Supremacy",
+   "url": "https://www.ai-supremacy.com/feed",
+   "description": "AI 产业与商业侧周报：融资、并购、公司战略与竞争格局",
+   "frequency": "每周",
+   "note": "2026-10-28 实测：直连 200、RSS 2.0、20 条、最新一条 2026-10-28。Substack 自定义域，本机直连可达"
+  },
+  {
+   "name": "Last Week in AI",
+   "url": "https://lastweekin.ai/feed",
+   "description": "每周 AI 新闻综述 + 播客，覆盖面最广的一份「上周发生了什么」",
+   "frequency": "每周",
+   "note": "2026-10-28 实测：直连 200、RSS 2.0、20 条、最新一条 2026-10-09。和 TLDR AI 的区别是它按主题成段讲，不是一条一句"
+  },
+  {
+   "name": "AINews（smol.ai）",
+   "url": "https://news.smol.ai/rss.xml",
+   "description": "每日 AI 新闻聚合：把 Discord / Reddit / X 上当天真正被讨论的那几条捞出来",
+   "frequency": "工作日每日",
+   "note": "2026-10-28 实测：直连 200、RSS 2.0、716 条、最新一条 2026-09-09。★ 单次 feed 有 700+ 条，插件只留最近 200 条用于浏览、只给最新 20 条存正文（FEED_LIMITS），不会因为条目多而变慢"
+  },
+  {
+   "name": "Ahead of AI（Sebastian Raschka）",
+   "url": "https://magazine.sebastianraschka.com/feed",
+   "description": "把新论文讲成能读懂的技术长文，偏 LLM 架构与训练方法",
+   "frequency": "每月",
+   "note": "2026-10-28 实测：直连 200、RSS 2.0、20 条、最新一条 2026-10-24。低频但每篇都值得整篇读完"
+  },
+  {
+   "name": "Simon Willison's Weblog",
+   "url": "https://simonwillison.net/atom/everything/",
+   "description": "LLM 工具链与实战笔记，几乎日更，新模型当天就有可复现的试用手记",
+   "frequency": "每日",
+   "note": "2026-10-28 实测：直连 200、**Atom**（不是 RSS，插件两种都认）、30 条、最新一条 2026-10-28"
+  },
+  {
+   "name": "OpenAI News",
+   "url": "https://openai.com/news/rss.xml",
+   "description": "OpenAI 官方发布：模型、API、安全与研究公告",
+   "frequency": "不定期",
+   "note": "2026-10-28 实测：直连 200、RSS 2.0、**1332 条**、最新一条 2026-10-28。全量历史都在 feed 里，插件按 FEED_LIMITS 截到 200 条浏览 / 20 条带正文"
+  },
+  {
+   "name": "Google DeepMind Blog",
+   "url": "https://deepmind.google/blog/rss.xml",
+   "description": "DeepMind 官方博客：Gemini、AlphaFold、机器人与基础研究",
+   "frequency": "不定期",
+   "note": "2026-10-28 实测：直连 200、RSS 2.0、100 条。★ 这条在同一轮里偶发 `fetch failed`（两次重试一次成一次败），属于本机到该域的连接抖动，不是源的问题 —— 如果界面上偶发拉取失败，重试即可"
   }
  ],
  "unavailable": [
@@ -86,8 +149,20 @@
   {
    "name": "The Neuron",
    "url": "https://www.theneuron.ai/feed",
-   "reason": "partial",
-   "detail": "feed 本身是好的（HTTP 200、Atom、10 条、8/10 条带 <summary>），但文章页与站点首页都是 Cloudflare 托管挑战（403、响应头 cf-mitigated: challenge）⇒「抓取原文全文」必然失败，点开只能退化成「仅摘要」，而最新那条连 summary 都没有、会是空正文。2026-10-09 用户看过这份实测结论后决定摘除；想恢复就把它整条挪回 items"
+   "reason": "blocked",
+   "detail": "★ 2026-10-28 复测**改了结论**：原先记的是 partial（「feed 能取到，只是正文抓不到」），现在整站都在 Cloudflare 挑战后面 —— `/rss/` 返回 403、响应头 `cf-mitigated: challenge`、正文是「Just a moment...」，`/feed` 与 `/rss` 直接连接失败。也就是说**连 feed 本身都拿不到**，不是只有正文抓不到。2026-10-09 用户看过当时的实测结论后决定摘除；想恢复就把它整条挪回 items，但要先确认 Cloudflare 已经放开 feed 路径"
+  },
+  {
+   "name": "Ben's Bites",
+   "url": "https://www.bensbites.co/feed",
+   "reason": "no-feed",
+   "detail": "2026-10-28 实测：`/feed` 与 `/feed.xml` 都返回 200，但内容是 **82KB 的 Substack 首页 HTML**（标题 `Ben's Bites | Substack`），根元素不是 rss/feed ⇒ 没有可用的 RSS 出口。换浏览器 UA 结果相同，不是反爬"
+  },
+  {
+   "name": "AI Breakfast",
+   "url": "https://aibreakfast.beehiiv.com/feed",
+   "reason": "blocked",
+   "detail": "2026-10-28 实测：403、正文「Just a moment...」，Cloudflare 托管挑战。换浏览器 UA 仍是 403"
   },
   {
    "name": "Superhuman AI",
@@ -106,12 +181,29 @@
    "url": "https://every.to/",
    "reason": "no-feed",
    "detail": "站点是 SPA，任何路径都返回网页，没有 RSS"
+  },
+  {
+   "name": "The Algorithmic Bridge / Import AI / The Sequence / Data Machina / ChinAI",
+   "url": "https://thealgorithmicbridge.substack.com/feed",
+   "reason": "network",
+   "detail": "2026-10-28 实测这批全是 `fetch failed`（DNS 解析不出 / TCP 不通），与上面三条同因：本机对 `*.substack.com` 整体不通。**这不能证明源坏了，也不能证明插件取得到** —— 它们的订阅页都在 Substack 上，而本机就是到不了 Substack。等哪天本机对 substack 直连恢复，这五条值得重测（都是 AI 圈里口碑不错的 newsletter）"
+  },
+  {
+   "name": "Hugging Face Blog",
+   "url": "https://huggingface.co/blog/feed.xml",
+   "reason": "network",
+   "detail": "2026-10-28 实测 `fetch failed`（本机直连不通）；2026-10-09 那次记的是 502。两次都不是源的问题形态（502 是对方网关，fetch failed 是本机到不了），所以没收录"
   }
  ],
  "pruned": {
   "at": "2026-10-09T03:29:27.775Z",
   "from": 11,
   "to": 9,
-  "rule": "≥ 365 天未更新"
+  "rule": "≥ 365 天未更新",
+  "addedSince": {
+   "at": "2026-10-28",
+   "count": 9,
+   "note": "用户问「还有哪些常看的 AI Newsletter 你没收录」，对着 24 个候选直连实测后补入 9 条（One Useful Thing / Interconnects / AI Supremacy / Last Week in AI / AINews / Ahead of AI / Simon Willison / OpenAI News / Google DeepMind）。★ 记账是必须的：`pruned.to` 是「那次裁完剩几条」，不等于当前条目数，两者的差只能靠这条记录解释 —— 不记的话测试会红（见 catalog-merge.test.mjs「pruned 是历史快照」那条）。"
+  }
  }
 }
