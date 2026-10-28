@@ -15,12 +15,21 @@ import { pageOwnedPatch } from './settings-patch.js';
 
 const VERSION = typeof __NPIE_READER_VERSION__ === 'string' ? __NPIE_READER_VERSION__ : 'dev';
 
+/**
+ * 设置页的分类。
+ * ★ 0.44.4 从「`[key, label, icon]` 三元组」改成对象：三元组只能靠**位置**记
+ *   「第三项是图标」，读代码的人要多绕一层；而 `icons.test.mjs` 认的是
+ *   「具名字段 + 字符串字面量」这种形态，三元组里那个名字它根本看不见。
+ *   于是图标名打错只会静默兜底成 `circle`。
+ * ★ 下面这条注释里**不要写成那个形态的样本**：测试扫的是源码原文，
+ *   注释里的样本它一样会当成一个取值拿去核对（第一版就栽在这里）。
+ */
 const TABS = [
-  ['reading', '阅读体验', 'book-open'],
-  ['library', '电子书书架', 'layers-3'],
-  ['sources', '订阅管理', 'rss'],
-  ['prompts', '快捷提示词', 'sparkles'],
-  ['about', '关于', 'info'],
+  { key: 'reading', label: '阅读体验', icon: 'book-open' },
+  { key: 'library', label: '电子书书架', icon: 'layers-3' },
+  { key: 'sources', label: '订阅管理', icon: 'rss' },
+  { key: 'prompts', label: '快捷提示词', icon: 'sparkles' },
+  { key: 'about', label: '关于', icon: 'info' },
 ];
 
 /**
@@ -219,7 +228,7 @@ export function SettingsPage({ api, onClose, notify, onSubscriptionsChanged, ini
       <div className="npr-settings-body">
         <nav className="npr-settings-tabs" aria-label="设置分类">
           <span className="npr-settings-nav-caption">设置</span>
-          {TABS.map(([key, label, icon]) => <button key={key} type="button" aria-current={tab === key ? 'page' : undefined} onClick={() => setTab(key)}><Icon name={icon} size={17} strokeWidth={1.8} />{label}</button>)}
+          {TABS.map(({ key, label, icon }) => <button key={key} type="button" aria-current={tab === key ? 'page' : undefined} onClick={() => setTab(key)}><Icon name={icon} size={17} strokeWidth={1.8} />{label}</button>)}
         </nav>
         <main className="npr-settings-content">
           {!settings && <p role="status">{message || '正在加载设置…'}</p>}

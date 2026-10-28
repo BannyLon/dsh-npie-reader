@@ -34,6 +34,12 @@ export function groupChannels(channels) {
 
 export function ChannelMark({ channel, size = 22 }) {
   const key = channel.key ?? '';
+  /* 图标名先算进一个常量，**不**内联进 JSX 属性。
+     ★ 试过内联（0.44.4）：`icons.test.mjs` 会把属性表达式里**每一个**单引号串
+       都当成图标名去核对，于是 `=== 'feed'`、`=== 'all'`、`startsWith('group:')`
+       这三个**比较值**全被抓成「不存在的图标」。为了一处可查，换来三条假红 ——
+       那是把判据搞脏，不是把代码改好。所以这里保持常量形式，
+       并由 `icons.test.mjs` 的 `BARE_SITES` 白名单登记这一处。 */
   const name = channel.kind === 'feed' ? 'rss'
     : key === 'all' ? 'layers-3'
       : key.startsWith('group:') ? 'folder'

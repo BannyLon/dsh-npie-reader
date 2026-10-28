@@ -85,7 +85,66 @@ describe('图标名', () => {
     }
     assert.deepEqual(missing, [], `动态 name 里的这些名字不存在：\n${missing.join('\n')}`);
     assert.ok(checked >= 5, `只核到 ${checked} 个字面量，正则可能已失配`);
-    // 裸标识符是可接受的中转（值由调用方保证），但必须是「少数几处」，不能变成主流写法。
-    assert.ok(skipped.length <= 3, `有 ${skipped.length} 处裸标识符取值，太多了，守卫会形同虚设：\n${skipped.join('\n')}`);
+
+    /**
+     * 裸标识符（`name={icon}`）：JSX 属性里看不到名字，但**每一处的取值来源都是
+     * 本文件里的 `icon: '…'` 字面量**，由下面那条「数据里的 icon 字段」断言兜住 ——
+     * 它们不是漏网，只是把检查挪到了取值那一端。
+     *
+     * ★ 用**逐处登记**而不是「不超过 N 处」：数量阈值挡不住「新增一处、顺手删掉
+     *   另一处」这种一进一出 —— 总数不变，洞却换了地方（这正是 0.44.4 之前的实际
+     *   状况：阈值卡在 3，而第 4 处早就冒出来了，测试一直红着却只是被当成噪音）。
+     * ★ 多一处要红，少一处也要红：少一处说明取值方式变了，这里「来源在哪」的
+     *   说明就该跟着改，否则注释会开始撒谎。
+     */
+    const BARE_SITES = [
+      /**
+       * 来源：同函数里那个四路三元的四个分支（rss / layers-3 / folder / book-open）。
+       * ★ 这四处**扫不到**，而且试过把它内联进 JSX 属性来「变得可查」—— 失败：
+       *   属性表达式里的比较值（`=== 'feed'`、`=== 'all'`、`startsWith('group:')`）
+       *   会被本测试当成图标名，一次制造三条假红。要让判据认得「条件」与「分支」，
+       *   得写一个真正的表达式解析器 —— 那超出了这道守卫该有的分量。
+       *   所以如实登记在这里：这一处是真漏网，不是「已经查过了」。
+       */
+      'ChannelPicker.jsx: name',
+      // 来源：上面 LINK_VIEWS 的 icon 字段（按时间 / 按书本 / 按文章），由下一条断言核对
+      'DiaryApp.jsx: item.icon',
+      // 来源：linkViewMeta 里两处 icon 字段（book-open / file-text），同上
+      'DiaryApp.jsx: linkViewMeta.icon',
+      // 来源：TABS 每项的 icon 字段（0.44.4 从三元组改成对象，才扫得到）
+      'SettingsPage.jsx: icon',
+    ];
+    assert.deepEqual(skipped, BARE_SITES,
+      `裸标识符取值的清单变了（现在是 ${JSON.stringify(skipped)}）。\n`
+      + '新增了一处？先确认它的值来自本文件的 icon 字面量（那条断言会替你核对），'
+      + '再把这一行登记进来。改成了内联字面量？把它从这里删掉。');
+  });
+
+  /**
+   * 裸标识符那一端的检查。
+   *
+   * 上一版把裸标识符当「查不到」直接跳过，等于承认守卫在**最脏的那几处**是空的 ——
+   * 而 `<Icon name={tab.icon} />` 的错字恰恰是高发区。它们的值都来自同文件里的
+   * `icon: '…'` 字面量，所以改查那一端：谁把 `icon: 'book-opne'` 写错，这里就红。
+   */
+  test('反向对照：数据里的 icon 字段也必须是真名字', () => {
+    const missing = [];
+    const checkedFiles = [];
+    let checked = 0;
+    for (const { file, text } of clientSources()) {
+      // `data-icon:` 之类不归这里管，所以前面加一个「不是连字符或单词字符」的前提。
+      const hits = [...text.matchAll(/(?<![-\w])icon:\s*'([^']+)'/g)];
+      if (hits.length > 0) checkedFiles.push(`${file}(${hits.length})`);
+      for (const hit of hits) {
+        checked++;
+        if (!defined.has(hit[1])) missing.push(`${file}: ${hit[1]}`);
+      }
+    }
+    assert.deepEqual(missing, [], `数据里这些 icon 字段不存在：\n${missing.join('\n')}`);
+    // 防「正则失配 ⇒ 一个都没扫到 ⇒ 空对空全绿」。
+    assert.ok(checked >= 8, `只核到 ${checked} 个 icon 字段（${checkedFiles.join(' ') || '一个文件都没命中'}），正则可能已失配`);
+    assert.ok(checkedFiles.some((line) => line.startsWith('SettingsPage.jsx'))
+      && checkedFiles.some((line) => line.startsWith('DiaryApp.jsx')),
+      `两端都要扫到才算数，实际命中：${checkedFiles.join(' ') || '(无)'}`);
   });
 });
