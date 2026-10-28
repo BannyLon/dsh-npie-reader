@@ -34,6 +34,9 @@ export function resolveDshHome(configured) {
 // 而 flush() 是全量重写，再往上调会明显拖慢每次去抖保存。
 const MAX_ARTICLE_BODIES = 400;
 const MAX_READ_IDS = 5_000;
+// 隐藏列表的条数上限。一条记录是「key + 时间戳」约 60 字节 ⇒ 2000 条约 120 KB，
+// 相对 5 MB 的 localStorage 上限无关紧要；设上限只是不让它变成「只增不减」。
+const MAX_HIDDEN_IDS = 2_000;
 
 export function dataFilePath() {
   return join(resolveDshHome(), 'storages', 'dsh-npie-reader', 'data.json');
@@ -165,6 +168,17 @@ export async function migrateLegacyPanCredentials({ log = () => {}, legacy = {} 
   return moved;
 }
 
+/**
+ * 「普通对象」判定 —— 排除 `null` / 数组。
+ *
+ * ★ 为什么要单独一个函数：`load()` 里已经有三处同样的手写判断，每加一个嵌套字段
+ *   就抄一遍，抄错一次（漏掉 `!Array.isArray`）的后果是「字段在、但写进去不生效」，
+ *   而且**不报错**。判断只写一份。
+ */
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 function defaults() {
   return {
     version: 1,
@@ -185,6 +199,15 @@ function defaults() {
     articles: {},
     favorites: {},
     read: {},
+    // 用户主动「隐藏」的文章：`{ [key]: 隐藏时刻 }`。
+    //
+    // ★ 为什么是「隐藏」而不是「删除」：feed 里那一条是**服务端的内容**，删掉它下次
+    //   刷新就会自己回来（列表里重新出现一篇用户刚清掉的文章，看着像没生效）。而
+    //   `articles{}` 里的正文缓存删了还能重抓。所以「删除」这个动作在语义上只能是
+    //   「我不再想看到它」⇒ 记在这里，`listEntries` / 搜索都不再返回。
+    // ★ 时间戳不是装饰：它让「最近隐藏的」可以被裁掉，而不是让这个对象无限增长
+    //   （和 `read` 一样，只增不删的话读十年就是几万个键）。
+    hidden: {},
     ai: {},
     recent: [],
     companionContexts: {},
@@ -247,6 +270,11 @@ export class RssStore {
           : {},
         importedFrom: typeof parsed.library?.importedFrom === 'string' ? parsed.library.importedFrom : '',
       };
+      // 同上：`hidden` 是后加的字段，且是**嵌套对象** —— 老数据里没有它时
+      // `{...defaults(), ...parsed}` 能靠默认值兜住，但只要用户那份文件里恰好写了
+      // 一个 `hidden: []`（数组），`this.data.hidden[key]` 就变成往数组上挂属性 ⇒
+      // 既不报错也不生效，隐藏按钮点了没反应。这里统一归成普通对象。
+      this.data.hidden = isPlainObject(parsed.hidden) ? parsed.hidden : {};
       // 读成功就清掉上一次失败留下的标记：`load()` 可以被调多次（测试、以及将来的
       // 「用户手工修好文件后重载」），不清的话会一直拒绝写盘。
       this.corrupt = false;
@@ -347,6 +375,50 @@ export class RssStore {
 
   isFavorite(key) {
     return this.data.favorites[key] !== undefined;
+  }
+
+  // ---- hidden articles --------------------------------------------------
+
+  /**
+   * 隐藏一篇（用户主动「不想再看到它」）。
+   *
+   * @returns {boolean} 这次是否真的改变了状态（已经隐藏过 ⇒ false）。
+   *
+   * ★ 幂等：重复隐藏不刷新时间戳。刷新的话「隐藏很久的那篇」会因为某次误触
+   *   变成「最近隐藏的」，淘汰顺序跟着变 —— 用户看不见这个差别，但恢复时会困惑。
+   */
+  hideArticle(key) {
+    if (typeof key !== 'string' || key === '') return false;
+    if (this.data.hidden[key] !== undefined) return false;
+    this.data.hidden[key] = Date.now();
+    this.trimHidden();
+    this.touch();
+    return true;
+  }
+
+  /** 恢复一篇（撤销 / 「已隐藏」列表里点恢复）。 */
+  unhideArticle(key) {
+    if (typeof key !== 'string' || this.data.hidden[key] === undefined) return false;
+    delete this.data.hidden[key];
+    this.touch();
+    return true;
+  }
+
+  isHidden(key) {
+    return this.data.hidden[key] !== undefined;
+  }
+
+  /** 隐藏了多少篇（只用于界面上的「已隐藏 N」）。 */
+  hiddenCount() {
+    return Object.keys(this.data.hidden).length;
+  }
+
+  /** 超过上限就按「隐藏时刻」淘汰最老的 —— 和 `trimRead` 同一套口径。 */
+  trimHidden() {
+    const keys = Object.keys(this.data.hidden);
+    if (keys.length <= MAX_HIDDEN_IDS) return;
+    keys.sort((a, b) => this.data.hidden[a] - this.data.hidden[b]);
+    for (const key of keys.slice(0, keys.length - MAX_HIDDEN_IDS)) delete this.data.hidden[key];
   }
 
   // ---- article cache ----------------------------------------------------
@@ -543,4 +615,4 @@ export async function deleteDataFile() {
   await rm(dataFilePath(), { force: true });
 }
 
-export { defaults as defaultData, MAX_ARTICLE_BODIES };
+export { defaults as defaultData, MAX_ARTICLE_BODIES, MAX_HIDDEN_IDS };

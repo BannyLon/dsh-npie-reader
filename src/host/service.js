@@ -1190,6 +1190,16 @@ export class RssService {
       const needle = search.trim().toLowerCase();
       filtered = filtered.filter((entry) => (entry.title ?? '').toLowerCase().includes(needle) || entry.titleZh?.toLowerCase().includes(needle));
     }
+    // ★ 隐藏必须在**分页之前**、并且对 `filter === 'hidden'` 反过来用：
+    //   放到分页后面就是「第一页里那几篇被摘掉、hasMore 却按摘之前的算」——
+    //   用户会看到一页只剩 27 条，而「加载更早」按钮已经不见了。
+    // ★ `hiddenCount` 按**当前频道**数，不是全局数：界面上那个「已隐藏 N」的入口
+    //   就在这个列表里，报全局数会出现「显示 3 条，点进去只有 1 条」。
+    const hidden = data.hidden ?? {};
+    const hiddenInChannel = entries.filter((entry) => hidden[entry.key] !== undefined).length;
+    filtered = filter === 'hidden'
+      ? filtered.filter((entry) => hidden[entry.key] !== undefined)
+      : filtered.filter((entry) => hidden[entry.key] === undefined);
     if (filter === 'unread') filtered = filtered.filter((entry) => !data.read[entry.key]);
     if (filter === 'favorite' || filter === 'favorites') filtered = filtered.filter((entry) => data.favorites[entry.key] !== undefined);
     const offset = typeof cursor === 'string' && cursor.startsWith('off:') ? Number(cursor.slice(4)) || 0 : 0;
@@ -1198,6 +1208,7 @@ export class RssService {
     return {
       entries: page.map((entry) => this.entrySummary(entry)),
       hasMore,
+      hiddenCount: hiddenInChannel,
       ...(hasMore ? { nextCursor: `off:${offset + size}` } : {}),
       ...(hasWindow(window) ? { window: windowLabel(window), matched: filtered.length, undatedExcluded } : {}),
     };
@@ -1219,6 +1230,9 @@ export class RssService {
       audio: entry.audio,
       read: data.read[entry.key] !== undefined,
       favorite: data.favorites[entry.key] !== undefined,
+      // 阅读区要靠这个字段决定菜单里显示「隐藏这篇文章」还是「恢复这篇文章」——
+      // 「已隐藏」列表里点开的那篇，本来就需要一条回去的路。
+      hidden: (data.hidden ?? {})[entry.key] !== undefined,
       hasBody: entry.html !== undefined && entry.html !== '',
       // 订阅源只给摘要、原文页又没抓到全文 ⇒ 界面上要说明「这篇只有摘要」。
       bodyMissing: entry.bodyMissing === true,
@@ -1279,6 +1293,9 @@ export class RssService {
     for (const entry of this.entriesFor(channels).sort(sortByDate)) {
       if (seen.has(entry.key)) continue;
       seen.add(entry.key);
+      // 隐藏过的文章不进检索结果 —— 「不想再看到」如果在搜索里还能翻出来，
+      // 那个动作就只是给列表打了块遮羞布。
+      if (this.store.isHidden(entry.key)) continue;
       if (hasWindow(window) && !withinWindow(entry.publishedAt, window)) {
         if (toMillis(entry.publishedAt) === 0) undatedExcluded += 1;
         continue;
@@ -3023,6 +3040,21 @@ export class RssService {
     return { ok: true };
   }
 
+  /**
+   * 隐藏 / 恢复一篇文章。
+   *
+   * ★ 返回**实际生效的** `hidden`，而不是请求里那个：`store` 的隐藏是幂等的
+   *   （已经隐藏过的不刷新时间戳），界面要靠这个回值决定「撤销」按钮还该不该留着。
+   *   直接把入参回显出去的话，一个失败的隐藏会显示成成功。
+   */
+  async setHidden(request) {
+    const { key, hidden } = request ?? {};
+    await this.ready;
+    if (typeof key !== 'string' || key === '') throw new Error('缺少文章标识');
+    const changed = hidden === false ? this.store.unhideArticle(key) : this.store.hideArticle(key);
+    return { ok: true, hidden: this.store.isHidden(key), changed };
+  }
+
   async getSettings() {
     await this.ready;
     return { settings: { ...READING_DEFAULTS, ...this.store.data.settings } };
@@ -3046,7 +3078,7 @@ export class RssService {
     'removeSubscription', 'updateSubscription', 'backfillSubscription', 'opmlPreview', 'opmlImport', 'opmlExport',
     'listCatalog', 'addCatalogSource', 'removeCatalogSource', 'setCatalogHidden',
     'setCatalogService', 'probeCatalogService',
-    'setRead', 'setFavorite', 'getSettings', 'saveSettings', 'listAiModels', 'aiModelInfo',
+    'setRead', 'setFavorite', 'setHidden', 'getSettings', 'saveSettings', 'listAiModels', 'aiModelInfo',
     'prepareChat', 'setReadingContext', 'setBookContext', 'setDiaryContext',
   ];
   const prototype = RssService.prototype;

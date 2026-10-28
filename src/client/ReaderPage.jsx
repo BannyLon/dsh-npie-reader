@@ -19,6 +19,8 @@ import { SettingsPage } from './SettingsPage.jsx';
 import { resolveReadingVersion, shouldAutoTranslate } from './reading-version.js';
 import { activeIndex, outlineOf, scrollTarget } from './article-outline.js';
 import { pickVoice, speechChunks, SPEECH_RATES } from './article-speech.js';
+import { readPosition, savePosition, scrollFromRatio, scrollRatio } from './read-position.js';
+import { articleToMarkdown, downloadText, markdownFileName } from './article-markdown.js';
 import { Discover } from './Discover.jsx';
 import { MediaDock } from './MediaDock.jsx';
 import { quoteRange, selectedPassage } from './selection.js';
@@ -27,6 +29,10 @@ import { articleAudioUrl } from '../media.js';
 import { formatDay, formatFullDay } from './format-time.js';
 import { printArticle } from './print-article.js';
 import { channelAfterAdd, channelFailure, countFeeds, emptyListMessage, resolveChannel } from './channel-route.js';
+import { readChannelState, saveChannelState } from './channel-state.js';
+import { appendDiaryEntry } from './diary-api.js';
+import { excerptEntry } from './excerpt.js';
+import { dateKey } from '../diary-format.js';
 import { staleNotice } from './source-health.js';
 import { AddFeedDialog } from './dialogs.jsx';
 import { groupNamesOf } from './groups.js';
@@ -36,8 +42,22 @@ import { QuickCapture } from './QuickCapture.jsx';
 import { ViewSwitch } from './ViewSwitch.jsx';
 import REFINEMENTS from './refinements.css';
 
-const PANEL_CSS = `
-.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--dsw-alias-bg-layer-1);--npr-fg:var(--dsw-alias-label-primary);--npr-muted:var(--dsw-alias-label-secondary);--npr-faint:var(--dsw-alias-label-tertiary);--npr-border:var(--dsw-alias-border-l1);--npr-border-strong:var(--dsw-alias-border-l2);--npr-hover:var(--dsw-alias-interactive-bg-hover);--npr-accent:var(--npc-brand,var(--dsw-alias-brand-primary));--npr-accent-strong:var(--npc-brand-dark,var(--dsw-alias-brand-primary));--npr-scrim:var(--dsw-alias-bg-mask-1);/* 伴读对话容器专用：refinements.css 里那块「把宿主 --dsw-* 令牌改写成阅读主题色」的覆写引用了它们。
+/**
+ * 首帧要恢复的「浏览状态」（筛选 / 搜索词）。
+ *
+ * ★ 必须**缓存**：面板每次重渲染都会走到取初始值的地方，而 `localStorage.getItem`
+ *   + `JSON.parse` 放在渲染路径上就是每次滚动都解析一遍 JSON。这里只读一次 ——
+ *   同一个面板实例（`kind: 'single'`）只有一个首帧。
+ */
+let bootBrowse;
+function initialBrowseState() {
+  if (bootBrowse === undefined) {
+    bootBrowse = readChannelState(localStorage.getItem('npr.channel') || 'feeds:all', localStorage);
+  }
+  return bootBrowse;
+}
+
+const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--dsw-alias-bg-layer-1);--npr-fg:var(--dsw-alias-label-primary);--npr-muted:var(--dsw-alias-label-secondary);--npr-faint:var(--dsw-alias-label-tertiary);--npr-border:var(--dsw-alias-border-l1);--npr-border-strong:var(--dsw-alias-border-l2);--npr-hover:var(--dsw-alias-interactive-bg-hover);--npr-accent:var(--npc-brand,var(--dsw-alias-brand-primary));--npr-accent-strong:var(--npc-brand-dark,var(--dsw-alias-brand-primary));--npr-scrim:var(--dsw-alias-bg-mask-1);/* 伴读对话容器专用：refinements.css 里那块「把宿主 --dsw-* 令牌改写成阅读主题色」的覆写引用了它们。
    ★ 这两个变量以前**从来没被定义过**。后果不是「覆写不生效」，而是更糟的一种：在自定义属性里引用一个未定义的 var()，
    该声明会变成 guaranteed-invalid ⇒ 解析成**空值**，而 .npr-companion 上那条 --dsw-alias-bg-base 又被它**覆写**了，
    于是宿主原生对话卡片（它靠 var(--dsw-alias-bg-base) 画底）在整个子树里底色变成透明、边框消失。
@@ -230,8 +250,12 @@ const PANEL_CSS = `
 .npr-welcome-keys{display:flex;flex-wrap:wrap;gap:18px;margin-top:44px;color:var(--npr-faint);font-size:10px}
 .npr-welcome-keys > span{display:flex;align-items:center;gap:5px}
 .npr-welcome-keys kbd{font:inherit;font-size:10px}
-.npr-toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:var(--npr-surface);border:.5px solid var(--npr-border-strong);color:var(--dsw-alias-label-primary);border-radius:10px;padding:8px 16px;font-size:13px;box-shadow:var(--npr-elevation);z-index:60}
+.npr-toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);display:flex;align-items:center;gap:10px;background:var(--npr-surface);border:.5px solid var(--npr-border-strong);color:var(--dsw-alias-label-primary);border-radius:10px;padding:8px 16px;font-size:13px;box-shadow:var(--npr-elevation);z-index:60}
 .npr-toast.is-error{color:var(--dsw-alias-state-error-primary)}
+/* 撤销按钮：用品牌色文字 + 一点点底色，和提示文字分得开，但**不做成实心按钮** ——
+   实心块会把这条提示读成「确认/取消」对话框，而它只是一句话加一个后悔的机会。 */
+.npr-toast-action{padding:2px 8px;font:inherit;font-size:12.5px;font-weight:600;color:var(--npr-accent-strong);background:var(--npr-hover);border:0;border-radius:6px;cursor:pointer}
+.npr-toast-action:hover{background:var(--npr-border-strong)}
 .npr-menu{position:absolute;top:36px;right:0;min-width:210px;padding:5px;background:var(--npr-surface);border:.5px solid var(--npr-border-strong);border-radius:10px;box-shadow:var(--npr-elevation);z-index:20;display:flex;flex-direction:column}
 .npr-menu button{display:flex;align-items:center;gap:9px;padding:7px 10px;font:inherit;font-size:13px;text-align:left;color:var(--npr-fg);background:transparent;border:0;border-radius:6px;cursor:pointer}
 .npr-menu button:hover:not(:disabled){background:var(--npr-hover)}
@@ -645,9 +669,12 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   });
   const [channels, setChannels] = useState([]);
   const [channel, setChannel] = useState(() => localStorage.getItem('npr.channel') || 'feeds:all');
-  const [filter, setFilter] = useState('all');
-  const [query, setQuery] = useState('');
-  const [searchOpen, setSearchOpen] = useState(false);
+  /* 筛选 / 搜索词按**频道**记（0.44.9）。首帧就取回来，否则打开面板会先按「全部」
+   * 发一次请求、再被恢复的筛选覆盖成第二次请求 —— 用户看到列表闪一下。 */
+  const boot = initialBrowseState();
+  const [filter, setFilter] = useState(boot.filter);
+  const [query, setQuery] = useState(boot.query);
+  const [searchOpen, setSearchOpen] = useState(boot.query !== '');
   const [page, setPage] = useState({ entries: [], hasMore: false, nextCursor: undefined });
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -831,6 +858,12 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   const toastTimer = useRef();
   const pageRequest = useRef(0);
   const articleRequest = useRef(0);
+  /** 上一次「已同步过浏览状态」的频道（`channel` 变了才去读 localStorage）。 */
+  const browseSync = useRef('');
+  /** 待还原的列表滚动位置；`null` = 没有待还原的。 */
+  const pendingListScroll = useRef(null);
+  /** 列表容器本身（记滚动位置）。 */
+  const listRef = useRef();
   const searchInput = useRef();
   /** 「更多操作」菜单本身 —— 判断这次 pointerdown 算不算「点在外面」。 */
   const menuRef = useRef();
@@ -850,10 +883,21 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     });
   }, [menuOpen]);
 
-  const notify = (message, isError = false) => {
-    setToast({ message, isError });
+  /**
+   * 底部一条提示。
+   *
+   * @param {string} message
+   * @param {boolean} [isError]
+   * @param {{label: string, onClick: () => void}} [action] 挂一颗按钮（撤销 / 查看）
+   *
+   * ★ 带按钮的提示**要活得更久**（8s vs 2.4s）：2400ms 是「扫一眼就走」的时长，
+   *   而「撤销」要求用户读完那句话之后再做一个决定 —— 按原时长，按钮在他找到
+   *   鼠标之前就消失了，等于没给撤销。
+   */
+  const notify = (message, isError = false, action) => {
+    setToast({ message, isError, action });
     clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(undefined), isError ? 4200 : 2400);
+    toastTimer.current = setTimeout(() => setToast(undefined), isError ? 4200 : action ? 8000 : 2400);
   };
 
   const run = async (promise, { errorPrefix = '操作失败' } = {}) => {
@@ -909,6 +953,9 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
         entries: [...previous.entries, ...data.entries.filter((entry) => !previous.entries.some((seen) => seen.key === entry.key))],
         hasMore: data.hasMore,
         nextCursor: data.nextCursor,
+        // ★ 追加页也要带上它：漏了的话「加载更早文章」之后「已隐藏 N」的入口会
+        //   在界面上凭空消失（`undefined > 0` 为 false），而文章其实还藏着。
+        hiddenCount: data.hiddenCount,
       }));
     } catch (error) {
       if (request === pageRequest.current) setPageError(error?.message ?? String(error));
@@ -937,10 +984,66 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
 
   useEffect(() => {
     localStorage.setItem('npr.channel', channel);
+    /* 切到一个新频道时，先把**这个源自己**的筛选 / 搜索词装回去。
+     *
+     * ★ 恢复完立刻 `return`，这一轮**不发请求**：`setFilter` 是异步的，此刻
+     *   `loadPage` 里读到的还是旧值 —— 发了就是「用 A 源的筛选去查 B 源」，
+     *   再被下一轮用正确的值覆盖成第二次请求（列表闪一下、白跑一趟）。
+     *   下一轮渲染时值已经变了，effect 自然重跑，只发一次。
+     * ★ 值没变时（比如这个源上次就停在「全部」）直接往下走，不多一轮。 */
+    if (browseSync.current !== channel) {
+      browseSync.current = channel;
+      const saved = readChannelState(channel, localStorage);
+      if (saved.filter !== filter || saved.query !== query) {
+        setFilter(saved.filter);
+        setQuery(saved.query);
+        setSearchOpen(saved.query !== '');
+        return;
+      }
+      // 列表滚动位置等这一页渲染完再还原（`pendingListScroll` 由下面的 effect 消费）
+      pendingListScroll.current = saved.scroll;
+    }
+    saveChannelState(channel, { filter, query }, localStorage);
     setPage({ entries: [], hasMore: false, nextCursor: undefined });
     void loadPage(undefined, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channel, filter, query]);
+
+  /* 列表滚动位置，按频道记（0.44.9）。
+   *
+   * ★ 这里存**像素**，正文那侧存**比例** —— 不是不一致，是两处的变化源不同：
+   *   正文字号 / 版心宽度可调、窗口宽度会变，同一个段落落在完全不同的 scrollTop 上，
+   *   只能存比例；而列表的行高由固定的字号和两行截断决定，同一个源的行布局稳定，
+   *   像素更准（比例会把「滚到第 12 条」换算成第 11.4 条）。
+   * ★ 还原时机是「这一页渲染完」而不是「请求返回」：请求返回时 DOM 里还是上一批条目，
+   *   此刻设 scrollTop 会被随后的渲染重置成 0。 */
+  useEffect(() => {
+    if (pendingListScroll.current === null) return;
+    const list = listRef.current;
+    if (!list || page.entries.length === 0) return;
+    list.scrollTop = pendingListScroll.current;
+    pendingListScroll.current = null;
+  }, [page.entries]);
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return undefined;
+    let timer = 0;
+    const flush = () => {
+      timer = 0;
+      // 还有待还原的位置时**不写**：这一刻的 scrollTop 是「列表刚被清空」的 0，
+      // 写下去就把用户上次的位置抹了（下一次进来永远在顶上）。
+      if (pendingListScroll.current !== null) return;
+      saveChannelState(channel, { scroll: list.scrollTop }, localStorage);
+    };
+    const onScroll = () => { if (timer === 0) timer = setTimeout(flush, 300); };
+    list.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      list.removeEventListener('scroll', onScroll);
+      // 切频道前把最后一次滚动落下来：cleanup 里捕获的 `channel` 正是**旧**频道。
+      if (timer !== 0) { clearTimeout(timer); flush(); }
+    };
+  }, [channel]);
 
   // 宿主频道清单变了以后，当前频道可能已经不存在：订阅被退订了，或者 localStorage 里
   // 存着上一版的频道 id。此时不回落，界面会永久停在「一篇文章都不显示」上，
@@ -1009,6 +1112,8 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     if (!data) { setSelected({ error: true, key }); return; }
     setSelected({ ...data, article: { ...data.article, read: true }, active: resolveReadingVersion(restoreVersion || reading.defaultVersion, data) });
     rootRef.current?.querySelector('.npr-reader')?.scrollTo?.({ top: 0 });
+    // 先回顶（别让用户看到上一篇的中间），等正文渲染完再由 effect 滚到上次读到的地方
+    setRestoreFor(key);
     if (shouldAutoTranslate(readingRef.current, data)) void autoTranslate(key, request);
     if (data.article?.read === false) {
       void api.setRead([key], true).catch(e => notify(e.message, true));
@@ -1133,6 +1238,42 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     const result = await run(api.setRead([key], read), { errorPrefix: '标记失败' }); if (!result) return;
     setPage((previous) => ({ ...previous, entries: previous.entries.map((entry) => (entry.key === key ? { ...entry, read } : entry)) }));
     if (selected?.article?.key === key) setSelected((current) => ({ ...current, article: { ...current.article, read } }));
+  };
+
+  /**
+   * 隐藏一篇（可撤销）。
+   *
+   * ★ 为什么叫「隐藏」而不是「删除」：那条文章是**源站的内容**，删了下次刷新会自己
+   *   回来 —— 用户看到刚清掉的文章又出现在列表里，只会觉得这个按钮没生效。真正
+   *   能删的只有本地的正文缓存，而删缓存换来的是「再打开要重抓」。所以语义定成
+   *   「我不再想看到它」，落在宿主的 `hidden` 里，列表和搜索都不再返回。
+   * ★ 撤销用 `notify` 上那颗按钮，而不是弹确认框：确认框挡在**动作之前**，
+   *   每次都多一次点击；撤销放在动作之后，只在真的点错时才付出成本。
+   * ★ 恢复的兜底入口是「已隐藏」筛选 —— 提示条 8 秒后消失，用户十分钟后才后悔
+   *   也得找得回来。只给 toast 的撤销等于没给。
+   */
+  const hideArticle = async (key) => {
+    if (!key) return;
+    const result = await run(api.setHidden(key, true), { errorPrefix: '隐藏失败' });
+    if (!result || result.hidden !== true) return;
+    setPage((previous) => ({
+      ...previous,
+      entries: previous.entries.filter((entry) => entry.key !== key),
+      hiddenCount: (previous.hiddenCount ?? 0) + 1,
+    }));
+    // 正在读的就是这篇 ⇒ 清掉右侧，否则列表里已经没有它、阅读区还开着 ——
+    // 再点「上一篇 / 下一篇」会从一个不存在的起点算起。
+    if (selected?.article?.key === key) { setSelected(undefined); setPassage(null); }
+    notify('已隐藏这篇文章', false, { label: '撤销', onClick: () => void unhideArticle(key) });
+  };
+
+  /** 撤销隐藏。重新拉一页而不是本地插回去：插回去要自己算它该排在第几篇。 */
+  const unhideArticle = async (key) => {
+    if (!key) return;
+    const result = await run(api.setHidden(key, false), { errorPrefix: '恢复失败' });
+    if (!result || result.hidden !== false) return;
+    await loadPage(undefined, true);
+    notify('已恢复这篇文章');
   };
 
   /**
@@ -1297,6 +1438,99 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   // 标题行：译文 / 改写用它们自己的中文标题（正文里的 H1 已在生成时被去掉）。
   const title = readerTitle({ active, versions, article: activeArticle?.article });
 
+  /**
+   * 导出当前这一版为 Markdown。
+   *
+   * ★ 导出的是**屏幕上这一版**（`bodyHtml` + `title`），不是原始 feed：用户在读译文，
+   *   点「导出」却拿到英文原文，是这次操作里最容易搞错的地方。
+   * ★ 文件名里的日期取 `publishedAt` 而不是「今天」：导出的是一篇有发布时间的文章，
+   *   按导出时间命名会让同一篇导出两次得到两个文件，看不出哪个是新的。
+   */
+  const exportMarkdown = () => {
+    const article = activeArticle?.article;
+    if (!article) return;
+    try {
+      const text = articleToMarkdown({
+        title,
+        url: article.url,
+        author: article.author,
+        publishedAt: article.publishedAt,
+        version: VERSION_LABELS[active],
+        html: bodyHtml,
+      });
+      downloadText(markdownFileName(title, article.publishedAt), text);
+      notify('已导出 Markdown');
+    } catch (error) {
+      notify(`导出失败：${error?.message ?? String(error)}`, true);
+    }
+  };
+
+  /**
+   * 把**选中的那一段**摘进今天的日记（0.44.9）。
+   *
+   * ★ 与「灵感速记（L）」的分工：速记记的是**你自己想的话**，摘录记的是**原文里
+   *   那一段**。以前想留一句原文，只能先选中 → 唤起 AI 伴读 → 从对话里复制 → 再按 L
+   *   粘一遍，四步；而且中间那一步会顺手把 AI 的回答也带进来。
+   * ★ `meta.article` 存文章的 key：日记里那条因此能反查到是哪一篇（`normalizeMeta`
+   *   白名单认这个字段，见 `src/diary-format.js`）。`source` 是**给人看**的那一行，
+   *   两个都写、各管一头。
+   * ★ 没选中就明说，而不是静默失败：菜单项在没选中时是禁用的，但快捷键/程序路径
+   *   仍可能走到这里 —— 点了什么都不发生是最难查的一种。
+   */
+  const excerptToDiary = async () => {
+    const entry = excerptEntry({
+      quote: passage?.quote,
+      title,
+      channelName: activeArticle?.article?.channelName,
+      articleKey: activeArticle?.article?.key,
+      date: dateKey(),
+    });
+    if (!entry) { notify('先在正文里选中一段文字，再摘录', true); return; }
+    try {
+      await appendDiaryEntry(entry);
+      notify('已摘录到今天的日记');
+    } catch (error) {
+      notify(`摘录失败：${error?.message ?? String(error)}`, true);
+    }
+  };
+
+  /* ---- 阅读位置（0.44.9）------------------------------------------------
+   * 之前 `openArticle` 里写死 scrollTo({ top: 0 })：长文读一半被叫走，回来从头开始。
+   * `read: true/false` 只回答「读没读过」，回答不了「读到哪」。
+   * ★ 存**比例**不存像素：换个窗口宽度，同一段落在完全不同的 scrollTop 上。
+   */
+  const [restoreFor, setRestoreFor] = useState('');
+  useEffect(() => {
+    if (!restoreFor || restoreFor !== selected?.article?.key) return;
+    const scroller = proseRef.current?.closest('.npr-reader');
+    if (!scroller) return;
+    const ratio = readPosition(restoreFor, localStorage);
+    if (ratio > 0) {
+      scroller.scrollTo({ top: scrollFromRatio(ratio, scroller.scrollHeight, scroller.clientHeight), behavior: 'auto' });
+    }
+    // 恢复完立刻清掉：留着的话切版本（bodyHtml 变化）会再滚一次，
+    // 把用户自己滚走的位置又拽回去 —— 看着像「翻译文就跳回上次的位置」。
+    setRestoreFor('');
+  }, [bodyHtml, restoreFor, selected?.article?.key]);
+
+  useEffect(() => {
+    const scroller = proseRef.current?.closest('.npr-reader');
+    const key = selected?.article?.key;
+    if (!scroller || !key) return undefined;
+    let timer = 0;
+    const flush = () => {
+      timer = 0;
+      savePosition(key, scrollRatio(scroller.scrollTop, scroller.scrollHeight, scroller.clientHeight), localStorage);
+    };
+    const onScroll = () => { if (timer === 0) timer = setTimeout(flush, 400); };
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      scroller.removeEventListener('scroll', onScroll);
+      // 切文章前把最后一次滚动落下来 —— 不 flush 的话「读到底就切走」那一下会丢
+      if (timer !== 0) { clearTimeout(timer); flush(); }
+    };
+  }, [selected?.article?.key]);
+
   /* ---- 文章大纲（0.44）------------------------------------------------
    * ★ 标题从**渲染后的 DOM** 里取，不从 HTML 字符串里正则匹配：`sanitizeHtml` 会丢掉
    *   它不认识的标签与属性，正则数出来的标题可能根本不在页面上；译文 / 改写两条路径
@@ -1421,7 +1655,10 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   };
   useEffect(() => { if (askContext && activeArticle?.article) setAskContext(previous => ({ ...previous, key: activeArticle.article.key, title: activeArticle.article.titleZh || activeArticle.article.title, version: active, selection: previous.key === activeArticle.article.key && previous.version === active ? previous.selection : '', quoteId: previous.key === activeArticle.article.key && previous.version === active ? previous.quoteId : undefined })); }, [activeArticle?.article?.key, active]);
   const openCompanion = (quote = '') => { if (!activeArticle) return; setFocused(false); setAskContext({ key: activeArticle.article.key, title: activeArticle.article.titleZh || activeArticle.article.title, version: active, selection: quote, quoteId: quote ? ++selectionSerial.current : undefined }); };
-  const selectChannel = (key) => { if (key === channel) return; articleRequest.current++; setAskContext(null); setFocused(false); setSelected(undefined); setPassage(null); setFilter('all'); setQuery(''); setChannel(key); };
+  // ★ 不再重置 `filter` / `query`：它们是**按频道**记的（见 `channel-state.js`），
+  //   切过去由加载 effect 装回那个源自己的那一份。在这里清成默认值，等于每次切源
+  //   都先把状态擦掉再恢复 —— 顺序稍一错就永远恢复不回来。
+  const selectChannel = (key) => { if (key === channel) return; articleRequest.current++; setAskContext(null); setFocused(false); setSelected(undefined); setPassage(null); setChannel(key); };
   /**
    * 订阅成功之后的落点。以前这里只重读频道清单、视图一动不动，于是「订阅了却看不到
    * 新源」与「停在一个源上，另一个源怎么都不出现」两件事同时成立。
@@ -1510,6 +1747,16 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
             {[['all', '全部'], ['unread', '未读'], ['favorites', '收藏']].map(([value, label]) => (
               <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>
             ))}
+            {/* 「已隐藏」是**恢复入口**，只在真的有东西藏着（或正停在这一档）时出现：
+                常驻的话，99% 的用户看到的是一个点开永远是空列表的第四个 chip。
+                ★ 判据带上 `filter === 'hidden'`：在「已隐藏」里恢复掉最后一篇之后
+                  `hiddenCount` 归零，只按计数判断会让 chip 连同当前选中态一起消失，
+                  用户会以为「我刚才点的那个筛选没了」。 */}
+            {(page.hiddenCount > 0 || filter === 'hidden') && (
+              <button type="button" aria-pressed={filter === 'hidden'} onClick={() => setFilter('hidden')}>
+                已隐藏{page.hiddenCount > 0 ? ` ${page.hiddenCount}` : ''}
+              </button>
+            )}
           </div>
           <div className={`npr-search-box${searchOpen ? '' : ' is-hidden'}`}>
             <input ref={searchInput} type="search" aria-label="搜索文章" placeholder="搜索已加载的文章…" value={query}
@@ -1534,7 +1781,7 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                 }}><Icon name="x" size={13} /></button>
             </div>
           )}
-          <div className="npr-list">
+          <div className="npr-list" ref={listRef}>
             {pageError && <div className="npr-empty"><button type="button" onClick={() => void loadPage(undefined, true)}>重试</button></div>}
             {!pageError && loading && page.entries.length === 0 && <div className="npr-empty">正在加载…</div>}
             {!pageError && !loading && page.entries.length === 0 && (
@@ -1662,9 +1909,21 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                     <div className="npr-menu" role="menu" ref={menuRef}>
                       <button type="button" onClick={() => { setMenuOpen(false); setAppearanceOpen(true); }}><Icon name="type" size={15} />阅读设置</button>
                       <button type="button" onClick={() => { setMenuOpen(false); openCompanion(passage?.quote ?? ''); }}><Icon name="wand-sparkles" size={15} />问 AI</button>
+                      {/* ★ 只在**真的有选中**时才渲染，而不是常驻 + `disabled`：
+                          本项目已经栽过「有 disabled 属性但看不出灰」的跟头（点了没反应）。
+                          条件渲染没有这个风险，代价是「没选中时看不见它」—— 而没选中时
+                          它也做不了任何事。 */}
+                      {passage?.quote && (
+                        <button type="button" onClick={() => { setMenuOpen(false); void excerptToDiary(); }}>
+                          <Icon name="highlighter" size={15} />摘录选中段落到日记
+                        </button>
+                      )}
                       <hr />
                       {activeArticle.article.url && <button type="button" onClick={() => { setMenuOpen(false); window.open(activeArticle.article.url, '_blank', 'noopener,noreferrer'); }}><Icon name="globe" size={15} />打开原文</button>}
                       <button type="button" onClick={() => { setMenuOpen(false); try { printArticle({ title: activeArticle.article.title, url: activeArticle.article.url, version: VERSION_LABELS[active], html: bodyHtml }); } catch (error) { notify(`打印失败：${error?.message ?? String(error)}`, true); } }}><Icon name="file-check" size={15} />打印 / 存为 PDF</button>
+                      {/* 和「打印」并排：一个给人看（PDF），一个给人改（Markdown）。
+                          只给 PDF 的话，想拿去做笔记只能重排一遍。 */}
+                      <button type="button" onClick={() => { setMenuOpen(false); exportMarkdown(); }}><Icon name="download" size={15} />导出 Markdown</button>
                       {/* 这两条只对**原文**有意义，所以只在「原文」版本下出现（用户 2026-10-13 要求）：
                           「抓取原文全文」补的是原文正文，「重新加载文章」重读的也是原文那一份。
                           切到译文 / 改写之后它们既看不到效果、又占着位置 ⇒ 一律不渲染。
@@ -1704,6 +1963,21 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                           ))}
                         </div>
                       </div>
+                      <hr />
+                      {/* 隐藏 / 恢复是**同一个位置的两态**，不是两条并列的菜单项：
+                          并列的话，「已隐藏」列表里点开一篇，菜单里会出现一个对这篇
+                          毫无意义的「隐藏这篇文章」。
+                          ★ 不叫「删除」：feed 里那条是源站的内容，删了下次刷新会回来，
+                            叫删除会让用户以为它再也不会出现。 */}
+                      {activeArticle.article.hidden ? (
+                        <button type="button" onClick={() => { setMenuOpen(false); void unhideArticle(activeArticle.article.key); }}>
+                          <Icon name="eye-off" size={15} />恢复这篇文章
+                        </button>
+                      ) : (
+                        <button type="button" onClick={() => { setMenuOpen(false); void hideArticle(activeArticle.article.key); }}>
+                          <Icon name="eye-off" size={15} />隐藏这篇文章
+                        </button>
+                      )}
                       <hr />
                       <button type="button" onClick={() => { setMenuOpen(false); setDialog('settings'); }}><Icon name="settings" size={15} />插件设置</button>
                       <button type="button" onClick={(event) => { setMenuOpen(false); openPicker(event); }}><Icon name="rss" size={15} />选择频道</button>
@@ -1842,7 +2116,19 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
           articleTitle: readerTitle({ active, versions: activeArticle.versions, article: activeArticle.article }),
           channel: activeArticle.article.channelName ?? '',
         } : null)} />}
-      {toast && <div role="status" aria-live="polite" className={`npr-toast${toast.isError ? ' is-error' : ''}`}>{toast.message}</div>}
+      {/* 提示条。`toast.action` 存在时多一颗按钮（撤销 / 查看）—— 它自己会关掉这条提示
+          再执行，否则「点了撤销、提示还挂着」会让人以为没生效。 */}
+      {toast && (
+        <div role="status" aria-live="polite" className={`npr-toast${toast.isError ? ' is-error' : ''}`}>
+          <span>{toast.message}</span>
+          {toast.action && (
+            <button type="button" className="npr-toast-action"
+              onClick={() => { const action = toast.action; setToast(undefined); clearTimeout(toastTimer.current); action.onClick(); }}>
+              {toast.action.label}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

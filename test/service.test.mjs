@@ -91,7 +91,7 @@ const REMOTE_METHODS = [
   'getSettings', 'getVersionContent', 'listAiModels', 'listCatalog', 'listChannels', 'listEntries',
   'listSubscriptions', 'opmlExport', 'opmlImport', 'opmlPreview', 'prepareChat', 'probeCatalogService',
   'refresh', 'removeCatalogSource', 'removeSubscription', 'saveSettings', 'searchArticles', 'setBookContext',
-  'setCatalogHidden', 'setCatalogService', 'setDiaryContext', 'setFavorite', 'setRead', 'setReadingContext', 'updateSubscription',
+  'setCatalogHidden', 'setCatalogService', 'setDiaryContext', 'setFavorite', 'setHidden', 'setRead', 'setReadingContext', 'updateSubscription',
 ];
 
 // ★ 这张表是**契约快照**，不是「大概有哪些」：多一个少一个都必须在这里改一次，

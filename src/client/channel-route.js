@@ -59,6 +59,9 @@ export function channelFailure(current, channels) {
 export function emptyListMessage({ filter, refreshing, channel, channels }) {
   if (filter === 'favorites') return '还没有收藏的文章';
   if (filter === 'unread') return '没有未读文章';
+  // 这一档空了 = 全部恢复过了。要说清「你可以走了」，而不是让用户在这一页等着
+  // 一篇文章自己冒出来（别的档的空态文案都在讲「这里为什么没东西」）。
+  if (filter === 'hidden') return '没有隐藏的文章，都恢复过了';
   if (refreshing) return '正在获取这个频道的文章…';
   if (countFeeds(channels) === 0) return '还没有订阅。点上方 + 探索订阅源。';
   const failure = channelFailure(channel, channels);

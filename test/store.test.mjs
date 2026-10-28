@@ -78,8 +78,11 @@ describe('defaultData', () => {
   it('is a fresh object each call (no shared mutable state between stores)', () => {
     assert.notEqual(defaultData(), defaultData());
     assert.deepEqual(Object.keys(defaultData()).sort(), [
-      'ai', 'articles', 'catalog', 'companionContexts', 'favorites', 'library', 'read', 'recent', 'settings', 'subscriptions', 'version',
+      'ai', 'articles', 'catalog', 'companionContexts', 'favorites', 'hidden', 'library', 'read', 'recent', 'settings', 'subscriptions', 'version',
     ]);
+    // `hidden`（0.44.9）：用户主动「不想再看到」的文章，`{ [key]: 隐藏时刻 }`。
+    // 不叫 delete：feed 里那条是源站的内容，删了下次刷新会回来。
+    assert.deepEqual(defaultData().hidden, {});
     // `library` 是**本插件自己的**书架进度（`{ states, importedFrom }`）。
     // 用户那份 ebook-sorter/data/reading.json 是只读导入源，绝不回写 —— 见 store.js 的注释。
     assert.deepEqual(defaultData().library, { states: {}, importedFrom: '' });

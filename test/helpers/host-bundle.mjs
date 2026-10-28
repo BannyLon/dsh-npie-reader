@@ -42,7 +42,7 @@ async function build() {
         `export { RssService };`,
         `export { apply, inject, name } from ${JSON.stringify(entry)};`,
         `export { remoteMethods };`,
-        `export { RssStore, dataFilePath, defaultData, MAX_ARTICLE_BODIES } from ${JSON.stringify(store)};`,
+        `export { RssStore, dataFilePath, defaultData, MAX_ARTICLE_BODIES, MAX_HIDDEN_IDS } from ${JSON.stringify(store)};`,
         // Remote 标记清单读真实现（src/host/typert-lite.js），不再读替身：替身
         // 永远返回空清单，会让「方法漏挂」逃过检查（假绿）。空壳实例让
         // remoteMethods 读到 RssService.prototype 上的描述符。
