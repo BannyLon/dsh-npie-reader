@@ -112,6 +112,14 @@ const OWNED_ATTRS = new Set([
   //   ★ 这三个都是**本插件**的 DOM 契约。宿主完全不认识它们，登记进 HOST_ANCHORS
   //     会被下面那条「宿主产物里必须命中」的反向检查判红。
   'data-diary-key', 'data-variant', 'data-mode',
+  // 读后感整页重做（0.44.0）自己写的三个：
+  //   `data-kind` / `data-image` —— 书架卡片上那张封面**这一帧用的是哪条路**
+  //     （`epub` / `pdf` / `made`，以及真图有没有真的画上去），自有 CSS 只认这两个值
+  //     来切「真封面」与「生成式封面」的排版；
+  //   `data-drop` —— 编辑器「正被拖进来」的开关（`yes` / `no`），拖拽经过时画一圈描边。
+  //   三者都只服务于本插件自己的样式，宿主完全不认识 —— 登记进 HOST_ANCHORS 会被
+  //   上面那条「宿主产物里必须命中」的反向检查判红（`data-image` 尤其容易撞车）。
+  'data-kind', 'data-image', 'data-drop',
 ]);
 
 

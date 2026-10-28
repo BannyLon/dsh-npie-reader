@@ -32,8 +32,8 @@
  *   **顶栏必须自带 `[data-window-drag]`** —— 否则在日记页按住空白处拖不动窗口
  *   （0.9.8 / 0.28.3 两次同款事故，见 memory §〇 第 94 条）。
  *
- * ★ 两个入口，同一页：侧栏第三个 tab 进来（默认灵感速记），或者**在书里点
- *   「写读后感」**进来（`intent = { module, bookId, bookTitle, ext }`）。
+ * ★ 两个入口，同一页：侧栏第三个 tab 进来（默认灵感速记），或者**在「阅读 → 读完」
+ *   那一行点「写读后感」**进来（`intent = { module, bookId, bookTitle, ext }`）。
  *
  * ★ 数据全部走 HTTP（`diary-api.js`），不走 Remote：日记是文件，翻页/搜一句都是读盘。
  *
@@ -64,8 +64,11 @@ import {
   lockDiaryGate, patchDiaryEntry, removeDiaryEntry, revealDiaryFolder, searchDiary, setupDiaryGate, unlockDiaryGate,
 } from './diary-api.js';
 import { fetchAnnotations, fetchBooks, fetchDigestStatus, fetchEbookIndex, fetchStates } from './library-api.js';
+import { BOOK_STATE_LABELS, hasFinished } from '../library.js';
+import { BookCover } from './BookCover.jsx';
 import { DiaryCalendar } from './DiaryCalendar.jsx';
 import { DiaryComposer } from './DiaryComposer.jsx';
+import { formatExt } from './book-cover.js';
 import { ensureStyles } from './ReaderPage.jsx';
 import { ViewSwitch } from './ViewSwitch.jsx';
 import { Icon } from './icons.jsx';
@@ -399,7 +402,7 @@ export function DiaryApp({
   /**
    * 当前模块。默认「灵感速记」—— 它是最轻的那个，也是打开日记时最常做的事。
    *
-   * ★ 带 `intent` 进来时**直接落到那一块**：从书里点「写读后感」走的就是这条，
+   * ★ 带 `intent` 进来时**直接落到那一块**：读完那一行点「写读后感」走的就是这条，
    *   用户已经在读一本书了，进来还要再选一次书是多余的一步。
    *   白名单校验（`DIARY_MODULES.some`）而不是直接赋值：外层传错一个值不能让
    *   这一页落到一个 `mod` 为 `undefined` 的模块上（下面 `mod.kind` 会当场炸）。
@@ -609,6 +612,23 @@ export function DiaryApp({
   const chatRef = useRef(null);
   const draftRef = useRef(null);
   const refRef = useRef(null);
+  /**
+   * 读后感编辑器的「在光标处插入」入口（由 `DiaryComposer` 填进来）。
+   *
+   * ★ 为什么不是直接用 `refRef`（textarea 的 ref）：富文本模式下根本没有 textarea，
+   *   `refRef.current` 是 `null` ⇒ 旧实现把 `at` 退回 `refDraft.length`，
+   *   于是「引用」永远追加到正文末尾。用户点的是「引到这一段」，结果跑到最后一页 ——
+   *   这是个静默的错位，不是「还没做」。
+   */
+  const insertRef = useRef(null);
+  /**
+   * 正文里是否已经带着模板的四个小标题。
+   *
+   * ★ 不用 `refDraft.trim() !== ''` 判断：那样「写了两句话再套模板」和
+   *   「已经套过又点一次」长得一模一样 —— 而后者会把四个标题**再插一遍**，
+   *   正文里于是出现两套「## 一句话总结」。按钮现在按这个标志变成「已套用」并禁用。
+   */
+  const refTemplated = refDraft.includes('## 一句话总结');
   /** 中间那张解锁卡。侧栏「那年今日」锁着时把人带到这里（见 `askUnlock`）。 */
   const gateRef = useRef(null);
 
@@ -765,21 +785,35 @@ export function DiaryApp({
     }
   }
 
-  /** 一本书读完没有。认不出的 id 一律按「未读完」—— 宁可挡住，不可放行。 */
-  const stateOf = (id) => bookStates[id]?.state ?? 'unread';
+  /** 一本书当前的状态名（`unread` / `reading` / `read` / `dropped`）。认不出的 id 按未读。 */
+  const stateNameOf = (id) => (bookStates[id]?.state ?? 'unread');
+
+  /**
+   * 这本书**读完过没有**（0.44.3）。
+   *
+   * ★ 判据不是 `stateNameOf(id) === 'read'`：用户点「重新阅读」之后那本书回到「在读」，
+   *   可他写过的读后感还在磁盘上 —— 入口跟着状态一起消失，就是「内容还在、门没了」
+   *   （用户 2026-10-28：「如果用户又点击了重新阅读，那么读后感的列表下不应该消失」）。
+   * ★ 判据本身在 `library.js` 的 `hasFinished` 里，宿主与这里共用一份 —— 这个页面上
+   *   「哪本书算读完过」只有一套说法。
+   */
+  const finishedOf = (id) => hasFinished(bookStates[id]);
 
   /**
    * 打开一本书（读后感工作台）。
    *
-   * ★ **只对读完的书开放**（用户 2026-10-27：「这一步分一个非常重要的已经标记为读完的书，
-   *   只有读完的书才可以写读后感」）。所以这里有两道闸：
-   *   ① 侧栏把书分两组、未读完的那组 `disabled`（看得见为什么点不动）；
-   *   ② 这个函数本身再判一次 —— 从书里点「写读后感」进来时 `openBook` 是直接调的，
-   *      没有经过侧栏那道 UI 闸。只做 ① 的话，从阅读器进来照样能写。
+   * ★ **只对读完（过）的书开放**（用户 2026-10-27：「这一步分一个非常重要的已经
+   *   标记为读完的书，只有读完的书才可以写读后感」）。所以这里有两道闸：
+   *   ① 侧栏只列 `finishedOf` 为真的书（没读过的根本不出现，点了也进不来）；
+   *   ② 这个函数本身再判一次 —— 从阅读页「读完」那一行点「写读后感」进来时
+   *      `openBook` 是直接调的（见 ReaderPage 的 `writeReflection`），没有经过侧栏
+   *      那道 UI 闸。只做 ① 的话，从外面进来照样能写。
+   * ★ 0.44.3：「读完」改成「读完过」（`hasFinished`）—— 点过「重新阅读」的书仍然
+   *   开得进来，否则它会出现在侧栏里却点不动（那正是「看起来像功能」）。
    */
   async function openBook(target) {
-    const status = stateOf(target.id);
-    setBook({ ...target, readable: status === 'read' });
+    const finished = finishedOf(target.id);
+    setBook({ ...target, readable: finished });
     setBookEntries({ items: [], busy: true });
     setAnnotations({ items: [], busy: true, error: '' });
     // 模板只在**还没写过**时预填，否则会覆盖用户已经改过的正文。
@@ -814,14 +848,15 @@ export function DiaryApp({
   useEffect(() => { fetchDiaryStats().then(setStats).catch(() => {}); }, [day.chars, day.privateCount]);
 
   /**
-   * 从书里点「写读后感」过来：**直接打开那本书**。
+   * 从「阅读 → 读完」那一行的「写读后感」过来：**直接打开那本书**。
    *
    * ★ 不要求它在书单里 —— 书架会被 `BOOKS_PAGE_LIMIT` 截断（本机 2634 本），
    *   而 `/book/:id` 只认 id，截断之外的书照样读得到。所以这里用 intent 自带的
    *   `title` / `ext` 拼一个最小 book 对象，不去书单里找。
    * ★ 但「读完没有」必须先问清楚：`bookStates` 可能还是空的（书单还没拉回来），
-   *   所以这里**先拉一次 states**，再 openBook。不这么做的话，从阅读器点进来会
-   *   因为「状态未到」被判成未读完 —— 而用户刚刚在书里点过「标记读完」。
+   *   所以这里**先拉一次 states**，再 openBook。不这么做的话，从阅读页点进来会
+   *   因为「状态未到」被判成没读完 —— 而用户刚刚在那边点过「标记读完」，
+   *   或者早就读完了、只是点了「重新阅读」（那种书靠 `finishedAt` 仍然算读完过）。
    * ★ 依赖只写 `intent?.bookId`（原始值）：外层每次渲染都可能传一个新对象，
    *   依赖对象身份会让这条 effect 每渲染都跑一次 —— 每跑一次就多一轮读盘。
    */
@@ -1466,20 +1501,27 @@ export function DiaryApp({
     }
   }
 
+  /**
+   * 一条划线要插进正文的那段 markdown。
+   *
+   * ★ 抽成函数是为了让「点引用」与「拖进编辑器」**插入逐字节相同的文本**。
+   *   两处各拼一次的话，页码括号、结尾空行迟早会长得不一样（而用户会以为是
+   *   「拖进去的和点进去的不是同一条」）。
+   */
+  function quoteSnippet(item) {
+    const page = Number.isInteger(item.page) ? `（第 ${item.page} 页）` : '';
+    return `> ${String(item.quote ?? '').replace(/\n+/g, ' ').trim()}${page}\n\n`;
+  }
+
   /** 把一条划线引用进读后感正文（插在光标处，包成 Markdown 引用块）。 */
   function quoteAnnotation(item) {
-    const page = Number.isInteger(item.page) ? `（第 ${item.page} 页）` : '';
-    const snippet = `> ${String(item.quote ?? '').replace(/\n+/g, ' ').trim()}${page}\n\n`;
-    const textarea = refRef.current;
-    const at = textarea?.selectionStart ?? refDraft.length;
-    const next = `${refDraft.slice(0, at)}${snippet}${refDraft.slice(at)}`;
-    setRefDraft(next);
-    requestAnimationFrame(() => {
-      if (!textarea) return;
-      textarea.focus();
-      textarea.selectionStart = at + snippet.length;
-      textarea.selectionEnd = at + snippet.length;
-    });
+    const snippet = quoteSnippet(item);
+    if (insertRef.current) {
+      insertRef.current(snippet, null);
+      return;
+    }
+    // 编辑器还没挂上（或这一页还没打开）时的退路：追加到末尾，至少不会丢。
+    setRefDraft((current) => `${current}${snippet}`);
   }
 
   const startDrag = (event) => {
@@ -1652,7 +1694,7 @@ export function DiaryApp({
   const filteredBooks = books.items.filter((item) => (
     bookQuery.trim() === '' || item.title.toLowerCase().includes(bookQuery.trim().toLowerCase())
   ));
-  const readBooks = filteredBooks.filter((item) => stateOf(item.id) === 'read');
+  const readBooks = filteredBooks.filter((item) => finishedOf(item.id));
 
   /**
    * 书籍档案卡上的数。**全部来自已经在手的数据**，打开一本书不额外多读一次盘。
@@ -2144,19 +2186,42 @@ export function DiaryApp({
 
               {!books.busy && books.error === '' && (
                 <section className="npr-diary-sect">
+                  {/* ★ 这个名单的取向是「**读完过**」，不是「此刻状态是读完」：点过
+                      「重新阅读」的书仍然留在里面（用户 2026-10-28 的要求），
+                      卡片上会挂一枚「在读」/「弃读」的小牌子把那件事说清楚 ——
+                      否则一份叫「读完的」名单里躺着一本在读的书，就是一句假话。 */}
                   <h2 className="npr-diary-sect-head"><Icon name="book-open" size={12} />读完的<span className="npr-diary-sect-badge">{readBooks.length}</span></h2>
                   {readBooks.length === 0 && (
-                    <p className="npr-diary-sect-note">还没有读完的书。在书架里读完一本、点「标记读完」，它就会出现在这里。</p>
+                    <p className="npr-diary-sect-note">还没有读完的书。到「阅读 → 读完」点那本书右边的「写读后感」，或者在书里读完点「标记读完」，它就会出现在这里。</p>
                   )}
-                  {readBooks.map((item) => (
-                    <button key={item.id} type="button"
-                      className={`npr-diary-dayrow${book?.id === item.id ? ' npr-selected' : ''}`}
-                      aria-pressed={book?.id === item.id} title={item.title}
-                      onClick={() => void openBook(item)}>
-                      <span className="npr-diary-dayrow-date">{item.title}</span>
-                      <span className="npr-diary-dayrow-count">{item.ext}</span>
-                    </button>
-                  ))}
+                  {/*
+                    * ★ 两列封面网格，不是单行列表：用户 2026-10-28 的原话是
+                    *   「把密密麻麻的单行文本列表改成两列式、带封面的卡片网格，
+                    *   让侧栏有实体书房的氛围」。
+                    * ★ 封面只有两条真来源（EPUB 内嵌 / PDF 第一页），其余**生成** ——
+                    *   见 `book-cover.js` 顶部：书架索引里没有 cover 字段，
+                    *   所以「没有封面图就画一个」不是偷懒，是唯一诚实的做法。
+                    */}
+                  <div className="npr-diary-shelf">
+                    {readBooks.map((item) => {
+                      const name = stateNameOf(item.id);
+                      const flag = name === 'read' ? '' : (BOOK_STATE_LABELS[name] ?? '');
+                      return (
+                        <button key={item.id} type="button"
+                          className={`npr-diary-shelfcard${book?.id === item.id ? ' npr-selected' : ''}`}
+                          aria-pressed={book?.id === item.id}
+                          title={flag === '' ? item.title : `${item.title}（${flag} —— 读后感还在）`}
+                          onClick={() => void openBook(item)}>
+                          <BookCover book={item} />
+                          <span className="npr-diary-shelfcard-title">{item.title}</span>
+                          <span className="npr-diary-shelfcard-meta">
+                            <span className="npr-diary-shelfcard-ext">{formatExt(item.ext)}</span>
+                            {flag !== '' && <span className="npr-diary-shelfcard-flag">{flag}</span>}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </section>
               )}
 
@@ -2165,8 +2230,9 @@ export function DiaryApp({
                *   「读后感只显示标记完成的书，不显示未读完的书」。
                *   这一栏的用途是「解释为什么点不动」，但代价是把整个书架摊在侧栏里 ——
                *   2636 行既压掉了真正要选的那 1 本，也让「这里能做什么」变得不可读。
-               *   门禁本身不受影响：`openBook` 与 `stateOf` 仍然挡住未读完的书，
-               *   从阅读器进来的入口也仍然是 disabled（见 BookReader / BookEbook）。
+               *   门禁本身不受影响：`openBook` 与 `finishedOf` 仍然挡住没读完的书，
+               *   而外部进来的那条路（阅读页「读完」行的「写读后感」）本来就只出现在
+               *   读完的书上（见 `bookRowView` 的 read 分支）。
                */}
 
               {!books.busy && books.error === '' && filteredBooks.length === 0 && (
@@ -2344,7 +2410,7 @@ export function DiaryApp({
                 )}
 
                 {moduleValue === 'reflection' && book && book.readable && (
-                  <section className="npr-diary-write">
+                  <section className="npr-diary-write is-paper">
                     {/* 书籍档案卡：这本书读过多少、划过多少、写过多少。五个数全部是
                         已有的计量，没有为它新加任何埋点。 */}
                     <div className="npr-diary-dossier" role="group" aria-label="这本书的档案">
@@ -2372,15 +2438,28 @@ export function DiaryApp({
                       onSubmit={() => void saveReflection()}
                       busy={saving}
                       inputRef={refRef}
+                      insertRef={insertRef}
                       maxHeight={300}
                       placeholder="写下这本书留给你的东西。"
-                      actions={(
-                        <>
-                          <button type="button" className="npr-diary-linkish" onClick={() => setRefDraft((current) => (current.trim() === '' ? REFLECTION_TEMPLATE : `${current.replace(/\s+$/, '')}\n\n${REFLECTION_TEMPLATE}`))}>
-                            套用模板
+                      /*
+                       * 模板条从底栏挪到编辑器上方：它是这一页的「结构」，不是
+                       * 「保存/清空」那一类的动作。底栏留三个动作会让人以为三件
+                       * 事同级 —— 而「清空」和「记下来」本来就不该同级。
+                       */
+                      header={(
+                        <div className="npr-diary-tplbar">
+                          <span className="npr-diary-tplbar-label">结构化读后感模板</span>
+                          <button type="button" className="npr-diary-tplbtn" disabled={refTemplated}
+                            title={refTemplated
+                              ? '正文里已经有这四个小标题了。想恢复结构，把它们补回来即可 —— 再点一次会把模板重复插一遍。'
+                              : '把「一句话总结 / 核心收获 / 行动指南 / 金句摘录」四个小标题填进正文'}
+                            onClick={() => setRefDraft((current) => (current.trim() === '' ? REFLECTION_TEMPLATE : `${current.replace(/\s+$/, '')}\n\n${REFLECTION_TEMPLATE}`))}>
+                            {refTemplated ? '已套用' : '套用模板'}
                           </button>
-                          <button type="button" className="npr-diary-linkish" onClick={() => setRefDraft('')}>清空</button>
-                        </>
+                        </div>
+                      )}
+                      actions={(
+                        <button type="button" className="npr-diary-linkish is-danger" onClick={() => setRefDraft('')}>清空</button>
                       )}
                     />
                   </section>
@@ -2398,8 +2477,7 @@ export function DiaryApp({
                     <div className="npr-diary-blocked">
                       <p><strong>《{book.title}》还没标记读完。</strong></p>
                       <p>读后感只对读完的书开放 —— 回到书架，读完并点顶部那颗「标记读完」，再回来这里写。</p>
-                    </div>
-                  ) : (
+                    </div>                  ) : (
                     /*
                      * ★ 空状态照抄「阅读」那一页的版式（`.npr-welcome` 那一组类，
                      *   样式来自 ReaderPage 的 PANEL_CSS，同一份注入表）。
@@ -2411,16 +2489,17 @@ export function DiaryApp({
                       <div className="npr-welcome-brand">NPIE REFLECTION</div>
                       <h2>读完的书，值得留一句</h2>
                       <p className="npr-welcome-intro">
-                        左边只列<strong>读完</strong>的书。没读完的不在里面 ——
-                        读后感是读完之后的事，不是阅读进度的一部分。
+                        左边只列<strong>读完过</strong>的书。没读完的不在里面 ——
+                        读后感是读完之后的事，不是阅读进度的一部分。读完之后又点了
+                        「重新阅读」的书仍然留在里面：它写过的读后感不会因为再读一遍就消失。
                       </p>
                       <p className="npr-welcome-intro">
                         点左边任意一本，右边就是写给它的地方。写下的这一页会记住书名、
                         章节和页码，以后翻这本，还找得到当时写在哪里。
                       </p>
                       <p className="npr-welcome-intro">
-                        也可以反过来：在书里读着读着，点顶部那颗「<strong>写读后感</strong>」，
-                        直接带着这本书落到这一页。
+                        也可以从那边过来：「阅读 → 读完」里每本书右边都有一颗
+                        「<strong>写读后感</strong>」，点它就直接带着这本书落到这一页。
                       </p>
                       <div className="npr-welcome-keys">
                         <span>读完 {readBooks.length} 本</span>
@@ -2647,35 +2726,50 @@ export function DiaryApp({
                     {!bookEntries.busy && bookEntries.items.length === 0 && (
                       <div className="npr-diary-blank"><p>这本书还没有读后感。</p></div>
                     )}
-                    {bookEntries.items.map((entry) => {
-                      const html = renderBody(entry.body);
-                      const key = entryKey(entry);
-                      const entryMood = firstMood(entry.mood);
-                      return (
-                        <article className="npr-diary-entry" key={`${entry.date}-${key}`}>
-                          <header className="npr-diary-entry-head">
-                            <span className="npr-diary-time">{entry.date} {entry.time}</span>
-                            {entryMood && <span className="npr-diary-mood" title="写这一篇时的心情">{entryMood}</span>}
-                            <span className="npr-diary-entry-actions">
-                              <button type="button" className="npr-diary-action" title="让 AI 整理这一篇" disabled={aiKey !== ''}
-                                onClick={() => void openAiPanel(entry)}>
-                                {aiKey === key ? '正在打开…' : 'AI 整理这一篇'}
-                              </button>
-                              {confirmKey === key ? (
-                                <button type="button" className="npr-diary-action is-danger" disabled={busyKey !== ''}
-                                  onClick={() => void removeAt(entry)}>
-                                  {busyKey === key ? '正在删除…' : '确认删除'}
-                                </button>
-                              ) : (
-                                <button type="button" className="npr-diary-action" title="删掉这一篇" aria-label="删掉这一篇"
-                                  onClick={() => setConfirmKey(key)}><Icon name="trash-2" size={13} /></button>
-                              )}
-                            </span>
-                          </header>
-                          <EntryBody html={html} text={entry.body} onExpand={() => setExpand(entry)} />
-                        </article>
-                      );
-                    })}
+                    {/*
+                      * ★ 用户 2026-10-28：「将原先下方碎裂的『历史记下一篇』卡片合并为
+                      *   单篇完整的卡片式长文」。原来每一篇都是一张独立的
+                      *   `.npr-diary-entry`（各有上边框），三篇以上就是三张卡片的堆叠，
+                      *   读起来像三条通知，而不是「这本书我一直在写」。
+                      * ★ **只并渲染，不并数据**：存储仍然是一天一篇的 .md。
+                      *   真合并会改掉导出、按天检索与标签索引的语义 —— 那是另一件事，
+                      *   也是用户明确没要的那件。
+                      * ★ 分隔用虚线而不是实线：实线是「另一张卡片」的语言，
+                      *   虚线是「同一篇里的下一段」。
+                      */}
+                    {bookEntries.items.length > 0 && (
+                      <article className="npr-diary-entry npr-diary-longform">
+                        {bookEntries.items.map((entry) => {
+                          const html = renderBody(entry.body);
+                          const key = entryKey(entry);
+                          const entryMood = firstMood(entry.mood);
+                          return (
+                            <section className="npr-diary-part" key={`${entry.date}-${key}`}>
+                              <header className="npr-diary-entry-head">
+                                <span className="npr-diary-time">{entry.date} {entry.time}</span>
+                                {entryMood && <span className="npr-diary-mood" title="写这一篇时的心情">{entryMood}</span>}
+                                <span className="npr-diary-entry-actions">
+                                  <button type="button" className="npr-diary-action" title="让 AI 整理这一篇" disabled={aiKey !== ''}
+                                    onClick={() => void openAiPanel(entry)}>
+                                    {aiKey === key ? '正在打开…' : 'AI 整理这一篇'}
+                                  </button>
+                                  {confirmKey === key ? (
+                                    <button type="button" className="npr-diary-action is-danger" disabled={busyKey !== ''}
+                                      onClick={() => void removeAt(entry)}>
+                                      {busyKey === key ? '正在删除…' : '确认删除'}
+                                    </button>
+                                  ) : (
+                                    <button type="button" className="npr-diary-action" title="删掉这一篇" aria-label="删掉这一篇"
+                                      onClick={() => setConfirmKey(key)}><Icon name="trash-2" size={13} /></button>
+                                  )}
+                                </span>
+                              </header>
+                              <EntryBody html={html} text={entry.body} onExpand={() => setExpand(entry)} />
+                            </section>
+                          );
+                        })}
+                      </article>
+                    )}
                   </>
                 )}
 
@@ -2717,12 +2811,27 @@ export function DiaryApp({
                   <div className="npr-empty"><p>这本书还没有划线。</p><p>在书里选中一段就能划线。</p></div>
                 )}
                 {annotations.items.map((item) => (
-                  <div className="npr-diary-mark" key={item.id ?? `${item.page}-${item.start}`}>
+                  <div className="npr-diary-mark" key={item.id ?? `${item.page}-${item.start}`}
+                    /*
+                     * ★ 整张卡可拖：用户 2026-10-28 要的是「边看划线边写」——
+                     *   拖拽比「先找光标再点引用」少两个动作。
+                     * ★ `text/plain` 里放的就是插入正文的那段 markdown（与「引用」
+                     *   按钮同一份，见 `quoteSnippet`），所以拖到别处（例如聊天框）
+                     *   也仍然是一段可读的引用，而不是一串 JSON。
+                     */
+                    draggable
+                    onDragStart={(event) => {
+                      const snippet = quoteSnippet(item);
+                      event.dataTransfer.setData('text/plain', snippet);
+                      event.dataTransfer.effectAllowed = 'copy';
+                    }}
+                    title="拖进右边的编辑框，或点「引用」插到光标处">
                     <p className="npr-diary-mark-quote">{item.quote}</p>
                     {item.note && <p className="npr-diary-mark-note">{item.note}</p>}
                     <div className="npr-diary-mark-foot">
                       <span>{Number.isInteger(item.page) ? `第 ${item.page} 页` : ''}</span>
                       <button type="button" className="npr-diary-action" disabled={!book.readable}
+                        title="插到正文的光标处（Markdown 引用块）"
                         onClick={() => quoteAnnotation(item)}>引用</button>
                     </div>
                   </div>
@@ -2928,8 +3037,17 @@ export function DiaryApp({
                量真实宽度而不是读常量：侧栏本身可以拖。 */
             const nav = vertical ? 0 : (area.querySelector('.npr-diary-nav')?.getBoundingClientRect().width ?? 0);
             const room = Math.max(0, total - nav);
-            const minimum = Math.min(320, room * 0.42);
-            const amount = Math.max(minimum, Math.min(span, room - minimum));
+            /*
+             * ★ 「正文区（正文列 + 划线栏）至少留多宽」= 480，与 refinements.css 里
+             *   `.npr-diary-companion` 的 `calc(100% - var(--npr-list-width) - 480px)`
+             *   **同一个数**。0.44.0 这里是 340，而 0.44.1 给正文列加了 320px 下限后，
+             *   340 − 320 只剩 20px 给划线栏 —— 两个数必须一起改。
+             * ★ `panelFloor` 是面板自己的下限，与上面那个保留量是两件事，只是 0.44.0
+             *   之前共用了一个变量（`minimum`），看起来像同一个数其实是两个意思。
+             */
+            const READER_FLOOR = 480;
+            const panelFloor = Math.min(320, room * 0.42);
+            const amount = Math.max(panelFloor, Math.min(span, room - READER_FLOOR));
             companionWidthRef.current = Math.round(amount / total * 100);
             setCompanionWidth(companionWidthRef.current);
           }}

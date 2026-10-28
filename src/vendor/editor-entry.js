@@ -25,7 +25,7 @@
  *   直接 `import()` 一个 URL 就能跑，不需要模块解析器帮它找 react。
  */
 
-import { Editor, rootCtx, defaultValueCtx } from '@milkdown/kit/core';
+import { Editor, rootCtx, defaultValueCtx, editorViewCtx } from '@milkdown/kit/core';
 import {
   commonmark,
   toggleStrongCommand,
@@ -136,6 +136,38 @@ export async function createDiaryEditor(options) {
     focus() {
       const editable = root.querySelector('.ProseMirror');
       if (editable && typeof editable.focus === 'function') editable.focus();
+    },
+    /**
+     * 在光标处插入一段 markdown（划线的「引用」与拖拽都走这里）。
+     *
+     * ★ 为什么必须有这个方法：上层拿到的只是 markdown 字符串，**不知道光标在哪**。
+     *   没有它的话，「引用」只能追加到正文末尾 —— 用户选中第三段去点引用，
+     *   引用块却跑到最后一页，那是一次静默的失败（看上去像「位置随机」）。
+     * ★ `coords` 是拖拽落点的屏幕坐标。`posAtCoords` 拿不到位置时退回当前选区，
+     *   而不是静默什么都不做。
+     * ★ 全程吞错并返回 `false`：编辑器内部状态异常时，上层还有「textarea 退路」，
+     *   不该让一次插入把整块写作区炸掉。
+     */
+    insert(markdown, coords) {
+      const text = typeof markdown === 'string' ? markdown : '';
+      if (text === '') return false;
+      try {
+        const view = editor.ctx.get(editorViewCtx);
+        let at = view.state.selection.from;
+        if (coords && Number.isFinite(coords.x) && Number.isFinite(coords.y)) {
+          try {
+            const found = view.posAtCoords({ left: coords.x, top: coords.y });
+            if (found && Number.isInteger(found.pos)) at = found.pos;
+          } catch {
+            /* 落点算不出来就用光标位置 */
+          }
+        }
+        view.dispatch(view.state.tr.insertText(text, at));
+        view.focus();
+        return true;
+      } catch {
+        return false;
+      }
     },
   };
 }

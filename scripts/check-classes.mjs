@@ -96,6 +96,11 @@ const NOT_CLASSES = new Set([
   //     写在根节点 `style` 上、`.npr-ebook-sheet` 用 `var(...)` 消费；
   //   - `npr-ebook-fab-list` 是浮动列的 **元素 id**（`aria-controls` 指向它），不是类名。
   'npr-ebook-width', 'npr-ebook-fab-list',
+  // 生成式封面（0.44.0）：`--npr-cover-h` 是 **CSS 自定义属性**，由 `BookCover`
+  // 按书名哈希写在 `.npr-diary-cover` 的行内 style 上、CSS 侧用
+  // `hsl(var(--npr-cover-h) …)` 消费。它永远不会有 `.npr-cover-h` 这样的类选择器 ——
+  // 加进来是因为检查器把 `var(--npr-cover-h, 212)` 的兜底值读成了一个 token。
+  'npr-cover-h',
 ]);
 
 // 有意保留的语义钩子：只用于在 DOM 上标记区块边界，没有对应样式。

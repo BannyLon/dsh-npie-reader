@@ -10,15 +10,20 @@
    「268px 导航 + 44% 面板，正文只剩 ~330px」。用户 2026-10-27 的回应是
    「为什么打开 AI 整理左侧边栏就关闭了呢」—— 收起导航不是解法，是把这个
    问题换成了另一个问题：正在看的那一天、那几个标签，一下全不见了。
-   现在导航留着，改成给**正文**一个下限：面板最多长到「总宽 − 导航 − 340px」。
-   ★ 340 这个数在两处出现：这里，和 DiaryApp 拖动分隔条的 onPointerMove。
+   现在导航留着，改成给**正文**一个下限：面板最多长到「总宽 − 导航 − 480px」。
+   ★ 480 这个数在两处出现：这里，和 DiaryApp 拖动分隔条的 onPointerMove。
      必须同源 —— CSS 单方面截断会让手柄出现一段「拖不动，也看不出为什么」的死区。
+   ★ 0.44.0 这里是 **340**。0.44.1 给正文列（`.npr-diary-flow`）加了 320px 下限之后，
+     340 − 320 = 20 —— 划线栏会剩一条 20px 的缝，看起来就像渲染坏了。
+     两个数必须一起改：480 = 正文列 320 + 划线栏至少 160。
+   ★ `clamp(320px, …)` 的下限是给「窗口窄到 480 都凑不出」时兜底：`min()` 算出来是
+     负数，而 flex-basis 不接受负值（声明会整条失效、退回 `auto`，面板反而长到最大）。
    ★ 只在横向布局（根容器 ≥ 701px）生效：容器查询在 700px 以下会把 workarea
      翻成纵向，那时 `100%` 指的是宽度、flex-basis 却是高度，同一个公式会算错。 */
 @container (min-width: 701px) {
   .npr-workarea.npr-diary-workarea.has-companion > .npr-diary-companion {
-    flex: 0 0 min(var(--npr-companion-width, 44%), calc(100% - var(--npr-list-width, 268px) - 340px));
-    width: min(var(--npr-companion-width, 44%), calc(100% - var(--npr-list-width, 268px) - 340px));
+    flex: 0 0 clamp(320px, var(--npr-companion-width, 44%), calc(100% - var(--npr-list-width, 268px) - 480px));
+    width: clamp(320px, var(--npr-companion-width, 44%), calc(100% - var(--npr-list-width, 268px) - 480px));
   }
 }
 .npr-workarea.has-companion .npr-article { padding-inline: clamp(18px, 3%, 36px); }
@@ -2545,6 +2550,38 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-diary-dayrow-count { flex: 0 0 auto; font-size: 11px; color: var(--npr-faint); font-variant-numeric: tabular-nums; }
 .npr-diary-dayrow-mood { flex: 0 0 auto; font-size: 12px; line-height: 1; }
 
+/* ── 读后感侧栏：两列封面书墙 ────────────────────────────────────────────
+   ★ 两列用 `minmax(0, 1fr)` 而不是 `1fr`：本机的书名动辄四十多个字
+     （`《译文名著文库》 076[法]雨果-九三年（叶尊译，上…`），`1fr` 的默认
+     `min-width:auto` 会被这串字撑开 ⇒ 第二列被挤到下一行，网格看起来「塌了」。
+   ★ 封面比例 3:4，用 `aspect-ratio` 而不是 `padding-top: 133%`：
+     它跟着列宽自己算，侧栏在 220–420px 之间拖动时卡片等比缩放，不需要断点。
+   ★ 悬停浮起只动 `transform` 与 `box-shadow`（合成层上的两件事），
+     不动 `width/height` —— 动尺寸会让整格重排，扫过一排卡片时像在抖。 */
+.npr-diary-shelf { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 10px; padding: 2px 8px 6px; }
+.npr-root button.npr-diary-shelfcard { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--npr-fg); font: inherit; text-align: left; cursor: pointer; }
+.npr-diary-cover { position: relative; display: block; width: 100%; aspect-ratio: 3 / 4; overflow: hidden; border-radius: 4px; background: color-mix(in srgb, var(--npr-fg) 6%, var(--npr-bg)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--npr-fg) 10%, transparent), 0 2px 4px rgb(0 0 0 / 10%); transition: transform .14s ease-out, box-shadow .14s ease-out; }
+.npr-diary-cover-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+/* 生成式封面：色相由书名哈希给（`--npr-cover-h` 由 BookCover 写在行内），
+   所以同一本书每次都是同一个颜色，不同书之间散得开。 */
+.npr-diary-cover-made { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; width: 100%; height: 100%; padding: 8px 7px; background: linear-gradient(158deg, hsl(var(--npr-cover-h, 212) 30% 54%), hsl(calc(var(--npr-cover-h, 212) + 26) 32% 36%)); color: #fff; }
+.npr-diary-cover-glyph { font-size: 22px; font-weight: 600; line-height: 1.1; letter-spacing: .02em; text-shadow: 0 1px 2px rgb(0 0 0 / 22%); }
+.npr-diary-cover-caption { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 9.5px; line-height: 1.45; text-align: center; opacity: .86; }
+.npr-diary-shelfcard-title { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 11.5px; line-height: 1.45; color: var(--npr-fg); }
+.npr-diary-shelfcard-meta { display: flex; align-items: center; gap: 4px; }
+.npr-diary-shelfcard-ext { padding: 0 5px; border-radius: 4px; background: color-mix(in srgb, var(--npr-fg) 8%, transparent); color: var(--npr-faint); font-size: 9.5px; font-weight: 600; line-height: 15px; letter-spacing: .04em; }
+/* 「这本在读 / 已弃读了，但读后感还在」（0.44.3）。
+   ★ 它必须和格式胶囊**长得不一样**：格式（EPUB / PDF）是书的身份，这枚是**状态**
+     —— 用强调色描边而不是灰底，否则两枚灰胶囊并排，谁也看不出哪个是会变的那一个。
+   ★ 只有「读完过、此刻不在读完」的卡片才有它，所以它出现就是信息。 */
+.npr-diary-shelfcard-flag { padding: 0 5px; border: 1px solid color-mix(in srgb, var(--npr-accent) 42%, transparent); border-radius: 4px; color: color-mix(in srgb, var(--npr-accent) 72%, var(--npr-fg)); font-size: 9.5px; font-weight: 600; line-height: 13px; letter-spacing: .04em; }
+.npr-root button.npr-diary-shelfcard:hover .npr-diary-cover { transform: translateY(-2px); box-shadow: 0 0 0 1px color-mix(in srgb, var(--npr-fg) 20%, transparent), 0 6px 14px rgb(0 0 0 / 18%); }
+.npr-root button.npr-diary-shelfcard:hover .npr-diary-shelfcard-title { color: var(--npr-fg); }
+.npr-root button.npr-diary-shelfcard.npr-selected .npr-diary-cover { box-shadow: 0 0 0 2px var(--npr-accent), 0 4px 10px rgb(0 0 0 / 16%); }
+.npr-root button.npr-diary-shelfcard.npr-selected .npr-diary-shelfcard-title { font-weight: 600; }
+.npr-root button.npr-diary-shelfcard:focus-visible { outline: none; }
+.npr-root button.npr-diary-shelfcard:focus-visible .npr-diary-cover { box-shadow: 0 0 0 2px var(--npr-accent-strong, var(--npr-accent)); }
+
 /* ── 侧栏卡片：本月情绪 / 那年今日 ────────────────────────────────────────
    ★ 为什么这两块要**长出边框和底**，而上面「这个月」那串只是列表：
      它们不是同一种东西。「这个月」是日历的续行（哪天写过），这两块是**另一件事**
@@ -2680,7 +2717,30 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
    于是空状态下它就是页面顶部的一片空白 —— 用户找不到落笔处（2026-10-27 反馈）。
    这条底边负责合上这个块；不引入背景色，避免又变回 0.33 那个「灰底圆角盒子」。 */
 .npr-diary-write { margin: 0 0 20px; padding-bottom: 14px; border-bottom: 1px solid var(--npr-border); }
+/* 读后感这一块自带「纸」，外面那条合缝线就是重复的 —— 纸的底边已经把块收住了。 */
+.npr-diary-write.is-paper { padding-bottom: 0; border-bottom: 0; margin-bottom: 18px; }
 .npr-write { position: relative; }
+/* 占位提示的定位基准（见 DiaryComposer 里 `.npr-write-body` 的注释）。
+   没有它，`.npr-write-ph` 会相对带内边距的 `.npr-write` 定位，与光标起点差 16px。 */
+.npr-write-body { position: relative; }
+/* ── 读后感的写作区：一张纸，不是四个格子 ──────────────────────────────
+   ★ 用户 2026-10-28 的原话是「把四个大标题变成可折叠的卡片区块」。**没有照做**，
+     理由写在 `diary-format.js`：模板是四个 `##` 的 markdown 文本，不是四个字段。
+     真要做卡片，只有两条路 —— 按标题文字包容器（标题一改名就塌），
+     或者拆成四个 input（那就退回填空表单，正是要摆脱的东西）。
+   ★ 所以这里做的是**一张纸**：四张小卡片是把写作变成表单，一张纸才是稿纸。
+     0.33 的「框套框」不会复现 —— 内部的 textarea / ProseMirror 一直是透明无框的。
+   ★ 只上 `reflection`：灵感是「打开即写」的极简入口，私密页要把高度留给字，
+     给它们加纸面只会让那两页变重。 */
+.npr-write[data-variant="reflection"] { padding: 12px clamp(8px, 4%, 16px) 10px; border: 1px solid color-mix(in srgb, var(--npr-fg) 7%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--npr-fg) 1.5%, transparent); transition: border-color .14s ease-out, background .14s ease-out; }
+/* ★ 左右内边距走 `clamp(8px, 4%, 16px)` 而不是写死 16px：面板占掉右侧时纸面只剩
+   252px，两侧各 16px 加上边框就吃掉 34px，工具条（7 个按钮 + 预览）需要 222px ——
+   实测溢出 4px，图标被切。换成百分比后窄时自动收到 10px，宽时仍是 16px。 */
+/* 聚焦时纸面抬一点：焦点不靠一圈品牌色描边表达（那是 0.33 被删掉的做法）。 */
+.npr-write[data-variant="reflection"]:focus-within { border-color: color-mix(in srgb, var(--npr-fg) 12%, transparent); background: color-mix(in srgb, var(--npr-fg) 2.5%, transparent); }
+/* 划线拖进来时整块写作区亮一下：拖拽最怕的是「松手之后不知道会落到哪儿」，
+   所以落点必须**在拖动过程中**就可见，而不是松手后才发生。 */
+.npr-write[data-drop="yes"] { border-radius: 10px; background: color-mix(in srgb, var(--npr-accent) 6%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--npr-accent) 52%, transparent); }
 .npr-write-input { display: block; width: 100%; min-height: 76px; padding: 2px 0 6px; border: 0; outline: none; background: transparent; color: var(--npr-fg); font: inherit; font-size: 15px; line-height: 1.85; resize: none; overflow: auto; }
 .npr-write[data-variant=reflection] .npr-write-input { min-height: 140px; }
 .npr-write[data-variant=private] .npr-write-input { min-height: 96px; }
@@ -2715,6 +2775,28 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-write-rich .ProseMirror h1:first-child,
 .npr-write-rich .ProseMirror h2:first-child,
 .npr-write-rich .ProseMirror h3:first-child { margin-top: 0; }
+/* ── 读后感里的 `##` 是「区块标签」，不是大标题 ────────────────────────
+   ★ 实测的扁平程度：`h2` 是 16px/600，正文 15px/1.85 —— 只差 1px，
+     靠 `.9em` 的 margin 分开。四个标题在页面跟正文几乎同权重，
+     用户说「赤裸裸地堆着」就是这个数字造成的。
+   ★ 解法是**版式节奏**，不是容器：13px + 上方大留白 + 一条细分隔线，
+     四个标题立刻变成「四条分节线」。它不依赖文字内容 ——
+     用户改名、删一节、加自己的第五节，节奏照样成立（卡片容器做不到这点）。
+   ★ 只上 `reflection`：灵感页是速记，`##` 在那页本来就少见；
+     而 13px 的 h2 在纯速记里会比正文还小，反而更乱。 */
+.npr-write[data-variant="reflection"] .npr-write-rich .ProseMirror h2 { margin: 22px 0 8px; padding-top: 11px; border-top: 1px solid color-mix(in srgb, var(--npr-fg) 8%, transparent); font-size: 13px; font-weight: 600; line-height: 1.6; letter-spacing: .01em; color: color-mix(in srgb, var(--npr-fg) 74%, var(--npr-bg)); }
+.npr-write[data-variant="reflection"] .npr-write-rich .ProseMirror h2:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+/* 标签前的一道短竖线。
+   ★ 用 `::before` 而不是把 emoji 写进模板：写进 `## 💡 一句话总结` 会跟着 `.md`
+     落盘，而旧日记里没有它 —— 同一个功能在文件里长成两种样子。
+     伪元素不会被选中、不会被复制、不会进存储。 */
+.npr-write[data-variant="reflection"] .npr-write-rich .ProseMirror h2::before { content: ''; display: inline-block; width: 3px; height: 10px; margin-right: 7px; border-radius: 2px; background: color-mix(in srgb, var(--npr-accent) 70%, transparent); vertical-align: -1px; pointer-events: none; }
+/* ★ 纸面的内边距（上下共 22px）是从编辑器可视区里扣的：不改这一条，
+   同一条正文会比没有纸面时少显示近一行 —— 加个边框就让内容被裁，
+   那是把装饰的成本转嫁给内容。320 → 342 正好补回纸面吃掉的那部分。
+   ★ `padding-bottom: 14px`（默认 6px）：窗口矮到需要滚动时，滚到底的那一行
+   本来会紧贴工具栏（0.44.2 的预览帧 26 就是这样）。多给 8px 换一个呼吸。 */
+.npr-write[data-variant="reflection"] .npr-write-rich .ProseMirror { max-height: 342px; padding-bottom: 14px; }
 .npr-write-rich .ProseMirror ul,
 .npr-write-rich .ProseMirror ol { padding-left: 1.4em; }
 .npr-write-rich .ProseMirror li { margin: .18em 0; }
@@ -2735,7 +2817,9 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-write-preview h1, .npr-write-preview h2, .npr-write-preview h3 { margin: 14px 0 6px; font-size: 15px; font-weight: 650; letter-spacing: 0; }
 .npr-write-empty { margin: 0; padding: 2px 0 6px; font-size: 13px; color: var(--npr-faint); }
 /* 工具条：压在底线之上，字小、无框；hover 才出现底。 */
-.npr-write-tools { display: flex; align-items: center; gap: 1px; padding: 2px 0; border-top: 1px solid var(--npr-border); opacity: .78; transition: opacity .12s ease-out; }
+.npr-write-tools { display: flex; align-items: center; gap: 1px; margin-top: 8px; padding: 2px 0; border-top: 0; opacity: .55; transition: opacity .12s ease-out; }
+/* 灵感和私密没有纸面兜着，工具栏与正文之间还得留那条线 —— 否则两组字贴在一起。 */
+.npr-write:not([data-variant="reflection"]) .npr-write-tools { border-top: 1px solid var(--npr-border); }
 .npr-write:focus-within .npr-write-tools, .npr-write:hover .npr-write-tools { opacity: 1; }
 .npr-root .npr-write-tool { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 12px; line-height: 1; cursor: pointer; }
 .npr-root .npr-write-tool:hover:not(:disabled) { background: var(--npr-hover); color: var(--npr-fg); }
@@ -2751,7 +2835,12 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 /* 书籍档案卡（读后感工作台）：书名下面那一排数。
    ★ 用一条**淡底 + 细边**把它和下面的输入框分开：它是「这本书的档案」，
      不是正文的一部分；不加这条分隔，五个数看着像输入框的标题行。 */
-.npr-diary-dossier { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 0; margin: 0 0 12px; padding: 7px 10px; border: 0; border-radius: 8px; background: color-mix(in srgb, var(--npr-fg) 3%, transparent); }
+.npr-diary-dossier { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 0; margin: 0 0 10px; padding: 5px 12px; border: 1px solid color-mix(in srgb, var(--npr-fg) 7%, transparent); border-radius: 10px; background: transparent; }
+/* ★ 用户 2026-10-28 说这块「太像后台数据报表」，要「精致胶囊」。改法是**去掉 3% 淡底、
+     换成极细边**：淡底是「表头」的语汇，一条细边 + 留白才是「标签」。
+   ★ 圆角取 10px 而不是 999px —— 面板占掉右侧时这块会窄到 252px，
+     五个数折成两到三行（0.44.1 实测）。999px 在折行后会变成三个胖椭圆，
+     形状完全走样；10px 在单行时已经足够接近胶囊，折行也不难看。 */
 /* ★ 五个数之间给一道「·」分隔：0.32.0 是 18px 的纯间距，读起来是一句话
      （「12 划线 5 摘录笔记 3 读后感」），分不清哪几个数是一对。
      分隔符用 `::before` 而不是真的插入文字 —— 它是排版符号，不该被复制走。 */
@@ -2759,6 +2848,24 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-diary-dossier-cell { display: inline-flex; align-items: baseline; gap: 5px; min-width: 0; }
 .npr-diary-dossier-cell strong { font-size: 13px; font-weight: 600; color: var(--npr-fg); font-variant-numeric: tabular-nums; }
 .npr-diary-dossier-cell span { font-size: 11px; color: var(--npr-faint); }
+/* ── 模板条：编辑器上方的一行 ─────────────────────────────────────────
+   ★ 它原来是底栏里一个 11px 的无边框小字，和「清空」并排 —— 但「套用模板」
+     是「这一页要有哪几节」，和「清空/记下来」不是一类东西。挪到编辑器上方，
+     配上一条描边胶囊按钮。
+   ★ 这一行**不能写进正文**：写进去会跟着 `.md` 落盘，而且用户删掉那行标题
+     就再也点不到按钮了。所以它走 `DiaryComposer` 的 `header` 槽位。
+   ★ `nowrap + ellipsis`：面板占掉右侧时这行只剩 250 来 px，
+     「结构化读后感模板」加按钮会把按钮挤出去。 */
+.npr-diary-tplbar { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; padding-bottom: 9px; border-bottom: 1px solid color-mix(in srgb, var(--npr-fg) 6%, transparent); }
+.npr-diary-tplbar-label { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; font-weight: 600; color: color-mix(in srgb, var(--npr-fg) 62%, var(--npr-bg)); }
+.npr-root .npr-diary-tplbtn { flex: 0 0 auto; height: 24px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--npr-fg) 14%, transparent); border-radius: 999px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; cursor: pointer; }
+.npr-root .npr-diary-tplbtn:hover:not(:disabled) { border-color: color-mix(in srgb, var(--npr-fg) 28%, transparent); color: var(--npr-fg); }
+.npr-root .npr-diary-tplbtn:disabled { opacity: .45; cursor: default; }
+/* 危险动作用低饱和文字：「清空」和「记下来」在底栏并排，权重不能接近。 */
+.npr-root .npr-diary-linkish.is-danger:hover { color: #e5484d; }
+/* 「记下来」在读后感里再加一档分量：纸面比别处厚，按钮也要跟上。 */
+.npr-write[data-variant="reflection"] .npr-diary-save { height: 32px; padding: 0 15px; border-radius: 10px; }
+
 /* 「记下来」。
    ★★ 底色用 `--npr-fg`、字色用 `--npr-bg`，**不是**品牌色 + 白字。
    0.31.0 是 `background: var(--npr-accent); color: var(--npr-bg)` —— 而 `--npr-accent`
@@ -2821,6 +2928,15 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
    现在上下 9/10、头部行 18px、正文间距 6，同一条降到约 72px，一屏 8 条。
    ★ `position: relative` 是给下面那个绝对定位的操作按钮留的锚。 */
 .npr-diary-entry { position: relative; padding: 9px 0 10px; border-top: 1px solid var(--npr-border); }
+/* ── 读后感：多篇合成一篇连续长文 ────────────────────────────────────────
+   ★ 外层那一张卡**不要上边框**：它自己就是「这一本书的稿纸」，再画一条线
+     会把它读成「列表里的第一条」。篇与篇之间用虚线 —— 实线是「另一张卡片」
+     的语言，虚线才是「同一篇里的下一段」。
+   ★ 这里没有 `max-width`：宽度由 `.npr-diary-sheet`（600px 居中）统一给，
+     单独再写一遍会让上下两块的左边缘差几像素（这一点本项目已经踩过）。 */
+.npr-diary-longform { padding: 0; border-top: 0; }
+.npr-diary-part { padding: 2px 0 14px; }
+.npr-diary-part + .npr-diary-part { margin-top: 2px; padding-top: 16px; border-top: 1px dashed color-mix(in srgb, var(--npr-fg) 13%, transparent); }
 /* 从侧栏时间轴点进来的那一条：左侧一道竖线 + 淡底。
    ★ 0.33–0.35 这里是「1.8 秒后自己褪掉」——平滑滚动还没落位，标注就开始消失，
      用户 2026-10-27 的结论是「点了没有任何标注」。现在是**留到下一条被点或换天**。
@@ -3062,12 +3178,27 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
    所以正文这一侧再包一层纵向容器。少了它，横幅会被当成第三个列项。 */
 /* `position: relative` 是给标签浮层（`.npr-tagsheet`）的锚：那一层盖住整个滚动区，
    而不是跳去另一页 —— 关掉它要能回到原来的滚动位置。 */
-.npr-diary-flow { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-.npr-diary-marks { flex: 0 0 auto; width: 300px; display: flex; flex-direction: column; gap: 8px; overflow: auto; overscroll-behavior: contain; padding: 10px 12px 20px; border-left: 1px solid var(--npr-border); }
+/*
+ * ★ 0.44.1：正文列**必须有下限**，划线栏**必须可以让位**。原先是反的 ——
+ *   `flow { flex: 1; min-width: 0 }` + `marks { flex: 0 0 auto; width: 300px }`，
+ *   于是正文吸收全部挤压、划线栏一个像素都不让。
+ *   症状（用户 2026-10-28）：「点开 AI 整理这一篇，写读后感的这一列全错位了」——
+ *   AI 面板把 `.npr-layout` 压到「导航 268 + 473」时，正文只剩 **173px**，
+ *   纸面 105px，`0 划线 / 0 摘录笔记 / …` 与模板菜单一个字一行，底栏 99px 高。
+ *   实测数（`.build/preview/measure-narrow.mjs`）：修前 173 / 105 / 99，修后见下。
+ * ★ `min(320px, 100%)` 而不是裸 `320px`：容器比 320 还窄时（AI 面板拉到 75%），
+ *   裸 320 会让 `.npr-diary-main` 横向溢出 —— 那只是把「竖着堆」换成「横着滚」。
+ * ★ 划线栏用 `flex-basis` 而不是 `width`：作为 flex 项，basis 才是参与收缩的量，
+ *   留着 `width: 300px` 只会让人误以为它还有效。
+ */
+.npr-diary-flow { position: relative; flex: 1; min-width: min(320px, 100%); min-height: 0; display: flex; flex-direction: column; }
+.npr-diary-marks { flex: 0 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 8px; overflow: auto; overscroll-behavior: contain; padding: 10px 12px 20px; border-left: 1px solid var(--npr-border); }
 .npr-diary-marks-head { display: flex; align-items: baseline; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--npr-border); }
 .npr-diary-marks-head strong { font-size: 12px; color: var(--npr-fg); }
 .npr-diary-marks-head span { margin-left: auto; font-size: 11px; color: var(--npr-muted); }
-.npr-diary-mark { padding: 8px 0; border-bottom: 1px dashed var(--npr-border); }
+.npr-diary-mark { padding: 8px 0; border-bottom: 1px dashed var(--npr-border); cursor: grab; }
+/* 拖起来的时候换光标：`grabbing` 是「已经抓在手里」的唯一视觉反馈。 */
+.npr-diary-mark:active { cursor: grabbing; }
 .npr-diary-mark:last-child { border-bottom: 0; }
 .npr-diary-mark-quote { margin: 0; padding-left: 8px; border-left: 2px solid var(--npr-border-strong); font-size: 12px; line-height: 1.7; color: var(--npr-fg); }
 .npr-diary-mark-note { margin: 4px 0 0; font-size: 11px; line-height: 1.6; color: var(--npr-muted); }

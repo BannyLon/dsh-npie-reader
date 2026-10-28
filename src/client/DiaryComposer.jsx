@@ -123,17 +123,22 @@ const RICH_BLOCKED = new Set(['tag']);
  * @param props.variant   `quick`（灵感）| `private` | `reflection`（更高的起点）
  * @param props.busy      正在保存
  * @param props.disabled  不可写（例如这本书还没标记读完）
- * @param props.actions   底部左侧的附加动作（套用模板 / 清空 …）
+ * @param props.actions   底部左侧的附加动作（清空 …）
  * @param props.extra     工具栏与底栏之间的附加行（私密的情绪行）
+ * @param props.header    编辑器**上方**的一行（读后感的「结构化读后感模板」条）。
+ *   它不属于正文，所以不能塞进 markdown：写进正文会跟着 `.md` 落盘，
+ *   而且用户删掉那行标题就再也点不到「套用模板」了。
  */
 export function DiaryComposer({
   value, onChange, onSubmit, placeholder, variant = 'quick', busy = false, disabled = false,
   submitLabel = '记下来', actions = null, maxHeight = 320, autoFocus = false, inputRef = null,
-  extra = null,
+  extra = null, insertRef = null, header = null,
 }) {
   const el = useRef(null);
   const [mode, setMode] = useState('edit');
   const [preview, setPreview] = useState('');
+  /** 正在被拖进来的东西悬在上面（只影响样式，见 `.npr-write[data-drop]`）。 */
+  const [dropping, setDropping] = useState(false);
 
   // ---- 富文本编辑器（Milkdown，按需从宿主下载）------------------------------
   const richEl = useRef(null);
@@ -184,6 +189,35 @@ export function DiaryComposer({
     if (!rich || !richRef.current) return;
     richRef.current.setMarkdown(value);
   }, [value, rich]);
+
+  /**
+   * 对外暴露「在光标处插入一段文本」。
+   *
+   * ★ 富文本与 textarea **两条路都收在这一层**：上层（划线的「引用」、拖拽落点）
+   *   不需要知道当前挂的是哪一个编辑器 —— 那正是「textarea 是退路」的意思。
+   * ★ 富文本插入失败（编辑器内部状态异常、`insert` 返回 false）时**不报错而是降级**
+   *   到 textarea 那条字符串路径：日记正文的 value 是同一份 markdown，
+   *   只是这一拍没有富文本视图而已。
+   */
+  useEffect(() => {
+    if (!insertRef) return undefined;
+    insertRef.current = (text, coords) => {
+      const snippet = typeof text === 'string' ? text : '';
+      if (snippet === '') return;
+      if (rich && richRef.current && richRef.current.insert(snippet, coords)) return;
+      const node = el.current ?? null;
+      const current = valueRef.current;
+      const at = node === null ? current.length : (node.selectionStart ?? current.length);
+      changeRef.current(`${current.slice(0, at)}${snippet}${current.slice(at)}`);
+      requestAnimationFrame(() => {
+        if (node === null) return;
+        const to = at + snippet.length;
+        node.focus();
+        node.setSelectionRange(to, to);
+      });
+    };
+    return () => { insertRef.current = null; };
+  }, [rich, insertRef]);
 
   // 高度跟着内容长：先归零再读 scrollHeight，否则只会越缩越长。
   useLayoutEffect(() => {
@@ -274,13 +308,41 @@ export function DiaryComposer({
   const chars = value.replace(/\s/g, '').length;
 
   return (
-    <div className="npr-write" data-variant={variant} data-mode={mode}>
+    <div className="npr-write" data-variant={variant} data-mode={mode}
+      data-drop={dropping ? 'yes' : 'no'}
+      /*
+       * ★ 拖拽落点用 `clientX/clientY` 交给 `insert(…, coords)` 去算 ProseMirror
+       *   的文档位置（`posAtCoords`）。用「插到末尾」会让拖拽等于没做 ——
+       *   用户把一条划线拖到第三段，引用块出现在最后一页。
+       * ★ `dragover` 必须 `preventDefault()` 才会触发 `drop`；只判 `text/plain`，
+       *   拖着图片或文件经过时不该点亮这块。
+       */
+      onDragOver={(event) => {
+        if (disabled || !event.dataTransfer?.types?.includes('text/plain')) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+        setDropping(true);
+      }}
+      onDragLeave={() => setDropping(false)}
+      onDrop={(event) => {
+        setDropping(false);
+        const text = event.dataTransfer?.getData('text/plain') ?? '';
+        if (disabled || text.trim() === '') return;
+        event.preventDefault();
+        insertRef?.current?.(text, { x: event.clientX, y: event.clientY });
+      }}>
+      {header}
       {mode === 'preview' ? (
         preview
           ? <div className="npr-write-preview" dangerouslySetInnerHTML={{ __html: preview }} />
           : <p className="npr-write-empty">还没有内容。</p>
       ) : (
-        <>
+        /*
+         * ★ 这一层是**定位基准**，不是装饰：0.44.2 给读后感加了纸面内边距
+         *   （12px 16px），而占位提示是 `position: absolute`。没有这层的话，
+         *   它会相对带着内边距的 `.npr-write` 定位，文字与光标的起点差 16px。
+         */
+        <div className="npr-write-body">
           {/*
             * ★ 富文本挂载点**先于**编辑器存在：ProseMirror 需要一个已经排好版的
             *   容器才能算光标与滚动位置。`rich` 为假时它被 CSS 收掉，显示 textarea。
@@ -308,7 +370,7 @@ export function DiaryComposer({
               onKeyDown={onKeyDown}
             />
           )}
-        </>
+        </div>
       )}
 
       <div className="npr-write-tools" role="toolbar" aria-label="格式">

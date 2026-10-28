@@ -676,18 +676,21 @@ function openTag(code, name, span = 600) {
   return at < 0 ? '' : code.slice(at, at + span);
 }
 
-describe('入口二：从书里点「写读后感」直接落到那一页', () => {
-  it('两个阅读器都有那颗按钮，且只在外部给了回调时才画', () => {
-    for (const [name, code] of [['BookReader', bookReader], ['BookEbook', bookEbook]]) {
-      assert.match(code, /onWriteReflection,/, `${name} 的 props 里没有 onWriteReflection`);
-      assert.match(code, /\{onWriteReflection && \(/, `${name} 的按钮没受回调存在性控制（会画出一颗点了没反应的按钮）`);
-      assert.match(code, /onClick=\{\(\) => onWriteReflection\(book\)\}/, `${name} 的按钮没把书传出去`);
-    }
+describe('入口二：阅读页「读完」那一行 → 写读后感', () => {
+  it('书架把「写读后感」的去处交给**行**，不再交给两个阅读器', () => {
+    assert.match(library, /canReflect=\{canReflect\} onReflect=\{reflectBook\}/,
+      '「读完」那一行没接上写读后感的去处 —— 只剩「重新阅读」，用户就得自己翻话题');
+    assert.equal((library.match(/onWriteReflection=\{onWriteReflection\}/g) ?? []).length, 0,
+      '还在把 onWriteReflection 转交给阅读器 —— 那个按钮 0.44.3 已经删了');
   });
 
-  it('书架把回调转交给两个阅读器（只转交，不自己切视图）', () => {
-    assert.equal((library.match(/onWriteReflection=\{onWriteReflection\}/g) ?? []).length, 2,
-      'LibraryApp 没有把 onWriteReflection 同时转交给 PDF 与电子书两条路');
+  it('★ 回调引用必须稳定（memo 过的行，内联箭头会让 2634 行每次全重渲染）', () => {
+    // `onWriteReflection` 是 ReaderPage 里的普通函数，每次渲染都是新身份。
+    // 直接当 prop 传下去，`BookRow` 的 memo 就全废了（P1-5 那两条前提里的第 2 条）。
+    assert.match(library, /const reflectBook = useCallback\(\(book\) => \{ reflectRef\.current\?\.\(book\); \}, \[\]\);/,
+      'reflectBook 不是零依赖的 useCallback —— 每一行都会重渲染');
+    assert.match(library, /const canReflect = typeof onWriteReflection === 'function';/,
+      'canReflect 没按「有没有这个去处」算 —— 没有时会画出一颗点了没反应的按钮');
   });
 
   it('★ ReaderPage 先记意图、再切视图', () => {
@@ -841,10 +844,10 @@ describe('灵感流转：按 L 时自动带上正在读的书与章节', () => {
 
 /** ① 的判据：认不出的 id 一律按**未读完**（宁可挡住，不可放行）。 */
 function defaultBlocksUnread(code) {
-  return /const stateOf = \(id\) => bookStates\[id\]\?\.state \?\? 'unread'/.test(code);
+  return /const stateNameOf = \(id\) => \(bookStates\[id\]\?\.state \?\? 'unread'\)/.test(code);
 }
 
-describe('读后感门禁：只对读完的书开放', () => {
+describe('读后感门禁：只对读完（过）的书开放', () => {
   it('★ 判据的默认值是 unread，不是 read', () => {
     assert.equal(defaultBlocksUnread(diary), true,
       '认不出的书按「已读完」处理 —— 门禁等于没有');
@@ -856,19 +859,33 @@ describe('读后感门禁：只对读完的书开放', () => {
     assert.equal(defaultBlocksUnread(old), false);
   });
 
-  it('★ 侧栏只列读完的书 —— 未读完的不再摊一屏', () => {
+  it('★ 侧栏只列读完（过）的书 —— 未读完的不再摊一屏', () => {
     // 用户 2026-10-27：「读后感只显示标记完成的书，不显示未读完的书」。
     // 0.32.0 把 2636 本「还没读完」全部铺在侧栏里，真正要用的那 1 本被挤到最上面一行。
-    assert.match(diary, /const readBooks = filteredBooks\.filter\(\(item\) => stateOf\(item\.id\) === 'read'\)/);
+    // ★ 0.44.3 起判据是 `finishedOf`（= `library.js` 的 `hasFinished`），不是
+    //   `stateOf(id) === 'read'`：用户点「重新阅读」之后书不能从这份名单里消失。
+    assert.match(diary, /const readBooks = filteredBooks\.filter\(\(item\) => finishedOf\(item\.id\)\)/,
+      '侧栏的取向又变回「此刻状态是读完」了 —— 点了「重新阅读」，读后感会当场少一本');
+    assert.doesNotMatch(diary, /stateOf\(item\.id\) === 'read'/, '侧栏还在按 state 判，而不是按「读完过」判');
     assert.doesNotMatch(diary, /const unreadBooks/, '未读完的那一组还在算');
     assert.ok(!diary.includes('还没读完<span'), '侧栏还在渲染「还没读完」那一块的分组标题');
     assert.ok(!diary.includes('>未读完<'), '侧栏还在把「未读完」当状态胶囊画出来');
   });
 
-  it('★ `openBook` 自己也判一次（从阅读器进来不经过侧栏那道 UI 闸）', () => {
-    assert.match(diary, /const status = stateOf\(target\.id\);/,
-      'openBook 没判读完状态 —— 从书里点「写读后感」能绕过侧栏');
-    assert.match(diary, /readable: status === 'read'/);
+  it('★ 「读完过」的判据只有一份（library.js 的 hasFinished），这里是调用不是重写', () => {
+    // 两处各写一遍「算不算读完过」，迟早有一处漏掉 finishedAt —— 而症状是
+    // 「列表里有这本书、点进去却说没读完」。所以判据必须是 import 进来的。
+    assert.match(diary, /import \{[^}]*hasFinished[^}]*\} from '\.\.\/library\.js'/,
+      'DiaryApp 没从 library.js 引 hasFinished —— 判据被复制成了两份');
+    assert.match(diary, /const finishedOf = \(id\) => hasFinished\(bookStates\[id\]\);/,
+      'finishedOf 没走共用判据');
+  });
+
+  it('★ `openBook` 自己也判一次（从阅读页进来不经过侧栏那道 UI 闸）', () => {
+    assert.match(diary, /const finished = finishedOf\(target\.id\);/,
+      'openBook 没判读完状态 —— 外面点「写读后感」能绕过侧栏');
+    assert.match(diary, /readable: finished/,
+      'openBook 把「读完过」又写回了 `state === \'read\'`');
   });
 
   it('★ 书没读完时不画输入框，而是说清楚为什么', () => {
@@ -880,11 +897,12 @@ describe('读后感门禁：只对读完的书开放', () => {
     assert.match(diary, /还没标记读完/, '说明里没点明原因');
   });
 
-  it('两个阅读器里的「写读后感」在没读完时也是禁用的', () => {
+  it('★ 阅读器顶部**没有**「写读后感」入口（0.44.3 搬到「读完」那一行）', () => {
+    // 用户 2026-10-28：「头部菜单条不应该有『写读后感』按钮入口……入口应该是写在
+    // 读完列表下」。这里钉的是「不许回来」：两个阅读器的源码里都不许再出现这颗按钮。
     for (const [name, code] of [['BookReader', bookReader], ['BookEbook', bookEbook]]) {
-      assert.match(code, /disabled=\{current\.state !== 'read'\}/,
-        `${name} 的「写读后感」没按读完状态禁用`);
-      assert.match(code, /标记读完才能写读后感/, `${name} 没说明为什么点不动`);
+      assert.doesNotMatch(code, /<span>写读后感<\/span>/, `${name} 顶部又把「写读后感」按钮加回来了`);
+      assert.doesNotMatch(code, /onWriteReflection/, `${name} 还挂着 onWriteReflection（按钮删了，转交也该删）`);
     }
   });
 });
@@ -1238,13 +1256,30 @@ describe('0.38：写作坞的闸 / 提示词换行 / 侧栏保留 / 来源筛选
       '侧栏又被收起来了 —— 用户 2026-10-27 明确问「为什么打开 AI 整理左侧边栏就关闭了呢」');
     assert.equal(/has-companion > \.npr-layout\.npr-diary-layout > \.npr-diary-nav,\s*\n?\s*\.npr-workarea\.has-companion > \.npr-layout\.npr-diary-layout > \.npr-resize \{ display: none; \}/.test(diaryCss),
       false, '那对「收起导航 + 收起拖动条」的规则还在');
-    // 新的做法：面板宽度上限按「总宽 − 导航 − 340」算。
-    assert.match(diaryCss, /--npr-companion-width, 44%\), calc\(100% - var\(--npr-list-width, 268px\) - 340px\)/,
+    /*
+     * 新的做法：面板宽度上限按「总宽 − 导航 − 480」算。
+     * ★ 0.44.1 从 340 改成 480：340 是「正文区」的保留量，而 0.44.1 给正文列
+     *   （`.npr-diary-flow`）加了 320px 下限之后，340 − 320 只剩 20px 给划线栏 ——
+     *   一条 20px 的缝看起来就是渲染坏了。480 = 正文列 320 + 划线栏至少 160。
+     */
+    assert.match(diaryCss, /--npr-companion-width, 44%\), calc\(100% - var\(--npr-list-width, 268px\) - 480px\)/,
       '面板没有留出正文的下限 —— 拖宽之后正文会被压成一条缝');
+    // 正文列自己也得有下限，否则面板再窄一点它就吸收全部挤压（0.44.1 的真 bug）。
+    assert.match(diaryCss, /\.npr-diary-flow \{[^}]*min-width: min\(320px, 100%\)/,
+      '正文列没有下限 —— AI 面板一开，正文会被压成一个字一行');
+    // 划线栏必须可以让位：`flex: 0 0 auto` + `width` 一个像素都不让。
+    assert.match(diaryCss, /\.npr-diary-marks \{[^}]*flex: 0 1 300px[^}]*min-width: 0/,
+      '划线栏还在「绝不让位」—— 挤压全落到正文头上');
     // 拖动时也必须扣掉侧栏，否则手柄算出来的上限和 CSS 不是一回事（会出现拖不动的死区）。
     assert.match(diary, /querySelector\('\.npr-diary-nav'\)\?\.getBoundingClientRect\(\)\.width/,
       '拖动没扣侧栏宽度 —— 面板会吃掉导航的位置');
     assert.match(diary, /const room = Math\.max\(0, total - nav\);/, '没有把「减去导航」这一步算出来');
+    /*
+     * ★ 480 在 CSS 与 JS 各写一次，注释里写着「必须同源」。这里把它钉成断言：
+     *   只改一处的话，拖到底会先被 CSS 卡住、而手柄还在跟着指针走（拖不动的死区）。
+     */
+    assert.match(diary, /const READER_FLOOR = 480;/, '拖动那边的保留量不是 480 —— 与 CSS 不同源，会出现死区');
+    assert.match(diary, /Math\.min\(span, room - READER_FLOOR\)/, '拖动没有用 READER_FLOOR 去扣');
   });
 
   it('★ AI 面板里的快捷提示词换行，不横滚', () => {
@@ -1656,3 +1691,168 @@ describe('0.43：私密侧栏的「本月情绪」与「那年今日」', () => 
       '面板没跟着翻月 / 换天 / 解锁刷新 —— 数字会停在上一次');
   });
 });
+
+describe('0.44：读后感的三块 —— 封面书墙 / 合并长文 / 划线拖拽', () => {
+  const cover = read('BookCover.jsx');
+  const coverLib = read('book-cover.js');
+  const composer = read('DiaryComposer.jsx');
+  const editorEntry = stripComments(readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'vendor', 'editor-entry.js'), 'utf8',
+  ));
+
+  it('★ 左栏是两列封面网格，且书不再走单行列表', () => {
+    assert.match(diaryCss, /\.npr-diary-shelf \{ display: grid; grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/,
+      '侧栏不是两列 grid —— 需求原话是「两列式卡片网格」');
+    assert.match(diary, /className="npr-diary-shelf"/, 'JSX 里没有挂 .npr-diary-shelf');
+    assert.match(diary, /<BookCover book=\{item\} \/>/, '卡片里没有封面组件');
+    /*
+     * ★ 反向对照用的是「切出这一段再看」而不是 `assert.doesNotMatch(diary, …)`：
+     *   灵感页与私密页里也有 `npr-diary-dayrow`（日期行 / 月份行），全文件禁它必然假红。
+     */
+    const at = diary.indexOf('className="npr-diary-shelf"');
+    assert.ok(at > 0, '锚点失效：找不到书墙');
+    const block = diary.slice(at, at + 1200);
+    assert.doesNotMatch(block, /npr-diary-dayrow/, '书的卡片还在用单行 dayrow 的结构 —— CSS 改了、结构没改');
+  });
+
+  it('★ 封面三种来源：EPUB 走宿主、PDF 走 pdf.js、其余生成式', () => {
+    assert.match(coverLib, /if \(ext === 'epub'\) return 'epub';/, '没有把 EPUB 判成宿主解封面那一路');
+    assert.match(coverLib, /if \(ext === 'pdf'\) return 'pdf';/, 'PDF 没有走客户端渲染那一路');
+    assert.match(coverLib, /return 'made';/, '没有第三档兜底 —— 其余格式会没有封面');
+    assert.match(cover, /typeof IntersectionObserver === 'undefined'/, '没有 IntersectionObserver 时应该直接渲染，而不是永远不渲染');
+    assert.match(cover, /rootMargin: '160px'/, 'PDF 封面没有按视口懒渲染（几十本一起渲染会占满主线程）');
+    // 生成式封面必须跟着主题走：色相由书名哈希给，不是写死一种颜色
+    assert.match(cover, /'--npr-cover-h': String\(coverHue\(book\.title\)\)/, '生成式封面的色相不是从书名算的（刷新一次换一套颜色）');
+    assert.match(diaryCss, /\.npr-diary-cover-made \{[^}]*linear-gradient\(158deg, hsl\(var\(--npr-cover-h/, 
+      '生成式封面没有用色相变量 —— 所有书会是同一个颜色');
+    assert.match(diaryCss, /\.npr-diary-cover-img \{[^}]*object-fit: cover/, '真封面没有 object-fit: cover，会被拉变形');
+    // 3:4 的比例写在封面容器上（卡片宽度变化时等比缩放，不需要断点）
+    assert.match(diaryCss, /\.npr-diary-cover \{[^}]*aspect-ratio: 3 \/ 4/, '封面不是 3:4 竖版比例');
+  });
+
+  it('★ 历史读后感合成一篇长文（只并渲染，不并数据）', () => {
+    assert.equal((diary.match(/npr-diary-longform/g) ?? []).length, 1, '长文容器不是恰好一个');
+    assert.match(diary, /<article className="npr-diary-entry npr-diary-longform">/, '长文容器没有用 article.npr-diary-entry');
+    assert.match(diary, /className="npr-diary-part"/, '篇与篇之间没有 .npr-diary-part 分隔');
+    // 数据层不动：仍然是按篇 map，存储仍是一天一篇
+    assert.match(diary, /bookEntries\.items\.map\(\(entry\) => \{/, '没有按篇遍历（说明数据被合并了）');
+    assert.doesNotMatch(diary, /mergeReflection|reflectAll|combineEntries/, '出现了「真合并数据」的函数 —— 这一版只改渲染');
+    // CSS：长文自己无上边框，段间是虚线
+    assert.match(diaryCss, /\.npr-diary-longform \{ padding: 0; border-top: 0; \}/, '长文自己还留着上边框 —— 又变成「列表里的第一条」');
+    assert.match(diaryCss, /\.npr-diary-part \+ \.npr-diary-part \{[^}]*border-top: 1px dashed/, '段间分隔不是虚线');
+  });
+
+  it('★ 引用与拖拽插入的是同一段文本，且落在光标 / 落点', () => {
+    assert.match(diary, /function quoteSnippet\(item\) \{/, '没有抽出共享的 snippet 构造函数');
+    assert.match(diary, /const snippet = quoteSnippet\(item\);\n    if \(insertRef\.current\)/, '「引用」按钮没走编辑器插入');
+    assert.match(diary, /event\.dataTransfer\.setData\('text\/plain', snippet\)/, '拖拽没有把 snippet 放进 dataTransfer');
+    assert.match(diary, /draggable\n/, '划线卡不可拖拽');
+    // 编辑器侧：富文本插入要能拿到落点，而不是一律追加到末尾
+    assert.match(editorEntry, /insert\(markdown, coords\)/, '编辑器没有暴露 insert(markdown, coords)');
+    assert.match(editorEntry, /view\.posAtCoords\(\{ left: coords\.x, top: coords\.y \}\)/, '拖拽落点没有换算成文档位置');
+    assert.match(composer, /richRef\.current\.insert\(snippet, coords\)/, '富文本模式下没走编辑器插入');
+    assert.match(composer, /node\.setSelectionRange\(to, to\)/, 'textarea 退路没有把光标移到插入之后');
+    // 反向对照：插入应该先试富文本，失败才退 textarea
+    assert.match(composer, /if \(rich && richRef\.current && richRef\.current\.insert\(snippet, coords\)\) return;/,
+      '富文本可用时仍走了 textarea 路径');
+  });
+});
+
+/**
+ * 0.44.2：读后感的写作区从「四个赤裸的标题」改成「一张纸 + 区块标签」。
+ *
+ * ★ 用户 2026-10-28 提的方案是「把四个大标题变成可折叠的卡片区块」。
+ *   **没有照做**，理由写在 `diary-format.js` 与 `refinements.css` 的注释里：
+ *   模板是四个 `##` 的 markdown 文本，不是四个字段。真卡片只有两条路 ——
+ *   按标题文字包容器（用户改名就塌）或拆成四个 input（退回填空表单）。
+ *   所以这里做的是**版式节奏**。下面每条判据都对应一个「不这么做会怎样」。
+ *
+ * ★ 这一层是源码级（同本文件其余部分）：缺陷的因果全在静态结构里，
+ *   而几何量测在 `.build/preview/measure-paper.mjs`（11 条 CSS 变异做反向对照）。
+ */
+describe('0.44.2：写作区的纸面与区块标签', () => {
+  const composer = read('DiaryComposer.jsx');
+  const css = read('refinements.css');
+
+  it('模板条不属于正文，占位提示有独立的定位基准', () => {
+    // 模板条走 `header` 槽位，不进 markdown：写进正文会跟着 .md 落盘，
+    // 而且用户删掉那行标题就再也点不到按钮。
+    assert.match(composer, /header = null,/, 'DiaryComposer 没有 header 槽位');
+    assert.match(composer, /^\s*\{header\}$/m, 'header 没有渲染在写作区里');
+
+    // ★ 定位层：纸面有 padding，占位提示是 absolute。
+    //   没有 `.npr-write-body` 当包含块，它会相对 `.npr-write` 的 padding box 定位，
+    //   与正文左边缘差整整一个 padding-left（实测 16px）—— 空态看起来就是「提示浮在左边」。
+    assert.match(composer, /className="npr-write-body"/, '编辑器没有独立的定位层');
+    assert.match(css, /\.npr-write-body \{ position: relative; \}/, '.npr-write-body 不是定位基准');
+    const bodyAt = composer.indexOf('className="npr-write-body"');
+    const phAt = composer.indexOf('npr-write-ph');
+    const toolsAt = composer.indexOf('className="npr-write-tools"');
+    assert.ok(bodyAt > 0 && phAt > bodyAt && phAt < toolsAt,
+      '占位提示不在定位层里 —— 它会跟着纸面的 padding 一起偏移');
+  });
+
+  it('「套用模板」不会把模板插第二遍', () => {
+    // 0.44.1 及以前：按钮只看「正文空不空」，于是已经套过又点一次，
+    // 四个 `##` 会被追加第二遍，正文里出现两套「一句话总结」。
+    assert.match(diary, /const refTemplated = refDraft\.includes\('## 一句话总结'\)/,
+      '没有判断正文里是否已经有模板骨架');
+    assert.match(diary, /disabled=\{refTemplated\}/, '已套用时按钮仍然可点');
+    assert.match(diary, /\{refTemplated \? '已套用' : '套用模板'\}/, '按钮没有反映「已套用」状态');
+    // 反向对照：正文非空但还没套过模板时，仍然应该能套 —— 禁用条件不能是「非空」。
+    assert.doesNotMatch(diary, /disabled=\{refDraft\.trim\(\)/, '禁用条件写成了「正文非空」—— 写了几个字就再也套不上模板');
+  });
+
+  it('写作区是一张纸，不是四张卡片', () => {
+    const paper = /\.npr-write\[data-variant="reflection"\] \{[^}]*\}/.exec(css)?.[0] ?? '';
+    assert.match(paper, /padding: 12px clamp\(8px, 4%, 16px\) 10px/,
+      '纸面内边距不是「宽时 16px、窄时收到 8px」—— 写死 16px 在 252px 宽时会挤出工具条（实测溢出 4px）');
+    assert.match(paper, /border: 1px solid color-mix\(in srgb, var\(--npr-fg\) 7%, transparent\)/,
+      '纸面没有极细边框 —— 没有它，所谓「层级」只剩字色差别');
+    assert.match(paper, /border-radius: 10px/, '纸面圆角与拖拽高亮态的 10px 不一致（两者叠在同一元素上）');
+    // 只上 reflection：灵感是「打开即写」，私密页要把高度留给字。
+    assert.doesNotMatch(css, /^\.npr-write \{[^}]*border: 1px/m, '纸面被加到了所有模块上');
+    assert.match(diary, /className="npr-diary-write is-paper"/, '读后感那一块没有标记成纸面');
+    assert.match(css, /\.npr-diary-write\.is-paper \{ padding-bottom: 0; border-bottom: 0;/,
+      '纸面之外还留着合缝线 —— 纸的底边已经把块收住了');
+  });
+
+  it('四个 `##` 靠版式分开：13px 标签 + 分隔线 + 一道装饰竖线', () => {
+    const head = /\.npr-write\[data-variant="reflection"\] \.npr-write-rich \.ProseMirror h2 \{[^}]*\}/.exec(css)?.[0] ?? '';
+    // 16px → 13px：原来只比正文大 1px，靠 .9em 的 margin 撑着，在流里跟正文几乎同权重。
+    assert.match(head, /font-size: 13px/, '区块标签不是 13px —— 又会变回「只比正文大一号」的标题');
+    assert.match(head, /border-top: 1px solid color-mix/, '区块标签上方没有分节线');
+    assert.match(head, /padding-top: 11px/, '分节线会贴住文字');
+    assert.match(css, /h2:first-child \{ margin-top: 0; padding-top: 0; border-top: 0; \}/,
+      '第一个标签上方也有分隔线 —— 它顶着纸的顶边，再加一条就是双线');
+    // 装饰竖线：用伪元素而不是把 emoji 写进模板（写进去会跟着 .md 落盘，
+    // 旧日记里没有它，同一个功能在文件里就长成两种样子）。
+    assert.match(css, /h2::before \{ content: ''; display: inline-block; width: 3px; height: 10px;/,
+      '标签前没有装饰竖线');
+    assert.doesNotMatch(css, /h2::before \{[^}]*content: '[^']*[💡🎯⚡✍]/, '装饰用了 emoji —— 换成 CSS 图形');
+  });
+
+  it('档案条从「表头」变成「标签」', () => {
+    const dossier = /\.npr-diary-dossier \{[^}]*\}/.exec(css)?.[0] ?? '';
+    assert.match(dossier, /border: 1px solid color-mix/, '档案条没有细边');
+    assert.match(dossier, /background: transparent/, '档案条还有淡底 —— 3% 淡底是「后台报表」的语汇');
+    assert.match(dossier, /border-radius: 10px/, '档案条圆角不是 10px —— 999px 在折成三行时会变成三个胖椭圆');
+  });
+
+  it('工具条被纸包住，不再自带上边框', () => {
+    const tools = /\.npr-write-tools \{[^}]*\}/.exec(css)?.[0] ?? '';
+    assert.match(tools, /border-top: 0/, '工具条还有上边框 —— 纸已经包住它，再来一条就是「表尾」');
+    assert.match(css, /\.npr-write:not\(\[data-variant="reflection"\]\) \.npr-write-tools \{ border-top: 1px solid var\(--npr-border\); \}/,
+      '灵感和私密的工具条丢了分隔线 —— 那两个模块没有纸面兜着');
+    assert.match(tools, /opacity: \.55/, '工具条平时不够轻');
+  });
+
+  it('主次动作拉开：危险动作用低饱和文字', () => {
+    assert.match(diary, /className="npr-diary-linkish is-danger" onClick=\{\(\) => setRefDraft\(''\)\}>清空/,
+      '「清空」没有标记成危险动作');
+    assert.match(css, /\.npr-diary-linkish\.is-danger:hover \{ color: #e5484d; \}/, '危险动作没有单独的 hover 色');
+    assert.match(css, /\.npr-write\[data-variant="reflection"\] \.npr-diary-save \{ height: 32px;/, '「记下来」在读后感里没有加一档分量');
+    assert.match(css, /\.npr-root \.npr-diary-tplbtn \{[^}]*border-radius: 999px/, '「套用模板」不是描边胶囊');
+  });
+});
+
