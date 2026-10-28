@@ -25,6 +25,7 @@ import {
   BOOK_STATE_LABELS,
   BOOK_STATES,
   BOOKS_PAGE_LIMIT,
+  applyStatePatch,
   bookIdFromPath,
   bookRowView,
   defaultSourceName,
@@ -32,6 +33,7 @@ import {
   filterBooks,
   formatBytes,
   groupBooks,
+  hasFinished,
   isBookId,
   isReadable,
   addedBooks,
@@ -369,18 +371,107 @@ describe('阅读状态', () => {
 
   it('normalizeState 是**读旧数据**的兜底：不认识的状态退回未读，不抛错', () => {
     // `added: true` 来自「有进度就算已加入」的老数据兜底（专项用例见下面的「阅读」列表一节）。
-    assert.deepEqual(normalizeState({ state: 'finished', page: 3 }), { state: 'unread', page: 3, pages: 0, at: 0, added: true, scanned: false });
+    assert.deepEqual(normalizeState({ state: 'finished', page: 3 }), { state: 'unread', page: 3, pages: 0, at: 0, finishedAt: 0, added: true, scanned: false });
     assert.deepEqual(normalizeState(null), emptyState());
     assert.deepEqual(normalizeState('nope'), emptyState());
   });
 
   it('normalizeState 夹掉脏数字（负数 / 小数 / 字符串数字）', () => {
     assert.deepEqual(normalizeState({ state: 'reading', page: -1, pages: 2.5, at: -9 }), {
-      state: 'reading', page: 0, pages: 0, at: 0, added: true, scanned: false,
+      state: 'reading', page: 0, pages: 0, at: 0, finishedAt: 0, added: true, scanned: false,
     });
     assert.deepEqual(normalizeState({ state: 'reading', page: '12', pages: '350' }), {
-      state: 'reading', page: 12, pages: 350, at: 0, added: true, scanned: false,
+      state: 'reading', page: 12, pages: 350, at: 0, finishedAt: 0, added: true, scanned: false,
     });
+  });
+
+  /**
+   * `finishedAt` 是「读完过」的唯一凭据（0.44.3），只认**正数时间戳**。
+   *
+   * ★ 和 `scanned` 同一条道理：写成 `'true'`、`'yes'` 这类真值，或 `-1` 这种负数，
+   *   都会让一本没读完的书被判成「读完过」—— 于是它出现在读后感列表里，
+   *   而用户从来没读完过。假话在界面上的表现是「凭空多出一本书」。
+   */
+  it('finishedAt 只认真正的正数（脏值一律归 0，不猜）', () => {
+    assert.equal(normalizeState({ finishedAt: 1710000000000 }).finishedAt, 1710000000000);
+    /**
+     * ★ 刻意**与 `page` / `at` 的处理不一样**：那三个字段走 `Number()`，因为它们只
+     *   影响显示；这个字段是门禁（决定一本书出现在不在读后感列表里）。
+     *   `Number(true) === 1`、`Number('1') === 1` 都是正数 —— 一个写错位的布尔值
+     *   就能让没读完的书出现在读后感里。所以这里只收真数字，其余一律归 0。
+     */
+    for (const dirty of ['1710000000000', '1', 'yes', true, -1, 0, null, undefined, NaN, {}, []]) {
+      assert.equal(normalizeState({ finishedAt: dirty }).finishedAt, 0,
+        `finishedAt=${JSON.stringify(dirty)} 被当成了「读完过」`);
+    }
+  });
+
+  /**
+   * 「曾经读完过」是**不可逆**的事实（0.44.3，用户 2026-10-28 的要求）。
+   *
+   * ★ 这条写的是**状态机**，不是格式化：`applyStatePatch` 是宿主写盘与浏览器
+   *   乐观更新的唯一入口，所以「重新阅读不会抹掉读完史」只在它这里成立一次，
+   *   全链路就都成立。
+   * ★ 走一遍真实顺序：标记读完 → 重新阅读 → 再标记读完 → 弃读。最后仍要
+   *   `finishedAt > 0`，而 `state` 是 `dropped`（用户确实弃读了，这个也要如实反映）。
+   */
+  it('applyStatePatch：标记读完写下 finishedAt，之后的任何写入都不抹掉它', () => {
+    const T1 = 1710000000001;
+    const marked = applyStatePatch(emptyState(), { state: 'read' }, T1);
+    assert.equal(marked.state, 'read');
+    assert.equal(marked.finishedAt, T1, '标记读完没有记下读完时间');
+    assert.equal(marked.at, T1);
+
+    // 「重新阅读」只改 state —— 读完史必须还在，否则读后感列表会当场少一本。
+    const reading = applyStatePatch(marked, { state: 'reading' }, T1 + 1000);
+    assert.equal(reading.state, 'reading');
+    assert.equal(reading.finishedAt, T1, '「重新阅读」把读完史抹掉了');
+    assert.equal(reading.at, T1 + 1000, 'at 应该跟着这次写入走');
+
+    // 再读一遍、再读完：finishedAt 仍记**第一次**读完的时间（那是这条事实的起点）。
+    const again = applyStatePatch(reading, { state: 'read' }, T1 + 5000);
+    assert.equal(again.finishedAt, T1, '第二次标记读完覆盖了首次时间');
+
+    // 弃读、移出再添加，同样不许清掉。
+    const dropped = applyStatePatch(again, { state: 'dropped' }, T1 + 9000);
+    assert.equal(dropped.finishedAt, T1);
+    const removed = applyStatePatch(dropped, { added: false }, T1 + 9000);
+    assert.equal(removed.finishedAt, T1, '移出「阅读」把读完史抹掉了');
+    assert.equal(removed.added, false);
+  });
+
+  it('applyStatePatch：老数据里 state=read 但没时间戳，离开 read 的那一刻补记', () => {
+    // 0.44.3 之前标记读完的书只有 `state: 'read'`。用户第一次点「重新阅读」时
+    // 正是它离开 `read` 的那一刻 —— 不在这里补，就再也没有机会补了。
+    const legacy = { state: 'read', page: 40, pages: 300, added: true };
+    const reading = applyStatePatch(legacy, { state: 'reading' }, 1710000000777);
+    assert.equal(reading.finishedAt, 1710000000777, '老数据离开 read 时没有补记读完史');
+    assert.equal(reading.page, 40, '补记不该动进度');
+  });
+
+  it('applyStatePatch：finishedAt 不接受调用方给的值（传 0 清不掉，传大数也伪造不了）', () => {
+    const marked = applyStatePatch(emptyState(), { state: 'read' }, 1710000000123);
+    assert.equal(applyStatePatch(marked, { finishedAt: 0 }, 1710000000456).finishedAt, 1710000000123);
+    assert.equal(applyStatePatch(marked, { finishedAt: 9e12 }, 1710000000456).finishedAt, 1710000000123,
+      '调用方能直接写 finishedAt —— 一个手写请求就能让没读完的书进读后感列表');
+    // 从没读完过的书记不住任何时间戳，哪怕请求里带了一个。
+    assert.equal(applyStatePatch(emptyState(), { state: 'reading', finishedAt: 9e12 }, 1710000000456).finishedAt, 0);
+  });
+
+  /**
+   * `hasFinished` 是读后感侧栏与门禁的**唯一**判据。
+   *
+   * ★ 与 `state === 'read'` 的差别只有一条：读完过、现在在读（或弃读）的书也算
+   *   —— 那正是用户要的那一条。这里把四个状态逐个钉住，别让谁改成「只看 state」。
+   */
+  it('hasFinished：读完 + 读完过都算；没读完的不算（四个状态逐个钉）', () => {
+    assert.equal(hasFinished({ state: 'read', finishedAt: 0 }), true, '读完的书不算读完过');
+    assert.equal(hasFinished({ state: 'reading', finishedAt: 1700000000000 }), true, '重读中的书被踢出了读后感');
+    assert.equal(hasFinished({ state: 'dropped', finishedAt: 1700000000000 }), true, '弃读但读完过的书被踢出了读后感');
+    assert.equal(hasFinished({ state: 'reading', finishedAt: 0 }), false);
+    assert.equal(hasFinished({ state: 'dropped' }), false);
+    assert.equal(hasFinished({ state: 'unread' }), false, '没读过的书被放进了读后感');
+    assert.equal(hasFinished(undefined), false);
   });
 
   /**
@@ -704,6 +795,36 @@ describe('「阅读」列表：added', () => {
     assert.equal(view.openable, false, '「读完」那一行不许点开 —— 免得手滑把读完的书重新翻开');
     assert.notEqual(view.openHint, '', '不可点就必须说明原因，否则用户只看到「点了没反应」');
     assert.equal(view.dim, true, '同一页里别的行能点、这一格不能 ⇒ 必须压暗，否则「看起来能点」');
+  });
+
+  /**
+   * 0.44.3：写完读后感的入口**搬到「读完」那一行**（用户 2026-10-28 的原话：
+   * 「头部菜单条不应该有『写读后感』按钮入口……入口应该是写在读完列表下」）。
+   *
+   * ★ 两条都要钉住：
+   *   ① `canReflect` 为真 ⇒ 「写读后感」在左、「重新阅读」在右（**原有按钮不许挪位**）；
+   *   ② 为假 ⇒ 只剩「重新阅读」，**不画一颗点了没反应的按钮**。
+   * ★ 只有「读完」这一格有它：别的状态根本没读完，写不了读后感。
+   */
+  it('★ bookRowView：读完那一行有「写读后感」（左），「重新阅读」仍在最右', () => {
+    const view = bookRowView({ title: '某本书' }, { added: true, state: 'read', page: 10, pages: 100 }, { onReadingPage: true, canReflect: true });
+    assert.deepEqual(texts(view), ['写读后感', '重新阅读'], '写完读后感的入口不在读完那一行，或者把「重新阅读」挤走了');
+    assert.deepEqual(kinds(view), ['reflect', 'restart']);
+    assert.equal(view.openable, false, '加了按钮也不能让这一行变成可点开');
+    // 两颗按钮都自带文字，「为什么这一行点不动」已经写在屏幕上了。
+    // 再叠一句「点右边的按钮」是重复，而且会把元信息行挤成第三行（268px 侧栏实测）。
+    assert.equal(view.openHint, '', '两个按钮自带文字了，还叠一句重复提示');
+
+    // 没有这个去处时不许留一颗空按钮；那种行仍要保留那句可见提示。
+    const bare = rowView('read');
+    assert.deepEqual(texts(bare), ['重新阅读']);
+    assert.notEqual(bare.openHint, '', '只剩一颗按钮时，仍然必须说明为什么这一行点不动');
+
+    // 别的状态不许出现它（没读完就写不了读后感）。
+    for (const state of ['unread', 'reading', 'dropped']) {
+      const other = bookRowView({ title: 'x' }, { added: true, state, page: 1, pages: 10 }, { onReadingPage: true, canReflect: true });
+      assert.equal(texts(other).includes('写读后感'), false, `${state} 那一行也冒出了「写读后感」`);
+    }
   });
 
   /**

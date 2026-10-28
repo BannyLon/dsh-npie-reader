@@ -192,6 +192,9 @@ function renderAndClick(props, clickIndex) {
     onToggle: (id, value) => calls.push(['toggle', id, value]),
     onDrop: (id) => calls.push(['drop', id]),
     onRestart: (id) => calls.push(['restart', id]),
+    // 写读后感要的是**整本书**（日记那边要 id / 书名 / 后缀），所以这条记的是 id，
+    // 但调用时传的是对象 —— 记 id 就足以验证「点哪本传哪本」。
+    onReflect: (book) => calls.push(['reflect', book?.id]),
   };
   const tree = props.__render({ ...props.bookProps, ...spies });
   const actions = actionButtons(tree);
@@ -287,6 +290,27 @@ describe('同一套装置覆盖另外两格（防止「为了修弃读把别的�
     assert.deepEqual(texts, ['重新阅读']);
     assert.equal(actions.length, 1);
     assert.equal(mainButton(tree).props.disabled, true);
+  });
+
+  /**
+   * 0.44.3：写读后感的入口在**「读完」那一行**（用户 2026-10-28 要求把顶部那颗删掉）。
+   *
+   * ★ 这条**真的渲染、真的点第一个按钮**：只断言源码字符串的话，把
+   *   `runners.reflect` 接到 `restart` 上照样能绿 —— 而那正是「点『写读后感』
+   *   却打开书」的事故形态。
+   */
+  it('★ 读完 + canReflect：第一个按钮是「写读后感」，点它调到 onReflect 而不是 onRestart', async () => {
+    const render = await loadBookRow();
+    const { actions, texts, calls } = renderAndClick({
+      __render: render,
+      bookProps: {
+        book: BOOK, added: true, stateName: 'read', page: 210, pages: 210, selected: false,
+        onReadingPage: true, canReflect: true,
+      },
+    }, 0);
+    assert.deepEqual(texts, ['写读后感', '重新阅读'], '两个按钮的顺序变了（「重新阅读」本该留在最右原位）');
+    assert.equal(typeof actions[1].props.onClick, 'function', '第二个按钮没有 onClick —— 点下去不会发生任何事');
+    assert.deepEqual(calls, [['reflect', BOOK.id]], '「写读后感」点下去没有走 onReflect');
   });
 
   it('在读：一个「弃读」，主按钮**可以**点（点行就是取书阅读）', async () => {

@@ -169,8 +169,6 @@ function clampSection(value, total) {
 export function BookEbook({
   book, states, onPageChange, onFinished, notify,
   api, SessionProvider, renderSlot, onManagePrompts, onImmersiveChange,
-  /** 与 `BookReader` 同义：带着这本书跳到日记的「读后感」模块。没传就不画那颗按钮。 */
-  onWriteReflection,
   /** 与 `BookReader` 同义：报「当前在第几节」，落到灵感速记的 `meta.chapter`。 */
   onChapter,
   /** 与 `BookReader` 同义：打开时先落到第几节（`null` = 按上次读到的）。 */
@@ -1043,18 +1041,9 @@ export function BookEbook({
             <Icon name="highlighter" size={14} />
             <span>{annotations.length > 0 ? `划线 ${annotations.length}` : '划线'}</span>
           </button>
-          {/* 与 `BookReader` 同一套规则：没标记读完就禁用（读后感只对读完的书开放）。 */}
-          {onWriteReflection && (
-            <button type="button" className="npr-book-pill-item"
-              disabled={current.state !== 'read'}
-              title={current.state === 'read'
-                ? '写读后感：跳到日记的「读后感」模块，这本书已经选好'
-                : '标记读完才能写读后感'}
-              onClick={() => onWriteReflection(book)}>
-              <Icon name="pencil" size={14} />
-              <span>写读后感</span>
-            </button>
-          )}
+          {/* ★ 顶部**故意没有**「写读后感」入口 —— 理由与 `BookReader` 里那条注释
+              逐字相同（用户 2026-10-28：入口写在「读完」列表下，不写在工具条里）。
+              唯一入口在阅读页「读完」那一行（`bookRowView` 的 read 分支）。 */}
           <button type="button" className={`npr-book-pill-item${findOpen ? ' is-on' : ''}`}
             title="书内搜索（⌘F）：在整本正文里找，回车 / ↓ 上下条跳转" aria-pressed={findOpen}
             onClick={toggleFind}>

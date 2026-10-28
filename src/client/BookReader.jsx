@@ -138,17 +138,6 @@ export function BookReader({
    */
   onImmersiveChange,
   /**
-   * 「写读后感」：带着**这本书**跳到日记那个 tab 的「读后感」模块。
-   *
-   * ★ 为什么是往外交给外层、而不是在书里弹一个输入框：读后感写在日记的 Markdown
-   *   文件里（`日记/YYYY-MM-DD.md`，`meta.book` 记着是哪本），书里再放一个输入框
-   *   就会变成**第二条写日记的路**，两条路的格式早晚漂开。所以这里只负责「跳过去，
-   *   书已经选好」，写作面只有一份。
-   * ★ 可选：没传就**不画这颗按钮**（`LibraryApp` 之外的夹具、以及将来别的宿主
-   *   外壳不会看到一颗点了没反应的按钮）。
-   */
-  onWriteReflection,
-  /**
    * 「当前在第几章」—— 报给外层，最后落到灵感速记的 `meta.chapter`。
    *
    * ★ 契约是 `{ n, title } | null`，**不许猜**：目录还没抽出来时就是 `null`，
@@ -2336,21 +2325,13 @@ export function BookReader({
             <Icon name="highlighter" size={14} />
             <span>{annotations.length > 0 ? `划线 ${annotations.length}` : '划线'}</span>
           </button>
-          {/* 只在外部给了回调时才画（见 `onWriteReflection` 的注释）。
-              ★ 但**没读完就禁用**：用户 2026-10-27 定的规则是「只有读完的书才可以写
-                读后感」。禁用一个看得见、hover 有解释的按钮，比让它消失或让它点进去
-                再报错都好 —— 消失会让人以为功能没了，报错会让人白跑一趟。 */}
-          {onWriteReflection && (
-            <button type="button" className="npr-book-pill-item"
-              disabled={current.state !== 'read'}
-              title={current.state === 'read'
-                ? '写读后感：跳到日记的「读后感」模块，这本书已经选好'
-                : '标记读完才能写读后感'}
-              onClick={() => onWriteReflection(book)}>
-              <Icon name="pencil" size={14} />
-              <span>写读后感</span>
-            </button>
-          )}
+          {/* ★ 顶部**故意没有**「写读后感」入口（0.44.3 删掉）。
+              用户 2026-10-28 的原话：「头部菜单条不应该有『写读后感』按钮入口……
+              入口应该是写在读完列表下」。理由站得住：写读后感是「这本书读完了」的
+              后续动作，它属于**读完那个名单**，不属于「正在读的这本书」的工具条；
+              放在这里还会让人以为「必须一边读一边写」。
+              现在的唯一入口在阅读页「读完」那一行（见 `bookRowView` 的 read 分支）。
+              ★ 别再把它加回来 —— 加回来就是两个入口，而两个入口迟早长得不一样。 */}
           <button type="button" className={`npr-book-pill-item${findOpen ? ' is-on' : ''}`}
             title="书内搜索（⌘F）：在整本正文里找，回车 / ↓ 上下条跳转" aria-pressed={findOpen}
             onClick={toggleFind}>

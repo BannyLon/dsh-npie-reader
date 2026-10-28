@@ -58,7 +58,7 @@ import {
 import { fetchPage } from './page-fetch.js';
 import { checkPublicUrl } from './net-guard.js';
 import {
-  BOOK_STATES, isBookId, mergeImportedStates, normalizeBookSources, normalizeLibraryListIds, normalizeState, stateOf,
+  BOOK_STATES, applyStatePatch, isBookId, mergeImportedStates, normalizeBookSources, normalizeLibraryListIds, stateOf,
 } from '../library.js';
 
 const REFRESH_WORKERS = 3;
@@ -754,7 +754,11 @@ export class RssService {
       }
     }
     const data = this.store.data;
-    const next = normalizeState({ ...stateOf(data.library.states, id), ...patch, at: Date.now() });
+    // ★ 走 `applyStatePatch` 而不是在这里再拼一次 `{ ...stateOf(...), ...patch }`：
+    //   那个式子漏掉「曾经读完过就一直算读完过」（`finishedAt`），而**浏览器半区
+    //   的乐观更新**用的是同一个函数 —— 两边各写一遍，就必然有一边漏，症状是
+    //   「点了重新阅读，读后感里的书当场消失，刷新一次又回来」。
+    const next = applyStatePatch(stateOf(data.library.states, id), patch);
     data.library.states[id] = next;
     this.store.touch();
     return next;

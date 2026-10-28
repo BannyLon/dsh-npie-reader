@@ -52,7 +52,7 @@ const STATE_ORDER = { reading: 0, unread: 1, read: 2, dropped: 3 };
 
 /** 一条阅读状态的缺省值。 */
 export function emptyState() {
-  return { state: 'unread', page: 0, pages: 0, at: 0, added: false, scanned: false };
+  return { state: 'unread', page: 0, pages: 0, at: 0, finishedAt: 0, added: false, scanned: false };
 }
 
 /**
@@ -440,12 +440,31 @@ export function normalizeState(raw) {
   const page = Number(raw.page);
   const pages = Number(raw.pages);
   const at = Number(raw.at);
+  /**
+   * ★ 这里**只认真正的数字**，不走 `Number()`：`Number(true) === 1`、`Number('1') === 1`
+   *   都是正数 ⇒ 一个布尔字段写错位就会让这本书被判成「读完过」，进而出现在读后感
+   *   列表里。`at` / `page` 用 `Number()` 是因为它们只影响显示，而这个字段是**门禁**；
+   *   门禁宁可挡住（归 0），不可放行。
+   */
+  const finishedAt = typeof raw.finishedAt === 'number' && Number.isFinite(raw.finishedAt) && raw.finishedAt > 0
+    ? raw.finishedAt : 0;
   const cleanPage = Number.isInteger(page) && page >= 0 ? page : 0;
   return {
     state,
     page: cleanPage,
     pages: Number.isInteger(pages) && pages > 0 ? pages : 0,
     at: Number.isFinite(at) && at > 0 ? at : 0,
+    /**
+     * **首次**标记读完的时间；0 = 从没读完过。
+     *
+     * ★ 与 `at` 是两个东西：`at` 是「这条记录最后一次被改」的时间，每次翻页、
+     *   每次标记弃读都会刷新；`finishedAt` 只在状态**第一次**变成 `read` 时写一次，
+     *   之后**任何**写入都不许把它抹掉 —— 包括「重新阅读」（那只是回到在读）。
+     * ★ 为什么必须有它：读后感那一栏的取向是「读过的书」，判据是 `state === 'read'`
+     *   的话，用户一点「重新阅读」书就从列表里消失，而他已经为这本书写下的读后感
+     *   还在磁盘上 —— 入口没了、内容还在，是最难解释的那种「丢东西」。
+     */
+    finishedAt,
     added: addedFlag(raw, state, cleanPage),
     /**
      * 这本书**实测**是扫描版（抽取目录时发现整本没有文字层）。
@@ -462,6 +481,50 @@ export function normalizeState(raw) {
 /** 读一本书的状态（缺省 = 未读）。 */
 export function stateOf(states, id) {
   return normalizeState(states?.[id]);
+}
+
+/**
+ * 把一次状态改动落到旧状态上 —— **宿主写盘与浏览器乐观更新走同一份**。
+ *
+ * ★ 为什么不让两边各写一遍 `{ ...before, ...patch, at: Date.now() }`：那个式子
+ *   少一条规则（下面这条 finishedAt），而两边各写一遍就一定会有一边少。少的那边
+ *   的表现是「重新阅读之后，读后感列表里的书当场消失，刷新一次才回来」——
+ *   原因只是乐观更新和落盘算出来的对象不一样。
+ *
+ * ★ 规则只有一条，但它不可逆：**曾经读完过就一直算读完过**。
+ *   `before.state === 'read'`（原本就是读完）或 `merged.state === 'read'`
+ *   （这次是标记读完）都意味着这本书被读完过 ⇒ 若还没记时间，就记这一次的。
+ *   `finishedAt` 一旦有值，此后任何 patch（重新阅读 / 弃读 / 移出再添加）都不动它。
+ *   `before.state === 'read'` 那一半是给**老数据**补记的：0.44.3 之前标记读完的
+ *   书只有 `state: 'read'`、没有时间戳，用户第一次点「重新阅读」时正是要离开
+ *   `read` 的那一刻 —— 不在这里补，那一刻恰恰就是唯一能补的时刻。
+ */
+export function applyStatePatch(before, patch = {}, now = Date.now()) {
+  const base = normalizeState(before);
+  const at = Number.isFinite(Number(now)) && Number(now) > 0 ? Number(now) : Date.now();
+  const merged = { ...base, ...(patch ?? {}), at };
+  // ★ `finishedAt` **不接受调用方给的值**：它是从状态推出来的（「有没有读过完」），
+  //   不是用户可填的字段。外面传 0（老客户端）不许清掉，传一个大数字也不许伪造
+  //   —— 否则一个手写请求就能让没读完的书出现在读后感列表里。
+  merged.finishedAt = base.finishedAt;
+  if (!(merged.finishedAt > 0) && (base.state === 'read' || merged.state === 'read')) {
+    merged.finishedAt = at;
+  }
+  return normalizeState(merged);
+}
+
+/**
+ * 这本书**读完过没有** —— 读后感那一栏与它的门禁唯一判据。
+ *
+ * ★ 不是 `state === 'read'`：用户点「重新阅读」之后那本书是在读，可他写过的读后感
+ *   还在，入口不能跟着状态一起消失（用户 2026-10-28：「如果用户又点击了重新阅读，
+ *   那么读后感的列表下不应该消失」）。
+ * ★ 「在读时也能写」是这个判据的**直接后果**，不是漏洞：这本书本来就写完过，
+ *   重读时补一段读后感是正常动作，没有理由拦。
+ */
+export function hasFinished(state) {
+  const clean = normalizeState(state);
+  return clean.state === 'read' || clean.finishedAt > 0;
 }
 
 /** 这本书在不在「阅读」里。**判据只这一份**：界面、统计、筛选都走它。 */
@@ -520,6 +583,9 @@ export function readingProgressLabel(state) {
  * @param book - 规范化后的书条目（只用到 `title`）。
  * @param state - `normalizeState()` 之后的**状态对象**（不是 id）。
  * @param options.onReadingPage - 这一行是不是渲染在「阅读」页里。
+ * @param options.canReflect - 这个页面有没有「写读后感」这个去处（默认没有）。
+ *   ★ 只有「读完」那一行会用到它：读完 = 可以写读后感。为假时不画那颗按钮，
+ *     而不是画一颗点了没反应的 —— 那是本项目最怕的形态。
  * @returns `{ badgeText, badgeState, actions, statusLabel, openable, openHint, dim }`
  *   - `actions`：右侧的**按钮**，**0–2 个**，按显示顺序，每项是 `{ kind, text, title, label }`；
  *   - `statusLabel`：右侧的**状态标签**（组件据此渲染 `span` 而不是 `button`），或 `null`；
@@ -642,20 +708,37 @@ export function bookRowView(book, state, options = {}) {
    * ★ 用户 2026-10-09：「『读完』下面的电子书点击应该不能有任何动作，只能点击
    *   『重新阅读』才可以。」⇒ 这一行不可点开（`openable: false`），免得手滑把一本
    *   已经读完的书重新翻开。要再读一遍必须走「重新阅读」（它才写 `state`）。
+   * ★ 0.44.3：读完这一行有**两个**按钮，「写读后感」在左、「重新阅读」在右。
+   *   用户 2026-10-28 的原话是「头部菜单条不应该有『写读后感』按钮入口……
+   *   入口应该是写在读完列表下」—— 写读后感是「这本书读完了」的后续动作，
+   *   它属于读完这个名单，不属于「正在读的那本书」的工具条。
+   *   ⇒ 顺序刻意让「重新阅读」留在**最右原位**：它本来就在那儿，加一个新按钮不该
+   *     让人重新找它（同 0.9.3 把「移出」留在最右的理由）。
+   *   ⇒ `canReflect` 为假时**不画**（别的渲染装置、单测里没有这个去处）：一颗点了
+   *     没反应的按钮就是「看起来像功能」。
    * ★ `dim: true`：同一页里别的行都能点，只有这一格不能 —— 所以标题压暗、去掉
    *   hover 高亮，让「这一格不一样」当场看得见。只加 `disabled` 是看不出来的
    *   （`.npr-bookrow-main` 的 `color` 是写死的）。
    */
   if (name === 'read') {
+    const canReflect = options.canReflect === true;
     return {
       badgeText,
       badgeState: name,
-      actions: [{
-        kind: 'restart',
-        text: '重新阅读',
-        title: '把这本书放回「在读」并打开 —— 进度从上次停下的地方接着算',
-        label: `重新阅读《${title}》`,
-      }],
+      actions: [
+        ...(canReflect ? [{
+          kind: 'reflect',
+          text: '写读后感',
+          title: '写读后感：跳到日记的「读后感」模块，这本书已经选好',
+          label: `写《${title}》的读后感`,
+        }] : []),
+        {
+          kind: 'restart',
+          text: '重新阅读',
+          title: '把这本书放回「在读」并打开 —— 进度从上次停下的地方接着算',
+          label: `重新阅读《${title}》`,
+        },
+      ],
       statusLabel: null,
       openable: false,
       /**
@@ -663,8 +746,12 @@ export function bookRowView(book, state, options = {}) {
        *   当场说明原因。只塞进 `title` 等于没人看得到：`disabled` 的主按钮读屏器
        *   直接跳过，鼠标事件也不派发（tooltip 不弹），那就是「看起来不能用，
        *   但不知道为什么」。
+       * ★ 0.44.3：这一行现在有两个**自带文字**的去处（写读后感 / 重新阅读），
+       *   「为什么点不动」已经写在屏幕上了 —— 再叠一句「点右边的按钮」只是重复，
+       *   而且在 268px 的侧栏里那句重复正好把元信息行挤成第三行。
+       *   所以有按钮时**不写**提示（返回空串，调用方就不渲染那个 span）。
        */
-      openHint: '要再读一遍，点右边的「重新阅读」',
+      openHint: canReflect ? '' : '要再读一遍，点右边的「重新阅读」',
       dim: true,
     };
   }

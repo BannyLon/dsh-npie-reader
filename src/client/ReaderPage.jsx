@@ -640,7 +640,7 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
    */
   const [readingCtx, setReadingCtx] = useState(null);
   /**
-   * 「带着某本书进日记」的一次性意图（书里点「写读后感」）。
+   * 「带着某本书进日记」的一次性意图（阅读页「读完」那一行右边点「写读后感」）。
    *
    * ★ 为什么状态放在这一层：切 tab 的权力只在这里（`mode`）。书架与日记都只是
    *   它的子视图，谁都不能把另一个子视图挂上去。
@@ -650,8 +650,10 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
    */
   const [diaryIntent, setDiaryIntent] = useState(null);
   /**
-   * 书里点「写读后感」。
+   * 「写读后感」——入口只有一处：阅读页「读完」那一行（0.44.3 起）。
    *
+   * ★ 阅读器顶部的胶囊里**没有**这颗按钮（用户 2026-10-28 明确要求删掉）：写读后感
+   *   是「这本书读完了」的后续动作，属于读完那个名单，不属于「正在读的这本书」。
    * ★ **先记意图、再切视图**：反过来的话 `DiaryApp` 挂载那一刻 `intent` 还是
    *   `null`，它会落在默认的灵感模块上；而那条 effect 的依赖是 `intent?.bookId`，
    *   挂载后不会再变 ⇒ 用户点了「写读后感」却停在灵感速记，且没有任何提示。

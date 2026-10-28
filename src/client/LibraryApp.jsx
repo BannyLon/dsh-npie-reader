@@ -25,7 +25,7 @@
  */
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  READING_STATE_FILTERS, addedBooks, bookRowView, bookScopes, countSources, filterBooks, formatBytes,
+  READING_STATE_FILTERS, addedBooks, applyStatePatch, bookRowView, bookScopes, countSources, filterBooks, formatBytes,
   isEbookExtension, libraryStats, normalizeState, parseScope, scopeValue, sourceLabelOf, sourceTotals, stateOf,
 } from '../library.js';
 import { Icon } from './icons.jsx';
@@ -142,6 +142,14 @@ const SOURCE_CLASS = {
 export const BookRow = memo(function BookRow({
   book, added, stateName, page, pages, scanned, selected, onReadingPage, onOpen, onToggle, onDrop, onRestart,
   /**
+   * 「写完读后感」的去处（0.44.3）：**只有「读完」那一行**会把它画成按钮。
+   * ★ `canReflect` 是布尔原始值、`onReflect` 必须来自 `useCallback`（同下面四个
+   *   回调的理由）：`memo` 的浅比较经不起每次渲染新建的函数。
+   * ★ 默认 `canReflect = false`：别的渲染装置（以及单测里直接调函数体的用例）
+   *   没有这个去处，默认不给就等于默认不画一颗点了没反应的按钮。
+   */
+  canReflect = false, onReflect = null,
+  /**
    * 来源徽章的三件属性（0.20.4）。
    * ★ 默认值**必须**是空串而不是 `undefined`：显隐判据是 `sourceLabel !== ''`，
    *   漏传时 `undefined !== ''` 为真 ⇒ 每一行都会多出一个**空胶囊**（有底色、没有字），
@@ -150,7 +158,7 @@ export const BookRow = memo(function BookRow({
    */
   sourceLabel = '', sourceKind = '', sourceTip = '',
 }) {
-  const view = bookRowView(book, { added, state: stateName, page, pages }, { onReadingPage });
+  const view = bookRowView(book, { added, state: stateName, page, pages }, { onReadingPage, canReflect });
 
   /**
    * 每个动作点下去做什么。`kind` 由 `bookRowView` 给，这里只做「名字 → 回调」的翻译
@@ -163,6 +171,9 @@ export const BookRow = memo(function BookRow({
     remove: () => onToggle(book.id, false),
     drop: () => onDrop(book.id),
     restart: () => onRestart(book.id),
+    // 写读后感要把**整本书**递出去（日记那边要 id / 书名 / 后缀三样），
+    // 所以只有这一项不是「传 id」。
+    reflect: () => onReflect?.(book),
   };
 
   /**
@@ -251,9 +262,13 @@ export const BookRow = memo(function BookRow({
 /**
  * 书架 / 阅读页。
  *
- * ★ `onWriteReflection` 只是**转交**：书里那颗「写读后感」要跳到日记那个 tab，
+ * ★ `onWriteReflection` 只是**转交**：「读完」那一行的「写读后感」要跳到日记那个 tab，
  *   而 tab 是 `ReaderPage` 的状态 —— 这里只把书原样往上递，不自己切视图
  *   （切走之后本组件就卸载了，自己调自己的出口没有意义）。
+ * ★ 0.44.3 起入口**只在这里**（阅读页「读完」筛下面的那一行）。阅读器顶部的胶囊里
+ *   那颗已经删掉：用户 2026-10-28 的原话是「头部菜单条不应该有『写读后感』按钮入口」，
+ *   理由也成立 —— 写读后感是「这本书读完了」的后续动作，它属于那个名单，
+ *   不属于「正在读的这本书」的工具条。
  */
 export function LibraryApp({
   reading, onExit, notify, api, SessionProvider, renderSlot, onWriteReflection, onReadingContext,
@@ -391,9 +406,12 @@ export function LibraryApp({
 
   const persist = useCallback(async (id, patch) => {
     // 先乐观更新本地，再落盘：等往返会让「读完」按钮按下去半天没反应。
+    // ★ 用 `applyStatePatch`（与宿主写盘同一份）：这里自己拼 `{ ...state, ...patch }`
+    //   会把「曾经读完过」这一刻丢掉 —— 标记读完紧接着点重新阅读时，读后感那一栏
+    //   会当场少一本书，刷新后又回来。
     setStates((previous) => ({
       ...previous,
-      [id]: normalizeState({ ...stateOf(previous, id), ...patch, at: Date.now() }),
+      [id]: applyStatePatch(stateOf(previous, id), patch),
     }));
     try {
       await saveBookState(id, patch);
@@ -405,6 +423,21 @@ export function LibraryApp({
   /** `persist` 的稳定镜像：下面两个回调要传给 `memo` 过的行，引用必须恒定。 */
   const persistRef = useRef(persist);
   useEffect(() => { persistRef.current = persist; }, [persist]);
+
+  /**
+   * 「写读后感」的稳定镜像（0.44.3）。
+   *
+   * ★ 外面给进来的 `onWriteReflection` 是 `ReaderPage` 里的一个**普通函数**，
+   *   每次渲染都是新身份。直接把它当 prop 传给 `BookRow`，2634 行的 `memo`
+   *   就全废了（P1-5 那两条前提里的第 2 条）。所以这里包一层零依赖的 `useCallback`，
+   *   内部走 ref 取最新实现 —— 与 `persistRef` 同一个写法。
+   * ★ 没有这个去处时 `canReflect` 为假，`bookRowView` 根本不排那颗按钮，
+   *   所以这里的 ref 允许是 `null`（`onReflect?.()` 兜住）。
+   */
+  const reflectRef = useRef(onWriteReflection);
+  useEffect(() => { reflectRef.current = onWriteReflection; }, [onWriteReflection]);
+  const canReflect = typeof onWriteReflection === 'function';
+  const reflectBook = useCallback((book) => { reflectRef.current?.(book); }, []);
 
   const onPageChange = useCallback((page, pages) => {
     const id = selectedId;
@@ -919,6 +952,7 @@ export function LibraryApp({
                 page={state.page} pages={state.pages} scanned={state.scanned} onReadingPage={onReadingTab}
                 selected={book.id === selectedId}
                 sourceLabel={from?.text ?? ''} sourceKind={from?.kind ?? ''} sourceTip={tip}
+                canReflect={canReflect} onReflect={reflectBook}
                 onOpen={openBook} onToggle={toggleAdded} onDrop={dropBook} onRestart={restartBook} />
             );
           })}
@@ -968,7 +1002,6 @@ export function LibraryApp({
               onImmersiveChange={setImmersive}
               api={api} SessionProvider={SessionProvider} renderSlot={renderSlot}
               onManagePrompts={() => setSettingsEntry({ open: true, tab: 'prompts', addPrompt: false })}
-              onWriteReflection={onWriteReflection}
               onChapter={setChapter}
               onFinished={() => void persist(selected.id, { state: 'read' })} />
           ) : (
@@ -983,10 +1016,8 @@ export function LibraryApp({
               }))}
               api={api} SessionProvider={SessionProvider} renderSlot={renderSlot}
               onManagePrompts={() => setSettingsEntry({ open: true, tab: 'prompts', addPrompt: false })}
-              onWriteReflection={onWriteReflection}
               onChapter={setChapter}
-              onFinished={() => void persist(selected.id, { state: 'read' })} />
-          )
+              onFinished={() => void persist(selected.id, { state: 'read' })} />          )
         ) : (
           <div className="npr-welcome">
             <div className="npr-welcome-brand">NPIE BOOKSHELF</div>
