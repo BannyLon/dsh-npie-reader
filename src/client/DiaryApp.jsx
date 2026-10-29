@@ -70,6 +70,8 @@ import { coverGlyph, coverHue } from './book-cover.js';
 import { entryOrigin, originIcon, originJumpLabel, originMissNote, originTarget } from './diary-origin.js';
 import { entryLines } from './diary-lines.js';
 import { agoLabel } from './diary-ago.js';
+import { tideReading } from './diary-tide.js';
+import { DiaryTide } from './DiaryTide.jsx';
 import { placeRowMenu } from './row-menu.js';
 import { BookCover } from './BookCover.jsx';
 import { DiaryCalendar } from './DiaryCalendar.jsx';
@@ -100,6 +102,34 @@ function dayLabel(date, today) {
   if (date === dateKey(yesterday)) return '昨天';
   const [, month, day] = date.split('-');
   return `${Number(month)} 月 ${Number(day)} 日`;
+}
+
+/**
+ * 「往日回声」里那句引言。
+ *
+ * ★ 空正文不能也套上引号 —— 「『（那天没有留下正文）』」看起来像在引用一句
+ *   关于空白的话，而事实是那天只记了时间没写内容。所以没有正文就不加引号。
+ * ★ 锁着的条目不经过这里（`quoteOf` 只拿得到 preview），文案在 JSX 里分派，
+ *   免得「解锁后可重读」被包进引号变成一个假的引文。
+ */
+function quoteOf(cell) {
+  if (cell?.locked) return '这一页还锁着';
+  const text = typeof cell?.preview === 'string' ? cell.preview.trim() : '';
+  return text === '' ? '那天没有留下正文。' : `「${text}」`;
+}
+
+/**
+ * 引线越旧越淡 —— 像旧纸上褪下去的墨。
+ *
+ * ★ 只作用在**那道竖线**上，不作用在正文：正文是「要读的东西」，
+ *   按年份调它的不透明度，等于让三年前写的字比去年的难读 —— 那不是怀旧，
+ *   那是把可读性当装饰。
+ * ★ 返回 1~5 的档，样式表按 `[data-depth]` 分档。上限 5 是因为「五年以上不再更淡」：
+ *   再淡就看不见了，而看不见不是一种表达。
+ */
+function echoDepth(years) {
+  const depth = Number.isFinite(years) ? Math.round(years) : 1;
+  return Math.min(5, Math.max(1, depth));
 }
 
 /**
@@ -355,7 +385,7 @@ export function DiaryApp({
    */
   const [dash, setDash] = useState({
     busy: true, locked: false, days: 0, chars: null, streak: 0,
-    moods: [], moodEntries: {}, onThisDay: [], lastEntry: null, error: '',
+    moods: [], moodSeries: [], moodEntries: {}, onThisDay: [], lastEntry: null, error: '',
   });
   /**
    * 点中的那一档情绪（1..5，`null` = 没筛）。
@@ -649,6 +679,8 @@ export function DiaryApp({
         chars: typeof payload.chars === 'number' ? payload.chars : null,
         streak: payload.streak ?? 0,
         moods: Array.isArray(payload.moods) ? payload.moods : [],
+        // 「心绪潮汐」的料：一天一个点（`{date, score}`），升序。缺就是缺，不补。
+        moodSeries: Array.isArray(payload.moodSeries) ? payload.moodSeries : [],
         moodEntries: payload.moodEntries ?? {},
         onThisDay: Array.isArray(payload.onThisDay) ? payload.onThisDay : [],
         lastEntry: payload.lastEntry ?? null,
@@ -1619,6 +1651,19 @@ export function DiaryApp({
     });
   }, [dash.moods]);
 
+  /**
+   * 把分布读成一句人话（「大多是平平的日子，最近沉了一些。」）。
+   *
+   * ★ 图表给形状，句子给读法。只有线没有句子，用户还得自己当分析师；
+   *   只有句子没有线，就又回到了「一条统计」。
+   * ★ 主调取 `dash.moods`（和下面那几枚 chip 同一个来源），走势取 `moodSeries` ——
+   *   两处各算一遍的话，会出现「chip 说『一般』最多、句子说『烦的时候不少』」。
+   */
+  const tideRead = useMemo(
+    () => tideReading({ moods: dash.moods, series: dash.moodSeries }),
+    [dash.moods, dash.moodSeries],
+  );
+
   /** 点中的那一档情绪在右侧要摊开的那几行（宿主已经按日期倒序给好了）。 */
   const moodRows = moodFilter === null ? [] : (dash.moodEntries?.[String(moodFilter)] ?? []);
   const moodMeta = moodFilter === null ? null : (MOODS.find((item) => item.score === moodFilter) ?? null);
@@ -2100,13 +2145,34 @@ export function DiaryApp({
                 *   空态说明也不需要留：日历下方本来就有「这个月写了 N 天」。
                 */}
 
-              {/* ---- 本月情绪与足迹 ------------------------------------------
-                  日历下面这块原本一直空着（268px 宽、半屏高）。放两块卡片：
-                  上面是「这个月的心情长什么样」，下面是「去年的今天写过什么」。
-                  ★ 两块都做成卡片（微边框 + 比侧栏深一档的底），与上面的日历、
-                    「这个月」列表形成分界 —— 不然它们看起来像同一张列表的续行。 */}
-              <section className="npr-diary-card" aria-label="本月情绪与足迹">
-                <h2 className="npr-diary-card-head"><Icon name="sparkles" size={12} />本月情绪</h2>
+              {/* ---- 心绪潮汐 --------------------------------------------------
+                  ★ 0.51 换掉了「三个百分比」。百分比是这一块最弱的表达：
+                    两条 50% 并排等于什么都没说 —— 它丢掉了**时间**。而这个月是
+                    「一直平」，还是「月中塌了一次、月末回上来」，只有把点按日期
+                    排开才看得见。
+                  ★ 所以这里是一条折线（`DiaryTide`，坐标在 `diary-tide.js`），
+                    一天一个点，缺口断开。下面跟一句人话，把分布读出来 ——
+                    图表给形状，句子给读法，缺一样都还是统计。
+                  ★ 它和上面的日历不重复：日历回答「哪天有」，这条线回答「怎么过来的」。 */}
+              <section className="npr-diary-card" aria-label="心绪潮汐">
+                <h2 className="npr-diary-card-head">
+                  <Icon name="sparkles" size={12} />
+                  心绪潮汐
+                  {!dash.busy && (
+                    <span
+                      className={`npr-diary-card-hint${dash.streak > 0 ? ' is-live' : ''}`}
+                      title={dash.streak > 0
+                        ? '从今天往前连着写了多少天。今天还没写就从昨天起算 —— 一个还没到的日子不该把已有的记录判成断了。'
+                        : '今天和昨天都还没落笔。'}>
+                      {dash.streak > 0 ? `连写 ${dash.streak} 天` : '今天还没落笔'}
+                      {/* ★ 字数从底行挪到标题行（0.51）。底行要留给图例：268px 宽时
+                          「有点烦」比「一般」宽一个字，右侧再挂一个「643 字」就会把
+                          三枚 chip 一起挤成「一… / 有… / 还…」—— 图例读不全，比没有更糟。
+                          锁着时字数本来就不显示（`chars === null`），这里跟着不给。 */}
+                      {dash.chars !== null && ` · ${dash.chars} 字`}
+                    </span>
+                  )}
+                </h2>
                 {dash.busy && <p className="npr-diary-card-note">正在数这个月…</p>}
                 {/*
                   * ★ 锁着时**不假装**「这个月没有心情」：宿主确实没给，但那是权限问题
@@ -2117,32 +2183,28 @@ export function DiaryApp({
                   <p className="npr-diary-card-note">上锁时只数天数。心情分布与字数要解锁后才看得到。</p>
                 )}
                 {!dash.busy && !dash.locked && dashMoods.length === 0 && (
-                  <p className="npr-diary-card-note">这个月还没记过心情。写的时候点一个表情，这里就长出来了。</p>
+                  <p className="npr-diary-card-note">这个月还没记过心情。写的时候点一个表情，这里就会长出一条潮汐。</p>
                 )}
                 {!dash.busy && !dash.locked && dashMoods.length > 0 && (
-                  <div className="npr-diary-moods">
-                    {dashMoods.map((cell) => (
-                      <button
-                        key={cell.score}
-                        type="button"
-                        className={`npr-diary-mood${moodFilter === cell.score ? ' is-on' : ''}`}
-                        aria-pressed={moodFilter === cell.score}
-                        title={`本月「${cell.label}」的条目 ${cell.count} 条，占记过心情的 ${cell.share}%`}
-                        onClick={() => setMoodFilter((current) => (current === cell.score ? null : cell.score))}>
-                        <span className="npr-diary-mood-emoji" aria-hidden="true">{cell.emoji}</span>
-                        <span className="npr-diary-mood-share">{cell.share}%</span>
-                        <span className="npr-diary-mood-label">{cell.label}</span>
-                      </button>
-                    ))}
-                  </div>
+                  <>
+                    <DiaryTide series={dash.moodSeries} monthKey={monthKey} selected={selected} />
+                    {tideRead !== '' && <p className="npr-diary-tide-read">{tideRead}</p>}
+                  </>
                 )}
-                <div className="npr-diary-facts">
-                  <span className="npr-diary-fact" title="从今天往前连着写了多少天。今天还没写就从昨天起算 —— 一个还没到的日子不该把已有的记录判成断了。">
-                    <strong>{dash.streak}</strong> 天连续
-                  </span>
-                  <span className="npr-diary-fact" title={dash.chars === null ? '上锁时不显示字数。' : '这个月私密日记的正文字数，不含时间戳与元信息。'}>
-                    <strong>{dash.chars === null ? '—' : dash.chars}</strong> 字
-                  </span>
+                <div className="npr-diary-moods">
+                  {!dash.busy && !dash.locked && dashMoods.map((cell) => (
+                    <button
+                      key={cell.score}
+                      type="button"
+                      className={`npr-diary-mood${moodFilter === cell.score ? ' is-on' : ''}`}
+                      aria-pressed={moodFilter === cell.score}
+                      title={`本月「${cell.label}」的条目 ${cell.count} 条，占记过心情的 ${cell.share}%`}
+                      onClick={() => setMoodFilter((current) => (current === cell.score ? null : cell.score))}>
+                      <span className="npr-diary-mood-emoji" aria-hidden="true">{cell.emoji}</span>
+                      <span className="npr-diary-mood-label">{cell.label}</span>
+                      <span className="npr-diary-mood-count">{cell.count}</span>
+                    </button>
+                  ))}
                 </div>
                 {dash.error !== '' && <p className="npr-diary-card-note is-error">刚才没读上来：{dash.error}</p>}
               </section>
@@ -2153,9 +2215,15 @@ export function DiaryApp({
                   ★ 「那年今日」的条件太苛刻 —— 要求**往年**同月同日写过。第一年它整年
                     都是空的，第二年起也只有真的在那一天写过才有内容（用户 2026-10-29：
                     「感觉要用一年之后才会有那年今日，那么第一年这里怎么办？这是个逻辑
-                     bug」）。所以没有往年同日时退回「上次提笔」：同样回答「我以前留下过
+                    bug」）。所以没有往年同日时退回「上次提笔」：同样回答「我以前留下过
                     什么」，只是把「去年的今天」放宽成「上一次」。
-                  ★ 标题跟着换。「上次提笔」的卡片顶着「那年今日」四个字就是假话。 */}
+                  ★ 标题跟着换。「上次提笔」的卡片顶着「那年今日」四个字就是假话。
+                  ★ 0.51 换了表现形态：从「一条带 📅 的列表项」改成**引文**
+                    （左侧一道竖线 + 引言 + 右下的署名）。理由很直接 —— 这是别人
+                    （过去的自己）说过的一句话，不是一条待办；列表项的形状在说
+                    「这里还有更多同类」，而它只有一条。
+                  ★ 越旧越淡：一年前的引线最实，五年以上不再更淡（再淡就看不见）。
+                    这是旧纸上褪下去的墨，不是层级。 */}
               <section className="npr-diary-card" aria-label={dash.onThisDay.length === 0 && dash.lastEntry !== null ? '上次提笔' : '那年今日'}>
                 <h2 className="npr-diary-card-head">
                   <Icon name="clock" size={12} />
@@ -2163,17 +2231,17 @@ export function DiaryApp({
                 </h2>
                 {dash.busy && <p className="npr-diary-card-note">正在翻旧账…</p>}
                 {!dash.busy && dash.onThisDay.length === 0 && dash.lastEntry === null && (
-                  <p className="npr-diary-card-note">这一天，时光悄悄走过，还没有留下痕迹 ✨</p>
+                  <p className="npr-diary-note-empty">这一天，时光悄悄走过，还没有留下痕迹 ✨</p>
                 )}
                 {!dash.busy && dash.onThisDay.length === 0 && dash.lastEntry !== null && (
                   <button
                     type="button"
-                    className={`npr-diary-echo${dash.lastEntry.locked ? ' is-locked' : ''}`}
+                    className={`npr-diary-note${dash.lastEntry.locked ? ' is-locked' : ''}`}
                     title={dash.lastEntry.locked ? '解锁后方可穿越时空' : `回到 ${dash.lastEntry.date}${dash.lastEntry.time ? ` ${dash.lastEntry.time}` : ''}`}
                     onClick={() => (dash.lastEntry.locked ? askUnlock() : pick(dash.lastEntry.date))}>
-                    <span className="npr-diary-echo-when">📅 {agoLabel(dash.lastEntry, today)}</span>
-                    <span className="npr-diary-echo-text">
-                      {dash.lastEntry.locked ? '解锁后方可穿越时空' : (dash.lastEntry.preview || '（那天没有留下正文）')}
+                    <span className="npr-diary-note-body">{quoteOf(dash.lastEntry)}</span>
+                    <span className="npr-diary-note-sig">
+                      {dash.lastEntry.locked ? '解锁后可重读' : `— ${agoLabel(dash.lastEntry, today)}`}
                     </span>
                   </button>
                 )}
@@ -2181,12 +2249,13 @@ export function DiaryApp({
                   <button
                     key={cell.date}
                     type="button"
-                    className={`npr-diary-echo${cell.locked ? ' is-locked' : ''}`}
+                    className={`npr-diary-note${cell.locked ? ' is-locked' : ''}`}
+                    data-depth={echoDepth(cell.years)}
                     title={cell.locked ? '解锁后方可穿越时空' : `回到 ${cell.date}${cell.time ? ` ${cell.time}` : ''}`}
                     onClick={() => (cell.locked ? askUnlock() : pick(cell.date))}>
-                    <span className="npr-diary-echo-when">📅 {cell.years} 年前的今天</span>
-                    <span className="npr-diary-echo-text">
-                      {cell.locked ? '解锁后方可穿越时空' : (cell.preview || '（那天没有留下正文）')}
+                    <span className="npr-diary-note-body">{quoteOf(cell)}</span>
+                    <span className="npr-diary-note-sig">
+                      {cell.locked ? '解锁后可重读' : `— ${cell.years} 年前`}
                     </span>
                   </button>
                 ))}

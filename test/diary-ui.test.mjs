@@ -1492,14 +1492,15 @@ describe('0.47：一条时间轴 + 出处 chip + 收窄', () => {
  *   ⑤ 没有往年同日时退回「上次提笔」（第一年不至于整年空着）。
  */
 describe('0.43：私密侧栏的「本月情绪」与「那年今日」', () => {
-  it('★ 两块卡片紧接日历（日历 → 本月情绪 → 那年今日），中间没有「这个月」列表', () => {
+  it('★ 两块卡片紧接日历（日历 → 心绪潮汐 → 那年今日），中间没有「这个月」列表', () => {
     const atCal = diary.indexOf('tones={privateTones}');
-    const atMood = diary.indexOf('>本月情绪</h2>');
+    // 0.51 起这块叫「心绪潮汐」（原来的「本月情绪」只有百分比，说不清走势）。
+    const atMood = diary.indexOf('心绪潮汐');
     // 0.50 起「那年今日」的标题是动态的（没有往年同日时叫「上次提笔」），
     // 所以锚不再锚标题文字，锚那一行只有它才会出现的表达式。
     const atEcho = diary.indexOf('agoLabel(dash.lastEntry');
     assert.ok(atCal > 0, '锚点失效：日历找不到了');
-    assert.ok(atMood > atCal, '「本月情绪」没有排在日历后面 —— 它该占日历下面那块空地');
+    assert.ok(atMood > atCal, '「心绪潮汐」没有排在日历后面 —— 它该占日历下面那块空地');
     assert.ok(atEcho > atMood, '「那年今日 / 上次提笔」该在本月情绪下面（先看这个月，再往回看）');
     assert.doesNotMatch(diary, />这个月<\/h2>/,
       '「这个月」列表又回来了 —— 它和日历是同一份数据的两种排法（用户 2026-10-29 要求删）');
@@ -1532,9 +1533,10 @@ describe('0.43：私密侧栏的「本月情绪」与「那年今日」', () => 
     assert.match(diary, /aria-pressed=\{moodFilter === cell\.score\}/, '筛选态没有 aria-pressed');
   });
 
-  it('★ 锁着时字数给「—」，不给 0', () => {
-    assert.match(diary, /<strong>\{dash\.chars === null \? '—' : dash\.chars\}<\/strong> 字/,
-      '字数没区分「不知道」与「0 字」—— 锁着时显示 0 字是一句确定的假话');
+  it('★ 锁着时不报字数（0 字是一句确定的假话，「—」也不是一个数）', () => {
+    // 0.51 起字数挪进了标题行，只有 `chars !== null` 时才写出来。
+    assert.match(diary, /\{dash\.chars !== null && ` · \$\{dash\.chars\} 字`\}/,
+      '字数没有和「不知道」这一态分开 —— 锁着时会写成一个确定的数');
     assert.doesNotMatch(diary, /\{dash\.chars \?\? 0\}/, '把 null 兜成了 0');
     assert.match(diary, /上锁时只数天数。心情分布与字数要解锁后才看得到。/,
       '锁着时没有说明「为什么这里是空的」');
@@ -1542,7 +1544,7 @@ describe('0.43：私密侧栏的「本月情绪」与「那年今日」', () => 
 
   it('★ 那年今日：空态文案照抄需求、锁着时点一下把人带到解锁卡', () => {
     assert.match(diary, /这一天，时光悄悄走过，还没有留下痕迹 ✨/, '空态文案不是需求里那句');
-    assert.match(diary, /📅 \{cell\.years\} 年前的今天/, '没有「N 年前的今天」这一行');
+    assert.match(diary, /`— \$\{cell\.years\} 年前`/, '没有「N 年前」这一行署名');
     assert.match(diary, /onClick=\{\(\) => \(cell\.locked \? askUnlock\(\) : pick\(cell\.date\)\)\}/,
       '锁着的条目被点了没有分流 —— 要么跳到看不到的正文，要么毫无反应');
     assert.match(diary, /function askUnlock\(\)[\s\S]{0,500}box\.querySelector\('input'\)\?\.focus\(\)/,
@@ -1940,5 +1942,104 @@ describe('私密侧栏：删掉重复列表、给「那年今日」一条退路'
   it('点「上次提笔」要能回到那一天（锁着时走解锁入口）', () => {
     assert.match(diary, /dash\.lastEntry\.locked \? askUnlock\(\) : pick\(dash\.lastEntry\.date\)/,
       '点了没反应，或者锁着时弹了第二个口令框');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.51：私密侧栏那两块「设计的都不够好」
+//
+// ★ 用户 2026-10-29：「本月情绪，和那年今日设计的都不够好。还有没有更好的表达。」
+//   两句其实指向同一个毛病 —— **它们都在用统计的形状说一件有时间的事**：
+//   ① 「本月情绪」把一个月压成两三个百分比。而百分比是这里最弱的表达：
+//      两条 50% 并排等于什么都没说，它丢掉了时间（月中塌过一次、月末回没回来）。
+//   ② 「上次提笔」是一条带 📅 的列表项，而列表在说「这里还有更多同类」——
+//      它只有一条。它其实是一句**引文**：过去的自己说过的话。
+// ---------------------------------------------------------------------------
+describe('0.51：心绪潮汐（走势线）与往日回声（引文）', () => {
+  it('★ 一条按日期排开的走势线，不是三个百分比', () => {
+    assert.match(diary, /心绪潮汐/, '卡片还叫「本月情绪」—— 它现在画的是一条潮位线');
+    assert.match(diary, /<DiaryTide series=\{dash\.moodSeries\}/,
+      '没有接上按天的序列 —— 拿不到序列就只能画回百分比');
+    assert.equal((diary.match(/DiaryTide/g) ?? []).length >= 2, true, 'DiaryTide 只在 import 里出现，没被渲染');
+    // ★ 反向对照：占比不许再上屏。它和下面的条数说的是同一件事，重复的数字会让人
+    //   以为它们不是一回事；而这条线已经把「多少」说清楚了。
+    assert.doesNotMatch(diary, /npr-diary-mood-share/, '百分比又上屏了');
+    assert.doesNotMatch(diaryCss, /\.npr-diary-mood-share/, '百分比那套样式还留着');
+    // 占比**只留在 Tooltip 里**（悬停时的明细），不上屏 —— 上屏就和下面那枚条数重复了。
+    assert.match(diary, /占记过心情的 \$\{cell\.share\}%/, 'Tooltip 里的占比也不见了');
+  });
+
+  it('★ 那句人话由纯函数给，不在 JSX 里手拼', () => {
+    assert.match(diary, /tideReading\(\{ moods: dash\.moods, series: dash\.moodSeries \}\)/,
+      '没有把分布读成一句话 —— 只有线没有句子，用户还得自己当分析师');
+    assert.match(diary, /npr-diary-tide-read/, '那句话没有自己的位置');
+    const tide = read('diary-tide.js');
+    assert.match(tide, /大多是平平的日子/, '主调词表不见了');
+    // ★ 主调必须和下面那几枚 chip 同源，否则会出现「chip 说『一般』最多、
+    //   句子说『烦的时候不少』」—— 两个都对，合起来是错的。
+    assert.match(tide, /const top = moods\[0\]/, '主调不是取自 moods[0]');
+  });
+
+  it('★ 缺口在图上是断的（坐标由纯函数算，有单测）', () => {
+    const tide = read('diary-tide.js');
+    assert.match(tide, /const MAX_GAP = 2;/, '缺口阈值没了');
+    assert.match(tide, /point\.day - prev\.day > MAX_GAP/, '缺口没有断开 —— 一条直线横穿半个月是编出来的走势');
+    const view = read('DiaryTide.jsx');
+    // ★ 描边不能被非等比缩放拉变形，圆点也不能用 <circle>（会被压成椭圆）。
+    assert.match(view, /vectorEffect="non-scaling-stroke"/, '描边会被压扁');
+    assert.match(view, /preserveAspectRatio="none"/, '曲线不会跟着容器宽度走（268~420px 都要对得上日历）');
+    assert.match(diaryCss, /\.npr-diary-tide-dot \{[^}]*border-radius: 50%/, '圆点不是圆的');
+    // ★ 每周那道格线：数据稀疏时，空图看起来像坏了 —— 格子把「空白」说成「还没写」。
+    assert.match(view, /WEEK_TICKS/, '没有格线');
+    // 反向对照：选中那天**不能**同时有格线和标记线（两条虚线叠在同一处，
+    // 看起来像「这天有两条线」，其实只有一条）。
+    assert.match(view, /WEEK_TICKS\s*\n?\s*\.filter\(\(day\) => markerX === null \|\| Math\.abs\(dayX\(day, monthKey\) - markerX\) > 0\.01\)/,
+      '选中那天和格线重叠了 —— 同一位置两条虚线会变成一条更深的');
+  });
+
+  it('★ 「上次提笔」是引文，不是列表项（📅 那行已经撤掉）', () => {
+    assert.match(diary, /className=\{`npr-diary-note\$\{dash\.lastEntry\.locked \? ' is-locked' : ''\}`\}/,
+      '还是列表项的形状 —— 而它只有一条，列表在承诺「还有更多」');
+    assert.doesNotMatch(diary, /📅/, '📅 还挂在时间行前面 —— 那是一枚列表图标，不是引文');
+    // 主区域「本月这一档」摊开时**仍然**是列表（那边确实是一列同类），
+    // 所以这里数的是次数：只剩那一处，侧栏那两条不许再用。
+    assert.equal((diary.match(/npr-diary-echo-when/g) ?? []).length, 1,
+      '侧栏还在用主区域那套列表行');
+    assert.match(diaryCss, /\.npr-root button\.npr-diary-note \{[^}]*border-left: 2px solid/,
+      '引文左边那道竖线没了 —— 形式感全在它身上');
+    // 署名：右下的破折号，像「—— 某某」。
+    assert.match(diary, /`— \$\{agoLabel\(dash\.lastEntry, today\)\}`/, '署名没有破折号，读起来不像引文');
+    assert.match(diaryCss, /\.npr-diary-note-sig \{[^}]*align-self: flex-end/, '署名没有落到右下角');
+  });
+
+  it('★ 引线越旧越淡，但**正文不淡**（可读性不是装饰）', () => {
+    assert.match(diary, /data-depth=\{echoDepth\(cell\.years\)\}/, '年份深浅没有传到样式里');
+    assert.match(diaryCss, /\[data-depth="5"\]/, '只有一档 —— 两年和三年的今天长得一样');
+    const body = /\.npr-diary-note-body \{[^}]*\}/.exec(diaryCss)?.[0] ?? '';
+    assert.notEqual(body, '', '找不到引文正文的样式');
+    assert.match(body, /color: var\(--npr-fg\)/, '正文被调淡了 —— 三年前写的字不该比去年的难读');
+    assert.match(body, /-webkit-line-clamp: 3/, '不给行数上限：五条引文会把下面所有东西顶出屏幕');
+  });
+
+  it('★ 锁着时那句「解锁后可重读」不能被套进引号', () => {
+    // `quoteOf()` 分派锁态文案；不进引号，否则「『解锁后可重读』」看起来像一句引文。
+    assert.match(diary, /function quoteOf\(cell\)[\s\S]{0,240}?if \(cell\?\.locked\) return '这一页还锁着';/,
+      '锁着的条目也被包了引号');
+    assert.match(diary, /text === '' \? '那天没有留下正文。' : `「\$\{text\}」`/,
+      '空正文被包成「」—— 那看起来像在引用一句关于空白的话');
+  });
+
+  it('★ 连续天数挪到标题右边，不再占一整行', () => {
+    assert.match(diary, /npr-diary-card-hint/, '「连写 N 天」没有位置');
+    assert.match(diary, /dash\.streak > 0 \? `连写 \$\{dash\.streak\} 天` : '今天还没落笔'/,
+      '断签时还在说「连写 0 天」—— 那句话是报丧，不是提示');
+    assert.doesNotMatch(diaryCss, /\.npr-diary-facts/, '底下一整排事实的样式还留着（那块已经没了）');
+  });
+
+  it('★ 这块和日历不重复：日历说「哪天有」，线说「怎么过来的」', () => {
+    // 同一条判据在 0.50 就立过（删掉「这个月」列表）。这次守的是新增的那条线
+    // **没有**变成「日历的第二种排法」：日历里没有纵轴，也没有走势。
+    assert.match(read('diary-tide.js'), /scoreY/, '纵轴没了 —— 那就退化成日历上又一排点');
+    assert.match(diary, /selected=\{selected\}/, '曲线和日历没有共同的锚点（选中那一天）');
   });
 });

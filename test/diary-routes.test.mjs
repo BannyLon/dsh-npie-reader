@@ -743,6 +743,10 @@ describe('GET /dashboard', () => {
     assert.equal(res.json.ok, true);
     assert.equal(res.json.locked, false);
     assert.deepEqual(res.json.moods, [{ score: 4, count: 1 }, { score: 3, count: 1 }]);
+    // 0.51：「心绪潮汐」要的按天序列必须一起透传（漏了这条，界面上就是一条空图）。
+    // 夹具里两条心情都在 08-02 ⇒ 一个点，取平均 (4+3)/2 = 3.5。
+    assert.deepEqual(res.json.moodSeries, [{ date: '2026-08-02', score: 3.5 }],
+      'dashboard 路由把 moodSeries 丢了，或者一天多条没取平均');
     assert.equal(typeof res.json.chars, 'number');
     assert.deepEqual(res.json.onThisDay.map(cell => [cell.date, cell.years]), [['2025-08-02', 1]]);
     assert.equal(res.json.onThisDay[0].preview, '去年的今天');

@@ -213,6 +213,8 @@ describe('日记（第三个 tab）的接线', () => {
     for (const token of [
       'npr-diary-reader', 'npr-diary-scroll', 'npr-diary-cal', 'npr-diary-write',
       'npr-diary-sheet', 'npr-diary-moodrow', 'npr-diary-entry', 'npr-diary-dayrow', 'npr-diary-hit',
+      // 0.51：潮汐线的几何与引文卡 —— 它们在新文件里，最容易被漏进产物。
+      'npr-diary-tide', 'npr-diary-note',
       '/api/dsh-npie-reader/diary',
     ]) {
       assert.ok(text.includes(token), `Client 产物里找不到 ${token}`);

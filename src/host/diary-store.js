@@ -489,6 +489,17 @@ export function createDiaryStore(options = {}) {
     let chars = 0;
     const counts = new Map();
     const byMood = new Map();
+    /*
+     * 按天汇总的基调：`date -> { sum, n }`，最后取平均。
+     *
+     * ★ 为什么要它：`counts` 只回答「这个月各档各几条」，那是**没有时间的一句统计** ——
+     *   界面上只能画成两个百分比，看不出「月中塌了一次、月末回上来」。
+     *   一天的基调取当天所有条目的平均分（一天写三条、两条一般一条烦，
+     *   那天就是 2.67），这样曲线上的一个点对应日历上的一格，两块能对得上。
+     * ★ 解不开的那天**不落点**，不补 0 —— 曲线在缺口处断开（见 `diary-tide.js`），
+     *   而不是被一条直线横穿过去假装有数据。
+     */
+    const dayTone = new Map();
     for (const key of keys) {
       if (!key.startsWith(month)) continue;
       days += 1;
@@ -502,14 +513,19 @@ export function createDiaryStore(options = {}) {
       }
       const entries = parseDay(text).entries;
       chars += dayCharCount(entries);
+      let daySum = 0;
+      let dayCount = 0;
       for (const entry of entries) {
         const score = moodScore(entry.meta?.mood);
         if (score === null) continue;
+        daySum += score;
+        dayCount += 1;
         counts.set(score, (counts.get(score) ?? 0) + 1);
         const bucket = byMood.get(score) ?? [];
         if (bucket.length < 200) bucket.push({ date: key, time: entry.time, preview: previewOf(entry.body) });
         byMood.set(score, bucket);
       }
+      if (dayCount > 0) dayTone.set(key, { sum: daySum, n: dayCount });
     }
     /*
      * 连续记录：**今天没写就从昨天起算**。
@@ -587,6 +603,13 @@ export function createDiaryStore(options = {}) {
     const moods = [...counts.entries()]
       .map(([score, count]) => ({ score, count }))
       .sort((left, right) => right.count - left.count || right.score - left.score);
+    /*
+     * 曲线要的那串点：一天一个，`score` 是当天各条的平均（保留一位小数）。
+     * 按日期升序 —— 画线的人不该自己再排一次（排错的后果是线倒退着画）。
+     */
+    const moodSeries = [...dayTone.entries()]
+      .map(([date, cell]) => ({ date, score: Math.round((cell.sum / cell.n) * 10) / 10 }))
+      .sort((left, right) => left.date.localeCompare(right.date));
     return {
       date,
       month,
@@ -601,6 +624,11 @@ export function createDiaryStore(options = {}) {
       chars: locked ? null : chars,
       streak,
       moods,
+      /*
+       * 「心绪潮汐」那根线要的料：`[{ date: '2026-10-27', score: 3.5 }]`，一天一个点。
+       * 只有**记过心情**的那天才有点 —— 没记心情、或那天解不开，都不落点。
+       */
+      moodSeries,
       // 点某一档情绪 → 右侧列出本月这一档的全部条目（只有摘要，点一行才回那一天）。
       moodEntries: Object.fromEntries([...byMood.entries()].map(([score, rows]) => [String(score), rows])),
       onThisDay,

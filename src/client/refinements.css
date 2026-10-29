@@ -2892,29 +2892,76 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-diary-card-note { margin: 0 0 6px; padding: 0 4px; font-size: 11px; line-height: 1.6; color: var(--npr-faint); }
 .npr-diary-card-note.is-error { color: var(--dsw-alias-state-error-primary); }
 
-/* 三格情绪：占比在上、标签在下，emoji 打头。
-   ★ 三格等宽（`flex: 1 1 0`）而不是按占比排宽度 —— 宽度随占比变会让三格
-     看起来像三个**不同大小**的按钮，而它们是三个平行的筛选开关。 */
-.npr-diary-moods { display: flex; gap: 3px; margin: 0 0 8px; }
-.npr-root button.npr-diary-mood { display: flex; flex: 1 1 0; min-width: 0; flex-direction: column; align-items: center; gap: 1px; padding: 6px 2px 5px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--npr-muted); font: inherit; cursor: pointer; }
+/* ── 心绪潮汐（0.51）────────────────────────────────────────────────
+   ★ 高度固定 46px：它是**走势**不是数值。拉高会让「两档平均分差 0.3」
+     看起来像断崖 —— 而同一个尺度要在 268px 到 420px 宽之间都成立。 */
+.npr-diary-tide { position: relative; height: 52px; margin: 2px 4px 3px; color: color-mix(in srgb, var(--npr-accent) 62%, var(--npr-fg)); }
+.npr-diary-tide-svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.npr-diary-tide-base { stroke: color-mix(in srgb, var(--npr-fg) 14%, transparent); stroke-width: 1; }
+/* 每周一道的格线。★ 极淡（8%）+ 短虚线：它是**本子上的格子**，不是数据。
+   实线会让人以为那是「某一天」，虚线 + 低对比才退到背景里。 */
+.npr-diary-tide-grid { stroke: color-mix(in srgb, var(--npr-fg) 8%, transparent); stroke-width: 1; stroke-dasharray: 1 3; }
+/* 选中那一天的竖线：把曲线和上面日历里高亮的那一格系在一起（同一份数据的两个视图）。 */
+.npr-diary-tide-mark { stroke: color-mix(in srgb, var(--npr-fg) 22%, transparent); stroke-width: 1; stroke-dasharray: 2 3; }
+.npr-diary-tide-line { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.npr-diary-tide-fill { fill: currentColor; fill-opacity: .17; stroke: none; }
+/* 圆点用 DOM 画，不用 `<circle>`：`preserveAspectRatio="none"` 会把圆压成椭圆。 */
+.npr-diary-tide-dot { position: absolute; width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px; border-radius: 50%; background: currentColor; }
+.npr-diary-tide-dot.is-last { box-shadow: 0 0 0 3px color-mix(in srgb, var(--npr-accent) 15%, transparent); }
+
+/* 一句人话：这一块的**结论**，不是注记。
+   ★ 用正文色但不加粗 —— 加粗会压过上面那条线；而用 faint 又会让结论
+     看起来像补充说明（它是这里最该被读的一句）。 */
+.npr-diary-tide-read { margin: 0 0 7px; padding: 0 4px; font-size: 12px; line-height: 1.6; color: var(--npr-fg); }
+
+/* 底行只剩图例兼筛选。
+   ★ 只留 emoji + 名字 + 条数，占比不再上屏 —— 上面那条线已经把它说完了，
+     而重复的数字会让人以为它们说的不是同一件事。
+   ★ 两个字条是 0.51 里踩出来的：① **不许收缩**（`flex: 0 0 auto`），
+     一收缩就把「有点烦」压成「有点…」，而这是图例 —— 图例读不全比没有更糟；
+     ② **允许换行**（`flex-wrap: wrap`），挤不下时换行，不截断。
+     代价是 268px 下第二行可能多一枚 —— 比三枚全变省略号好得多。 */
+.npr-diary-moods { display: flex; flex-wrap: wrap; gap: 3px; padding: 0 4px; }
+.npr-root button.npr-diary-mood { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 3px; height: 21px; padding: 0 6px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 10.5px; cursor: pointer; transition: background-color .12s ease-out, border-color .12s ease-out; }
 .npr-root button.npr-diary-mood:hover:not(:disabled) { background: var(--npr-hover); }
-/* ★ 选中态用**描边**而不是填充色：填充会盖掉卡片自己那层淡底，
-   两块卡片里一块变成实心块，看着像坏了。 */
-.npr-root button.npr-diary-mood.is-on { border-color: var(--npr-border-strong); background: var(--npr-hover); color: var(--npr-fg); }
-.npr-diary-mood-emoji { font-size: 15px; line-height: 1.15; }
-.npr-diary-mood-share { font-size: 11px; font-weight: 600; line-height: 1.2; color: var(--npr-fg); font-variant-numeric: tabular-nums; }
-.npr-diary-mood-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; line-height: 1.3; color: var(--npr-faint); }
-.npr-root button.npr-diary-mood.is-on .npr-diary-mood-label { color: var(--npr-muted); }
+/* ★ 选中态用**描边 + 极淡的品牌底**，不用实心：实心会盖掉卡片自己那层淡底，
+   两块卡片里一块变成色块，看着像坏了。文字色必须混 fg（纯品牌绿只有 1.45:1）。 */
+.npr-root button.npr-diary-mood.is-on { border-color: color-mix(in srgb, var(--npr-accent) 38%, transparent); background: color-mix(in srgb, var(--npr-accent) 14%, transparent); color: var(--npr-fg); }
+.npr-diary-mood-emoji { flex: 0 0 auto; font-size: 11px; line-height: 1; }
+/* 兜底：只有标签长到离谱（自定义名字）才会用到省略号。 */
+.npr-diary-mood-label { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npr-diary-mood-count { flex: 0 0 auto; font-size: 10px; font-variant-numeric: tabular-nums; color: var(--npr-faint); }
+.npr-root button.npr-diary-mood.is-on .npr-diary-mood-count { color: color-mix(in srgb, var(--npr-accent) 45%, var(--npr-fg)); }
 
-/* 底下一排事实（连续天数 / 本月字数）：上面一条极淡的分隔线，
-   与「心情分布」分开 —— 前两格是**分布**，这两个是**累计**。 */
-.npr-diary-facts { display: flex; align-items: baseline; gap: 12px; padding: 6px 4px 0; border-top: 1px solid color-mix(in srgb, var(--npr-fg) 7%, transparent); font-size: 10.5px; color: var(--npr-faint); }
-.npr-diary-fact { display: inline-flex; align-items: baseline; gap: 3px; }
-.npr-diary-fact strong { font-size: 12.5px; font-weight: 600; color: var(--npr-fg); font-variant-numeric: tabular-nums; }
+/* 卡片标题右边的短句（「连写 3 天 · 643 字」）。靠右，不加背景块 ——
+   卡片已经有一层淡底，再来一个胶囊就是两层。
+   ★ `min-width: 0` + 省略号：字数长到六位时宁可截这一串事实，
+     也不能让它把标题「心绪潮汐」挤掉。 */
+.npr-diary-card-hint { flex: 0 1 auto; min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 500; color: var(--npr-faint); font-variant-numeric: tabular-nums; }
+.npr-diary-card-hint.is-live { color: color-mix(in srgb, var(--npr-accent) 45%, var(--npr-fg)); }
 
-/* 「那年今日」的一行 / 「本月某一档」的一行 —— 同一款：一行时间、一行摘要。
-   ★ 摘要只给两行（`line-clamp`）：侧栏里 60 字能铺四行，四行 × 5 条会把
-     下面所有东西顶出屏幕，而这一块的用途是「想起来还有那么一天」。 */
+/* ── 往日回声（0.51）：一条**引文**，不是一条待办 ─────────────────
+   ★ 左侧那道竖线是全部形式感。列表项的圆角悬停底在说「这里还有更多同类」，
+     而它只有一条；引文的竖线在说「这是过去的自己说过的一句话」。
+   ★ 线的深浅按年份给（`data-depth`，由 `echoDepth()` 算）—— 旧纸上褪下去的墨。
+     正文**不跟着淡**：那不是怀旧，是把可读性当装饰。 */
+.npr-root button.npr-diary-note { display: flex; flex-direction: column; gap: 2px; width: 100%; margin: 0; padding: 3px 6px 4px 9px; border: 0; border-left: 2px solid color-mix(in srgb, var(--npr-accent) 64%, transparent); border-radius: 0 7px 7px 0; background: transparent; color: var(--npr-fg); font: inherit; text-align: left; cursor: pointer; transition: background-color .12s ease-out, border-color .12s ease-out; }
+.npr-root button.npr-diary-note[data-depth="2"] { border-left-color: color-mix(in srgb, var(--npr-accent) 56%, transparent); }
+.npr-root button.npr-diary-note[data-depth="3"] { border-left-color: color-mix(in srgb, var(--npr-accent) 48%, transparent); }
+.npr-root button.npr-diary-note[data-depth="4"] { border-left-color: color-mix(in srgb, var(--npr-accent) 42%, transparent); }
+/* 五年以上不再更淡：再淡就看不见了，而「看不见」不是一种表达。 */
+.npr-root button.npr-diary-note[data-depth="5"] { border-left-color: color-mix(in srgb, var(--npr-accent) 36%, transparent); }
+.npr-root button.npr-diary-note:hover:not(:disabled) { background: var(--npr-hover); border-left-color: color-mix(in srgb, var(--npr-accent) 58%, var(--npr-fg)); }
+.npr-root button.npr-diary-note + button.npr-diary-note { margin-top: 3px; }
+.npr-diary-note-body { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; font-size: 12.5px; line-height: 1.7; color: var(--npr-fg); }
+/* 署名：右下角、小字、带一个破折号。像引文末尾的「—— 某某」。 */
+.npr-diary-note-sig { align-self: flex-end; font-size: 10.5px; line-height: 1.5; color: var(--npr-faint); font-variant-numeric: tabular-nums; }
+.npr-root button.npr-diary-note.is-locked .npr-diary-note-body { color: var(--npr-muted); }
+.npr-diary-note-empty { margin: 0; padding: 2px 4px 4px; font-size: 11.5px; line-height: 1.7; color: var(--npr-faint); }
+
+/* 「本月某一档」在主区域摊开时的那一行 —— 留用 0.43 的列表形态：
+   ★ 那边**确实是**一列同类（本月这一档的全部条目），列表是对的，
+     只有侧栏那条不该长成列表。 */
 .npr-root button.npr-diary-echo { display: flex; flex-direction: column; gap: 1px; width: 100%; margin: 1px 0; padding: 5px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--npr-fg); font: inherit; text-align: left; cursor: pointer; }
 .npr-root button.npr-diary-echo:hover:not(:disabled) { background: var(--npr-hover); }
 .npr-diary-echo-when { font-size: 10.5px; font-weight: 600; line-height: 1.4; color: var(--npr-muted); font-variant-numeric: tabular-nums; }

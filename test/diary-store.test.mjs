@@ -731,6 +731,20 @@ describe('dashboard：本月情绪 + 那年今日', () => {
     assert.equal(board.moodEntries['4'][0].preview, '开心一', '摘要没压成一行（侧栏只放得下一行多）');
   });
 
+  it('★ `moodSeries`：一天一个点，分数是当天各条的**平均**（不是条数、不是最后一条）', async () => {
+    // 03-01 记了 🙂🙂😔 ⇒ (4+4+1)/3 = 3.0；03-02 只有 😄 ⇒ 5。
+    // ★ 没有它，界面只能画「两三个百分比」—— 一条没有时间的统计。
+    const board = await secure.dashboard({ date: '2031-03-02', today: '2031-03-02', month: MOOD_MONTH });
+    assert.deepEqual(board.moodSeries, [
+      { date: '2031-03-01', score: 3 },
+      { date: '2031-03-02', score: 5 },
+    ], '按天汇总错了：要么把「当天第一条」当成了那天，要么把邻月/没记心情的天也落了点');
+    // ★ 升序：画线的人不该自己再排一次（排错的后果是线倒退着画）。
+    assert.deepEqual(board.moodSeries.map((cell) => cell.date), ['2031-03-01', '2031-03-02']);
+    // 反向对照：没记心情的那天（2029/2030 的两条旧日记）不该落点。
+    assert.equal(board.moodSeries.some((cell) => cell.date.startsWith('2029')), false);
+  });
+
   it('★ 今天没写就从**昨天**起算（否则早上打开会看到「连续 0 天」）', async () => {
     const written = await secure.dashboard({ date: '2031-03-02', today: '2031-03-02', month: MOOD_MONTH });
     // 03-02 → 03-01 → 02-28 →（02-27 没有）⇒ 3 天，且**跨了月**：连续天数不该在月初归零。
