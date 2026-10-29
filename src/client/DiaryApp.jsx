@@ -2217,6 +2217,11 @@ export function DiaryApp({
                       ))}
                     </div>
                   )}
+                  {/* 索引取不到时**说一句**，不是静静少几枚标记：用户看到的会是
+                      「上次标着 3 篇，今天没了」，而他没有任何线索。 */}
+                  {!reflections.ready && reflections.error !== '' && (
+                    <p className="npr-diary-sect-note">读后感索引暂时取不到，这一轮先不标「已写 / 待写」：{reflections.error}</p>
+                  )}
                   {readBooks.length === 0 && (
                     <p className="npr-diary-sect-note">还没有读完的书。到「阅读 → 读完」点那本书右边的「写读后感」，或者在书里读完点「标记读完」，它就会出现在这里。</p>
                   )}
