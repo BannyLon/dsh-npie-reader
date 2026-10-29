@@ -108,7 +108,18 @@ const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--
 .npr-workarea{display:flex;flex:1;min-height:0;min-width:0}.npr-workarea>.npr-layout{min-width:0}.npr-workarea.has-companion>.npr-layout{grid-template-columns:minmax(0,1fr)}.npr-workarea.has-companion>.npr-layout>.npr-sidebar,.npr-workarea.has-companion>.npr-layout>.npr-resize{display:none}.npr-workarea.has-companion .npr-reader{display:block}.npr-companion-divider{flex:0 0 6px;cursor:col-resize;touch-action:none;background:var(--npr-border);z-index:4}.npr-companion-divider:hover,.npr-companion-divider:focus-visible,.npr-companion-divider[data-dragging=true]{background:var(--npr-accent)}.npr-companion{width:var(--npr-companion-width,44%);flex:0 0 var(--npr-companion-width,44%);min-width:0;max-width:none;display:flex;flex-direction:column;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}.npr-companion-header{display:flex;align-items:center;gap:8px;padding:8px 12px;flex-shrink:0}.npr-companion-header strong{flex:1}.npr-companion-context{padding:8px 12px;border-bottom:1px solid var(--npr-border);font-size:12px;flex-shrink:0}.npr-companion-context strong,.npr-companion-context small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.npr-companion-context blockquote{max-height:70px;overflow:auto;margin:6px 0;white-space:pre-wrap}.npr-companion-loading,.npr-companion-error{padding:16px;font-size:13px;color:var(--dsw-alias-label-secondary)}.npr-companion-error{color:var(--dsw-alias-state-error-primary)}.npr-companion-error button{margin-left:8px}.npr-native-chat{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}.npr-native-chat>[data-conversation-content]{flex:1;min-height:0}@container (max-width:700px){.npr-workarea.has-companion{flex-direction:column}.npr-workarea.has-companion>.npr-layout{flex:1;min-height:180px}.npr-companion-divider{flex-basis:6px;width:100%;cursor:row-resize}.npr-companion{width:100%;flex:0 0 var(--npr-companion-width,50%);min-width:0;max-width:none;min-height:180px}}
 
 .npr-visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-.npr-layout{flex:1;min-height:0;display:grid;grid-template-columns:min(var(--npr-list-width),calc(100cqw - 330px)) 1px minmax(0,1fr)}
+/* ★★ 侧边栏的**宽度下限**（0.45.2）—— 一个数，三处用：这条 grid、@container 里那条、
+   以及 JS 里拖动与首屏读回 npr.listWidth 时的夹取。
+   256px 是**量出来的**（.build/preview/measure-sidebar-min.mjs，真 Chrome）：
+     · 工具栏要 240px 才放得下（三档视图开关 88 + 四颗图标 4×28 + 内外边距与间距 30；
+       频道按钮在窄处自己缩到 0，所以它不参与这道门槛）；
+     · 筛选条四颗 chip 要 244px 才不换行（「已隐藏 1」）；
+     · 两位数的计数「已隐藏 12」要 252px。
+   用户第一次报障时侧边栏是 220px（那是拖动下限）—— 换行与齿轮被裁两条全中；
+   他自己拖到 251px 时看着就对了（那张「这样才对」的截图）。取 256：比 252 多 4px 余量。
+   ★ 三位数（「已隐藏 123」）仍会换行 —— 那是设计好的兜底（换行不等于裁字），不是缺陷。 */
+.npr-root{--npr-sidebar-min:256px}
+.npr-layout{flex:1;min-height:0;display:grid;grid-template-columns:max(var(--npr-sidebar-min),min(var(--npr-list-width),calc(100cqw - 330px))) 1px minmax(0,1fr)}
 .npr-sidebar{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--npr-bg-2)}
 .npr-sidebar-toolbar{display:flex;align-items:center;gap:2px;height:44px;flex-shrink:0;padding:5px 8px 5px 12px}
 .npr-root .npr-channel{min-width:0;flex:1;display:flex;align-items:center;justify-content:flex-start;gap:7px;padding:4px 0;height:32px;border:0;background:transparent;color:var(--npr-fg);font:inherit;font-size:13px;font-weight:600;cursor:pointer}
@@ -392,14 +403,15 @@ const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--
 .npr-discover-restore:disabled{opacity:.45;cursor:default}
 @media (max-width:600px){.npr-dialog.npr-discover{height:calc(100vh - 30px)}.npr-discover-head{padding:18px 18px 13px}.npr-discover-filters{padding:0 18px 6px}.npr-discover-results{padding:0 18px}.npr-discover-foot{padding:10px 18px}.npr-discover-avatar{width:32px;height:32px}.npr-discover-row{gap:9px}}
 .npr-root{position:relative}.npr-root[data-titlebar=true]{padding-top:40px}.npr-root[data-titlebar=true]::before{content:"";position:absolute;top:0;left:0;right:0;height:38px;-webkit-app-region:drag}.npr-reading-settings{flex-shrink:0}.npr-reading-setting select{color:var(--dsw-alias-label-primary);padding-right:22px}.npr-reading-setting input[type=range]{width:100%;height:20px}.npr-reader-toolbar{height:auto;min-height:44px;flex-wrap:wrap}.npr-reader-nav{margin-left:0}.npr-mode-select{flex-shrink:0}
-@container (max-width:700px){.npr-layout{grid-template-columns:clamp(232px,42cqw,240px) 1px minmax(0,1fr)}.npr-article{padding:20px 18px 70px}.npr-actions{margin-left:0}.npr-reading-settings{position:fixed;right:12px;top:70px}.npr-entry-thumb{width:44px;height:44px}.npr-root button.npr-entry{padding:10px 10px 10px 18px}.npr-reader-toolbar{gap:2px;padding:4px}.npr-root .npr-icon{width:28px;height:28px;padding:5px}
+@container (max-width:700px){.npr-layout{grid-template-columns:clamp(var(--npr-sidebar-min),42cqw,300px) 1px minmax(0,1fr)}.npr-article{padding:20px 18px 70px}.npr-actions{margin-left:0}.npr-reading-settings{position:fixed;right:12px;top:70px}.npr-entry-thumb{width:44px;height:44px}.npr-root button.npr-entry{padding:10px 10px 10px 18px}.npr-reader-toolbar{gap:2px;padding:4px}.npr-root .npr-icon{width:28px;height:28px;padding:5px}
 /* ★ 侧边栏在窄面板里要**自己收**（0.45.1）。原来这条是 min(240px,42cqw) —— 没有下限：
    面板 500px 时 42cqw = 210px，而工具栏那一行的固定项就要 238px（三档视图开关 88 +
    频道按钮 46 + 四颗图标 112 + 间距 10 + 内边距 20），于是最右那颗设置齿轮被裁掉半个、
    筛选条「已隐藏 1」的数字也被切 —— 用户 2026-10-28 的截图就是这个。
-   现在三件事一起做：① 给列宽一个 232px 的下限（clamp），② 工具栏在窄面板里收紧
-   （图标 28→24、间距 2→0、右内边距 8→4），③ 筛选 chip 的内边距 10→8。
-   232 + 收紧后刚好放得下「频道图标 + 四颗图标」，再窄就交给筛选条的 flex-wrap 换行。
+   三件事一起做：① 列宽一个下限（0.45.2 起是 --npr-sidebar-min = 256px，见 .npr-layout
+   上面那段说明；0.45.1 曾用 232px，那只够「不溢出」，不够「不换行」），
+   ② 工具栏在窄面板里收紧（图标 28→24、间距 2→0、右内边距 8→4），
+   ③ 筛选 chip 的内边距 10→8。
    ★ 不用 @container 量侧边栏自己：.npr-sidebar 一旦设 container-type，它内部**所有**
      无名的 @container (max-width:700px) 规则会改按侧边栏宽度求值 —— 那些规则本来是
      量面板的，会集体误触发（本项目 10+ 条断点全靠无名查询）。
@@ -414,6 +426,18 @@ const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--
 
 const VERSION_LABELS = { original: '原文', translation: '译文', rewrite: '改写' };
 const FALLBACK_READING = { ...READING_DEFAULTS };
+/**
+ * 侧边栏宽度下限（px）—— **必须**与 `PANEL_CSS` 里的 `--npr-sidebar-min` 是同一个数。
+ *
+ * 两处各写一遍是有代价的：CSS 那条管「面板宽度算出来的列宽」，这个常数管「拖动与首屏
+ * 读回 `npr.listWidth`」—— 两条路径都通向同一个数，写岔了就会出现「拖到 220 不换行、
+ * 但窗口一缩就换行」这种只在某个路径上复现的怪状态。
+ * `test/sidebar-narrow.test.mjs` 有一条断言把两者钉在一起（从源码里抠 CSS 变量再比）。
+ *
+ * ★ 256 是量出来的，依据写在 `PANEL_CSS` 里那段注释（工具栏 240 / 单行 chip 244 /
+ *   两位数计数 252）。
+ */
+export const SIDEBAR_MIN_WIDTH = 256;
 
 /**
  * 「正在重新生成」进度条。
@@ -817,7 +841,9 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
    * 读不到就保持 `null` ⇒ 文案退回**不含模型名**的说法，绝不编一个名字出来。
    */
   const [modelInfo, setModelInfo] = useState(null);
-  const [listWidth, setListWidth] = useState(() => Number(localStorage.getItem('npr.listWidth')) || 300);
+  /* ★ 首屏读回也要夹（0.45.2）：老用户的 localStorage 里存着 220（旧拖动下限），
+     不夹的话「一打开就是换行 + 齿轮被裁」，而用户根本没拖过 —— 那是最难自查的一类。 */
+  const [listWidth, setListWidth] = useState(() => Math.max(SIDEBAR_MIN_WIDTH, Number(localStorage.getItem('npr.listWidth')) || 300));
   const [askContext, setAskContext] = useState(null);
   const activeChannelRef = useRef(channel);
   activeChannelRef.current = channel;
@@ -1338,7 +1364,10 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     const startX = event.clientX;
     let width = listWidth;
     const move = (moveEvent) => {
-      width = Math.round(Math.min(Math.max(startX === 0 ? 300 : (listWidth + moveEvent.clientX - startX), 220), 520));
+      /* 拖动下限 = SIDEBAR_MIN_WIDTH（0.45.2）。原来写死 220：那正是用户拖到底时
+         「已隐藏 1 换行 + 齿轮被裁」的宽度 —— 下限比「排得开」还窄，等于允许用户
+         把自己拖进一个坏布局。 */
+      width = Math.round(Math.min(Math.max(startX === 0 ? 300 : (listWidth + moveEvent.clientX - startX), SIDEBAR_MIN_WIDTH), 520));
       setListWidth(width);
     };
     const up = () => {
