@@ -94,6 +94,7 @@ const HEAVY = [
   { name: 'layout', script: 'scripts/check-library-sidebar-layout.mjs', timeout: 6 * 60_000, why: '书架侧栏版式' },
   { name: 'tabs', script: 'scripts/check-tabs.mjs', timeout: 4 * 60_000, why: '切换控件两档同源（六处 × 两种侧栏宽度 + 反向对照）' },
   { name: 'marks-collapse', script: 'scripts/check-diary-marks-collapse.mjs', timeout: 4 * 60_000, why: '读后感划线栏可收起 + 正文自适应（四态 + 反向对照）' },
+  { name: 'bookrow-cover', script: 'scripts/check-bookrow-cover.mjs', timeout: 4 * 60_000, why: '书籍行封面位 + 状态角标（两种侧栏宽度 + 反向对照）' },
   { name: 'book-layout', script: 'scripts/check-book-panel-layout.mjs', timeout: 6 * 60_000, why: '书页面板版式' },
   { name: 'book-reading', script: 'scripts/check-book-reading-chrome.mjs', timeout: 6 * 60_000, why: '书页阅读区（顶栏 / 浮动列）' },
   { name: 'book-skill-mutants', script: 'scripts/verify-book-skill-mutants.mjs', timeout: 10 * 60_000, why: '技能包变异验证（会临时改源码）' },

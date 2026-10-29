@@ -332,6 +332,32 @@ export function sourceLabel(title, chapterTitle) {
   return chapter === '' ? quoted : `${quoted} · ${chapter}`;
 }
 
+/**
+ * 一条灵感**何时**记的（`今天 16:37` / `昨天 16:37` / `10-27 16:37`）。
+ *
+ * ★ 为什么不能只给时刻（用户 2026-10-29 的原话）：
+ *   「书展开的灵感条目是以时间开头的，时间开头有什么用，不应该是日期+时间吗？」
+ *   —— 侧栏「按书本 / 按文章」里，同一本书的灵感到来自不同天，`16:37` 只能回答
+ *   「几点」，回答不了「哪天」。而日期栏在展开区里是**不出现**的（那里没有「天」这一层）。
+ * ★ 为什么不用 `10 月 27 日 16:37`：268px 的侧栏里那串要占掉一整行，而条目正文
+ *   只剩两行可看。`10-27` 与正文里的日期写法一致（时间轴、日历都是这个格式），
+ *   省下来的宽度留给正文。
+ * ★ 今天 / 昨天仍写成词：这两天占绝大多数，写词比写数字快一眼。
+ */
+export function stampLabel(date, time, today = '') {
+  const key = String(date ?? '').trim();
+  const clock = String(time ?? '').trim();
+  let head = key;
+  if (key !== '' && key === today) head = '今天';
+  else {
+    const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+    // 不是 `YYYY-MM-DD` 就原样用（老数据 / 手改过的文件名不该被这里吞掉）。
+    if (parts !== null) head = `${parts[2]}-${parts[3]}`;
+  }
+  if (clock === '') return head;
+  return head === '' ? clock : `${head} ${clock}`;
+}
+
 /** 情绪 → 分数；不认识的返回 null（曲线要能区分「没有情绪」和「情绪最低」）。 */export function moodScore(emoji) {
   if (typeof emoji !== 'string' || emoji === '') return null;
   return MOOD_SCORE.get(emoji) ?? MOOD_SCORE.get(normalizeMood(emoji)) ?? null;

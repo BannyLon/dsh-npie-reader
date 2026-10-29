@@ -29,6 +29,7 @@ import {
   isEbookExtension, libraryStats, normalizeState, parseScope, scopeValue, sourceLabelOf, sourceTotals, stateOf,
 } from '../library.js';
 import { Icon } from './icons.jsx';
+import { BookCover } from './BookCover.jsx';
 import { BookReader } from './BookReader.jsx';
 import { BookEbook } from './BookEbook.jsx';
 import { SettingsPage } from './SettingsPage.jsx';
@@ -102,6 +103,26 @@ const BADGE_CLASS = {
 };
 
 /**
+ * 状态 → **封面角标**的类名（0.45.3）。
+ *
+ * ★ 为什么要另开一套而不是复用 `BADGE_CLASS`：徽章是**描边胶囊**（透明的，字有颜色），
+ *   角标是**实底方块**（压在一张封面上）。两套外观的底色、边框、圆角、字色全都
+ *   相反（一个 `background: transparent`、一个 `background: 实色`），共用一个类名
+ *   只会让四条规则各写两遍、且互相覆盖。
+ * ★ 为什么不写 `npr-flag-${state}`：`check-classes.mjs` 从字面量收类名，拼接出来的
+ *   只看见前缀，四条 CSS 会全被判成「定义了没人用」。理由与 `BADGE_CLASS` 完全一样。
+ * ★ 三个名字而不是四个：`unread` 与 `reading` 在徽章文字里是同一件事
+ *   （都是「在读 · 进度」，见 `BOOK_STATE_MARKS` 的说明），角标也必须一致 ——
+ *   否则同一本书的角标说「未读」、徽章说「在读」。
+ */
+const FLAG_CLASS = {
+  unread: 'npr-flag-reading',
+  reading: 'npr-flag-reading',
+  read: 'npr-flag-read',
+  dropped: 'npr-flag-dropped',
+};
+
+/**
  * 来源种类 → 徽章类名。
  *
  * ★ 同样写显式映射而不是拼接（理由与 `BADGE_CLASS` 一模一样：`check-classes.mjs`
@@ -162,8 +183,29 @@ export const BookRow = memo(function BookRow({
    *   以及 `library-bookrow-render.test.mjs` 里直接调函数体的那些用例）。
    */
   sourceLabel = '', sourceKind = '', sourceTip = '',
+  /**
+   * 是否画封面位（0.45.3）。
+   *
+   * ★ 由调用方**按页**给，不在这里判断：阅读页最多十几本，画得起；书架页是 2634 本，
+   *   每行一张封面会把宿主打爆（EPUB 走 `GET /cover/:id` 是 2634 个请求，PDF 还要
+   *   在客户端逐本解析交叉引用表）。判据在**页**这一级，不在行这一级。
+   * ★ 默认 `false`：别的渲染装置与单测都拿不到封面 API，默认不画就等于默认不报错。
+   */
+  showCover = false,
 }) {
   const view = bookRowView(book, { added, state: stateName, page, pages }, { onReadingPage, canReflect });
+
+  /**
+   * 元信息行里那枚状态徽章**写什么**（0.45.3）。
+   *
+   * ★ 有封面角标时只留进度（`badgeProgress`），终态（读完 / 弃读）干脆不写：
+   *   角标已经说了「在 / 完 / 弃」，再说一遍的**代价是硬的** —— 加封面吃掉 45px
+   *   之后，`在读 · 读到 24 / 387 页` 这一串会把 `PDF / 7.7 MB` 挤到下一行，
+   *   行高从 76 涨到 96，整个列表变松（0.45.3 的夹具里一眼可见）。
+   * ★ 没有封面（书架页 2634 行）时维持原样：那一页没有角标，徽章是**唯一**
+   *   说状态的地方，缩短它等于把状态弄丢。
+   */
+  const metaBadge = showCover ? view.badgeProgress : view.badgeText;
 
   /**
    * 每个动作点下去做什么。`kind` 由 `bookRowView` 给，这里只做「名字 → 回调」的翻译
@@ -203,8 +245,35 @@ export const BookRow = memo(function BookRow({
         aria-pressed={selected} disabled={!view.openable}
         title={view.openHint === '' ? undefined : view.openHint}
         onClick={() => onOpen(book.id)}>
-        <span className="npr-bookrow-title">{book.title}</span>
-        <span className="npr-bookrow-meta">
+        {/*
+          封面位（0.45.3）。用户原话：「阅读选项下可以增加封面图位吗。我觉得 A 角标
+          好像醒目一些」—— 这两句合起来才是完整需求：**角标要贴在封面上**。
+          之前否决 A 的唯一理由是「这页没有封面图位，角标只能去挤标题或动作列」，
+          封面位补上之后那个理由就不成立了。
+
+          ★ 封面在 `<button>` **内部**：封面是最自然的点击目标，放在外面就成了
+            「点封面没反应」—— 而本项目最怕的形态正是「看起来能点、点了不动」。
+          ★ 用的是日记书墙那套 `BookCover`，不是另写一个：三种来源（EPUB 内嵌 /
+            PDF 首页 / 生成式）已经在那边收敛过一遍，且 PDF 那条带
+            IntersectionObserver 懒加载 + 32 张缓存。这里换一套等于把那些坑重踩一遍。
+          ★ 角标带 `role="img"` + 完整的 `aria-label`，**不是** `aria-hidden`：
+            视觉上它只有一个字（「在」/「完」/「弃」），而那一个字不是任何一个词，
+            读屏器念出来等于噪音。给它整句的状态文字，读屏器读到的就是
+            「在读 · 读到 24 / 387 页」—— 和视觉上那一个字对得上，且信息完整。
+            （这也是元信息行里那枚徽章在阅读页可以缩短的前提：状态没有丢。）
+        */}
+        {showCover && (
+          <span className="npr-bookrow-cover">
+            <BookCover book={book} />
+            {view.badgeText !== '' && (
+              <span className={`npr-bookrow-flag ${FLAG_CLASS[view.badgeState] ?? FLAG_CLASS.unread}`}
+                role="img" aria-label={view.badgeText}>{view.badgeMark}</span>
+            )}
+          </span>
+        )}
+        <span className="npr-bookrow-body">
+          <span className="npr-bookrow-title">{book.title}</span>
+          <span className="npr-bookrow-meta">
           {/* 来源徽章（0.20.4）。★ 显隐**由调用方决定**（`sourceLabel === ''` ⇒ 不渲染），
               判据是「书单里有没有一条以上来源」—— 只有一条源时每行挂同一个徽章
               就是纯噪声，那正是状态徽章不给「未读」显示的同一条理由。
@@ -220,12 +289,17 @@ export const BookRow = memo(function BookRow({
               title={sourceTip}>{sourceLabel}</span>
           )}
           {/* 状态徽章只在**已加入**时出现：书架里 2634 本全是「未读」，
-              每人一个灰牌子等于没有信息，先把「这是我的书」标出来才有意义。 */}
-          {view.badgeText !== '' && (
-            <span className={`npr-bookrow-badge ${BADGE_CLASS[view.badgeState] ?? BADGE_CLASS.unread}`}>{view.badgeText}</span>
+              每人一个灰牌子等于没有信息，先把「这是我的书」标出来才有意义。
+              ★ 0.45.3 起阅读页这里只写**进度**（`metaBadge`），状态由封面角标承担。 */}
+          {metaBadge !== '' && (
+            <span className={`npr-bookrow-badge ${BADGE_CLASS[view.badgeState] ?? BADGE_CLASS.unread}`}>{metaBadge}</span>
           )}
-          <span>{book.ext.toUpperCase() || '文件'}</span>
-          <span>{formatBytes(book.size)}</span>
+          {/* ★ 0.45.3 起「格式 + 体积」是**一个** span：它们换行时必须整组一起走。
+              分成两个 span 时，320px 侧栏下 `PDF` 留在第一行、`7.7 MB` 独自掉到第二行
+              —— 那不是「多一行」，是**孤儿**：读者看到第二行只有一个体积数，
+              会以为哪里少了东西。绑成一组之后，最差也是「第二行只有文件属性」，
+              那是一句完整的话。 */}
+          <span className="npr-bookrow-file">{book.ext.toUpperCase() || '文件'} · {formatBytes(book.size)}</span>
           {book.year > 0 && <span>{book.year}</span>}
           {!book.renderable && <span className="npr-bookrow-warn">暂不支持阅读</span>}
           {/* ★「扫描版」是**实测结论**，不是元数据：抽取目录时发现整本没有文字层。
@@ -241,8 +315,9 @@ export const BookRow = memo(function BookRow({
               一致），所以那边 `openHint` 是空串，这里连空 span 都不渲染 ——
               否则元信息行末尾会多出一个 7px 的空档。 */}
           {view.openHint !== '' && <span>{view.openHint}</span>}
+          </span>
+          {book.series !== '' && <span className="npr-bookrow-series">{book.series}</span>}
         </span>
-        {book.series !== '' && <span className="npr-bookrow-series">{book.series}</span>}
       </button>
       {/* 动作位有**两种元素形态**，因为它们本来就是两种东西：
           ① 有动作（+ 阅读 / 弃读 / 重新阅读 / 移出）⇒ `button`，可以是**两个**
@@ -965,6 +1040,9 @@ export function LibraryApp({
             return (
               <BookRow key={book.id} book={book} added={state.added} stateName={state.state}
                 page={state.page} pages={state.pages} scanned={state.scanned} onReadingPage={onReadingTab}
+                /* 封面**只在阅读页**画（0.45.3）。判据放在「页」这一级而不是「行」这一级，
+                   因为成本差三个数量级：阅读页十几本，书架页 2634 本。 */
+                showCover={onReadingTab}
                 selected={book.id === selectedId}
                 sourceLabel={from?.text ?? ''} sourceKind={from?.kind ?? ''} sourceTip={tip}
                 canReflect={canReflect} onReflect={reflectBook}

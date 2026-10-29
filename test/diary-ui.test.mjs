@@ -508,43 +508,28 @@ describe('灵感模块：情绪 / 标签 / 时间轴 / 关联到书', () => {
     assert.match(diary, /entry\.kind !== '读后感'/, '时间轴没有滤掉读后感');
   });
 
-  it('★ 「挂到书」：把已有的一条关联到某本书的某一章', () => {
-    // 用户 2026-10-27 的原话：「灵感不仅可以单独存放，当某天你读到某本书的某一页时，
-    // 可以**一键把这个灵感关联到该书的目录节点上**」。0.31 只做了**捕获时**的自动关联
-    // （读书按 L 写 meta.book/chapter），而「我昨天随手记的一条，现在想挂到第 3 章」
-    // 一直没有任何入口 —— 那才是「一键」。
-    assert.match(diary, /function openLinkPick\(entry\)/, '没有「挂到书」的入口函数');
+  it('★ 出处：读的时候记下的才有那颗图标，手记的没有', () => {
+    // 用户 2026-10-29 的两句原话：
+    //   「如果是在 RSS 阅读期间按 L 添加的灵感，那这条点击书籍图标弹出的是什么时间、
+    //    在哪篇文章下记录的这条灵感，并有一个直接跳转到这篇文章的按钮」；
+    //   「如果是我直接在灵感页记录下的灵感，就没必要去往文章上挂，也就是说就不应该有
+    //    这个书籍按钮显示，挂书本同理」。
+    // ⇒ 这颗图标＝出处，不是「挂到书上」。「挂到书上」那整套（选书浮层 / 章节列表 /
+    //   改写 source）已按同一句话删掉 —— 手记的灵感不往任何东西上挂。
+    assert.match(diary, /const origin = privateSide \? null : entryOrigin\(entry, entry\.date \?\? selected\)/,
+      '条目没有算出处 —— 要么每一条都长一颗点了没内容的图标，要么一条都不长');
+    assert.match(diary, /\{origin !== null && \(/, '没有出处的条目仍然画了那颗图标');
+    assert.match(diary, /onClick=\{\(event\) => openOrigin\(event, origin\)\}/, '图标点了不打开出处');
+    assert.doesNotMatch(diary, /openLinkPick|applyLink|askLinkOutline/, '「挂到书」的入口还留着');
+    assert.doesNotMatch(diaryCss, /npr-diary-linkbook/, '挂书浮层的样式还留着');
 
-    // ★ 只对**公开**条目开：侧栏「挂在书上」是从 `timeline()` 建的，而它默认不带私密。
-    //   给私密条目挂上书，结果是在侧栏里永远看不见 —— 写了但永远看不到，比没有更糟。
-    assert.match(diary, /if \(entry\.scope === 'private'\) return;/, '私密条目也能挂到书上 —— 挂了也看不见');
-    assert.match(diary, /\{!privateSide && \(/, '条目行上的入口没有排除私密');
-    assert.match(diary, /aria-label="挂到书上"/, '条目行上没有那颗按钮');
-
-    // ★ 只写 `source` + `meta`，**不传 body**：宿主侧现在允许局部改写，
-    //   传 body 等于把用户的原话再写一遍 —— 中途被别处改过就会静默覆盖回去。
-    assert.match(diary, /await patchDiaryEntry\(pick\.date, pick\.index, \{ source: label, meta \}/,
-      '没有走局部改写，或者顺手传了 body');
-    assert.doesNotMatch(diary, /patchDiaryEntry\([\s\S]{0,120}?body:/, '「挂到书」顺手改了正文');
-
-    // ★ 没选章时**整个键都不传**：`Number(null) === 0` 且 `0 >= 0`，
-    //   传 null 会在文件里留下 `"chapter":0`，而 0 章是不存在的（章号从 1 起）。
-    assert.match(diary, /const meta = pick\.chapter === null\s*\?\s*\{ book: pick\.bookId \}/,
-      '没选章时仍然把 chapter 传下去了');
-
-    // 目录是**点一下才读**的：网盘书要先把整本拉下来（超时 2 分钟），
-    // 点一下书名就卡两分钟，比「没有章节可选」更糟。
-    assert.match(diary, /async function askLinkOutline\(\)/, '没有「从目录里挑一章」');
-    assert.match(diary, /fetchEbookIndex\(bookId\)\.catch/, '没试电子书的节');
-    assert.match(diary, /fetchDigestStatus\(bookId\)\.catch/, '没试 PDF 的解读大纲');
-    // ★ 异步回来要确认浮层还开着、还是同一本书：中途换书的话，A 的目录会画到 B 身上。
-    assert.match(diary, /current\.bookId === bookId/, '异步回来的目录没有校验是哪本书');
-    // 拉不到目录要**说出来**，不能让用户对着空列表猜。
-    assert.match(diary, /这本书还没有目录（没抽过正文 \/ 没解读过），只能挂到整本。/, '目录为空时没有解释');
-
-    // 拼 `source` 用共享的 `sourceLabel`（与 `parseSource` 同源，避免双书名号）。
-    assert.match(diary, /sourceLabel\(pick\.bookTitle, pick\.chapterTitle\)/, '没有用共享的 sourceLabel');
-    assert.match(diary, /await refresh\(\);/, '挂完没有刷新 —— 侧栏分组要等到下次进页面才更新');
+    // 浮层里三件事：何时 / 出处 / 去现场。缺哪一件都是「点开还是不知道在哪写的」。
+    assert.match(diary, /<span className="npr-diary-pop-when">/, '浮层没有说「什么时候记的」');
+    assert.match(diary, /<p className="npr-diary-pop-src" title=\{originPop\.source\}>/, '浮层没有说出处');
+    assert.match(diary, /\{originJumpLabel\(originPop\)\} ›/, '浮层里没有「去现场」的按钮');
+    // 跳不了（书已移出书架 / 老条目只有书名）时不画死按钮，换成一句解释。
+    assert.match(diary, /\{canOriginJump \? \(/, '跳不了的时候仍然画了一颗点了没反应的按钮');
+    assert.match(diary, /\{originMissNote\(originPop\)\}/, '跳不了的时候没有解释');
   });
 
   it('★ 「加载更早」：时间轴能往前翻，不是只给最近 30 天', () => {
@@ -597,7 +582,11 @@ describe('灵感模块：情绪 / 标签 / 时间轴 / 关联到书', () => {
     assert.match(diary, /const linkViewRows = linkView === 'book' \? linkedBookRows/,
       '「按书本」没有按档位取数据 —— 两档会同时铺出来');
     assert.match(diary, /\{linkView !== 'time' && \(/, '来源那一块没有被条件渲染');
-    assert.match(diary, /<span className="npr-diary-dayrow-date">\{item\.key\}<\/span>/, '那一块没把来源显示出来');
+    // ★ 0.46.0：来源行改成「封面 + 两行名字 + 一行元信息」——
+    //   用户 2026-10-29「这个书本的名称非常的不明显，建议可以放上书封面」。
+    //   一行文字的 `npr-diary-dayrow-date` 已经被这一块取代（时间轴还在用那个类）。
+    assert.match(diary, /<span className="npr-diary-srcrow-title">\{item\.title\}<\/span>/, '来源行没把名字显示出来');
+    assert.match(diary, /<BookCover book=\{cover\} \/>/, '书没有用真封面（EPUB/PDF/生成封面的三选一）');
 
     // ★ 点一行 = **展开这一本的灵感**，不是直接跳走。
     //   「按书本」这个视图里用户的问题是「这本书我想过什么」，直接跳走等于把问题推回阅读器。
@@ -1403,63 +1392,6 @@ describe('0.39：页脚按模块报自己的数（灵感页不该闻到私密）
 });
 
 // ---------------------------------------------------------------------------
-// 0.40.1：「挂到书」浮层的版式 —— 两条都是**量出来的**，不是看出来的
-//
-// ★ 起因：0.40 的浮层从没进过任何一张预览图（预览脚本是手写的静态近似，
-//   不渲染真 JSX）。补图之后用真 Chrome 量 computed 值，抓到两个真 bug，
-//   而这两个在缩略图里都长得像「正常留白」：
-//   ① 书列表 190 + 章列表 190 同时在场 ⇒ 卡片内容 622px > 上限 600px ⇒
-//      body 自己溢出 30px ⇒「卡片 / 书列表 / 章列表」三层嵌套滚动；
-//      `overscroll-behavior: contain` 挡住链式传递 ⇒ 章列表滚到底不会接着滚卡片，
-//      用户得把指针挪出列表再滚。
-//   ② 列表是 flex 列 + max-height + overflow，子项默认 `flex-shrink: 1`
-//      ⇒ 装不下时**行被压扁**而不是溢出滚动：10 本书压进 190px 每行只剩 18px，
-//      而文字行高 18.75px ⇒ 每行被垂直切掉半截，看着像渲染坏了。
-//      `scrollHeight` 恒等于 `clientHeight`（永远滚不动）就是它的指纹。
-//
-// ⇒ 几何判据在 `.build/preview/measure-link.mjs`（真 Chrome），反向对照在
-//   `check-link-mutant.mjs`（两条变异各自必须变红）。这里钉两件事：
-//   那两条 CSS 守卫还在，且界面上**真的用上了**（class 是条件拼的）。
-// ---------------------------------------------------------------------------
-describe('0.40.1：「挂到书」浮层不塌（书列表收窄 / 行不被压扁）', () => {
-  it('★ 列表行不许被 flex 压扁（`flex: 0 0 auto`）', () => {
-    // 少了这一条，列表就退化成「10 本书压成 10 条被切掉半截的字」——
-    // 而 `overflow: auto` 看起来「明明是滚动的」，所以肉眼很难怀疑到 flex 头上。
-    assert.match(diaryCss, /\.npr-root \.npr-diary-linkbook \{[^}]*flex: 0 0 auto/,
-      '书/章列表的行会被压扁 —— 行数一多，每行文字被垂直切掉');
-  });
-
-  it('★ 章节列表打开时书列表要收窄，否则三层嵌套滚动', () => {
-    assert.match(diaryCss, /\.npr-diary-linkbooks\.is-compact \{[^}]*max-height: 96px/,
-      '没有收窄规则 —— 两个 190px 列表叠起来会撑破卡片');
-    // 光有 CSS 不算：class 必须是**条件**拼上去的，否则永远收窄（选书时只剩 3 行）或永远不收窄。
-    assert.match(diary, /npr-diary-linkbooks\$\{linkPick\.outline\.items\.length > 0 \? ' is-compact' : ''\}/,
-      'is-compact 没有按「目录是否已展开」条件生效');
-  });
-
-  it('★ 收窄之后，书名必须写在「当前选择」那一行上', () => {
-    // 收窄到 96px 只装得下 3 行，选中的书很可能被滚出视野 ——
-    // 那时候「我在往哪本书上挂」只剩这一行能回答。
-    assert.match(diary, /<p className="npr-diary-linkpicked">\s*\{linkPickedTitle \|\| '这本书不在书架上'\}/,
-      '「当前选择」没有书名 —— 书列表一收窄就不知道在挂哪本书');
-    // ★ 书名优先取**书架上那一份**：预填时手上只有 `source` 里拆出来的写法，
-    //   和书架上的正式书名可能差一个译名 / 副标题。
-    assert.match(diary, /const linkPickedTitle = linkPick\?\.bookId \? \(linkPickedBook\?\.title \?\? linkPick\.bookTitle\) : ''/,
-      '当前选择没优先用书架上的正式书名');
-  });
-
-  it('★ 反向对照的变异锚点必须还在（否则那两条变异会静默变成空操作）', () => {
-    // check-link-mutant.mjs 靠这两段**原文**挖掉规则。CSS 一改格式（多空格、换行、
-    // 调整属性顺序），它就会找不到锚点 —— 那时脚本报的是「夹具没跟上真代码」，
-    // 而人只看到「没变红」，很容易当成「断言没牙」。锚点在这里钉住。
-    assert.ok(diaryCss.includes('.npr-diary-linkbooks.is-compact { max-height: 96px; }'),
-      '变异锚点 A 漂了：check-link-mutant.mjs 挖不到 is-compact 那条规则');
-    assert.ok(diaryCss.includes('width: 100%; flex: 0 0 auto; padding: 6px 8px;'),
-      '变异锚点 B 漂了：check-link-mutant.mjs 挖不到 flex: 0 0 auto');
-  });
-});
-
-// ---------------------------------------------------------------------------
 // 0.41：灵感侧栏的信息架构 —— 从「四块纵向平铺」改成「一个视图切换器 + 当前那一档」
 //
 // ★ 用户 2026-10-27 的原话：「时间轴无限拉长……'挂在书上'和'挂在文章上'……随着书本和
@@ -1549,81 +1481,23 @@ describe('0.41：灵感侧栏是一个切换器 + 当前那一档', () => {
     assert.match(diary, /点一本展开它的灵感/, '文案没有说清点一行会发生什么');
   });
 
-  it('★ 长标题单行省略 + title 全文；条数是右对齐胶囊', () => {
-    // 侧栏 268px 放不下「《译文名著文库》 076[法]雨果-九三年（叶尊译）」，
-    // 所以按钮上省略、`title` 给全文。**两个都要**：只有省略号看不全，只有 title 看不见。
+  it('★ 来源行：封面 + 两行名称 + 元信息；展开区条目是「日期 + 时刻」两行', () => {
+    // 0.45.4 及之前这里是「一行 `书名…  [4] ∨`」：书名被截成前 8 个字，条数是右对齐
+    // 胶囊。用户 2026-10-29 的原话是「这个书本的名称非常的不明显」——
+    // 现在是 36×54 封面 + 两行名字 + 一行「N 条 · 最近 10-27」，胶囊去掉（条数进那行）。
     assert.match(diary, /title=\{`\$\{item\.key\} · \$\{item\.count\} 条 · 最近一条在 \$\{item\.last\}`\}/,
       '来源行没有 title 全文');
-    assert.match(diary, /<span className="npr-diary-srccount">\{item\.count\}<\/span>/,
-      '条数不是胶囊，或者还在写「N 条」');
-    // 单行省略靠 CSS（`.npr-diary-dayrow-date` 的 nowrap + ellipsis），
-    // 几何判据在 `.build/preview/measure-sidebar.mjs`（真 Chrome 量行高与 scrollWidth）。
+    assert.match(diaryCss, /\.npr-diary-srcrow-title \{[^}]*-webkit-line-clamp: 2/, '名称又变回一行省略');
+    assert.match(diary, /\{item\.count\} 条 · 最近 \{stampLabel\(item\.last, ''\)\}/, '元信息没有条数/最近日期');
+    assert.doesNotMatch(diary, /npr-diary-srccount/, '条数胶囊还在 —— 它和元信息行里的「N 条」是同一件事说两遍');
+    // 单行省略仍要留在时间轴那一行上（`.npr-diary-dayrow-date`），但来源行不再用它。
     assert.match(diaryCss, /\.npr-diary-dayrow-date \{[^}]*text-overflow: ellipsis[^}]*white-space: nowrap/,
-      '长标题没有单行省略');
-    assert.match(diaryCss, /\.npr-diary-srccount \{[^}]*border-radius: 999px/,
-      '条数胶囊没有圆角');
-  });
-});
-
-describe('0.42：「挂到书」自动匹配这条原本挂在哪儿', () => {
-  // 用户 2026-10-27：「本身是在阅读文章或者电子书时候通过 L 创建的灵感，
-  //   在右边展示区域点击『书籍』图标是不是自动匹配好文章或者电子书啊」。
-  // 同时暴露了一个更糟的 bug：浮层里写「书架上没有匹配的书」，而书架上明明有书。
-
-  it('★ 打开浮层时要补拉书架（`loadBooks` 只在读后感页调过）', () => {
-    const pick = diary.slice(diary.indexOf('function openLinkPick('));
-    const body = pick.slice(0, pick.indexOf('\n  }'));
-    assert.match(body, /if \(books\.items\.length === 0 && !books\.busy\) void loadBooks\(\);/,
-      '打开浮层没有补拉书架 —— 灵感页上 books.items 是空的，浮层只会说「书架上没有匹配的书」');
-    // 反面：别的页面的 effect 不能替它兜底（`loadBooks` 目前只在 reflection 里调）。
-    assert.match(diary, /if \(moduleValue === 'reflection'\) void loadBooks\(\);/,
-      '读后感页那条调用变了 —— 上面那条判据的前提（书架平时没被拉）需要重新确认');
-  });
-
-  it('★ 用 `meta.book` 精确匹配，不拿书名去猜', () => {
-    // 读书时按 L 记的灵感，`QuickCapture` 把当时的 bookId 写进了 `meta.book`。
-    // ★ 为什么不能按书名模糊匹配：两本书名常常只差一个译名
-    //   （《九三年》/《九三年（叶尊译）》），猜错了会把灵感挂到另一本书上，
-    //   而界面看起来完全正常 —— 用户永远发现不了。
-    assert.match(diary, /const bookId = typeof entry\.meta\?\.book === 'string' \? entry\.meta\.book : '';/,
-      '打开浮层没有从 meta.book 取已关联的 bookId');
-    assert.match(diary, /const chapter = Number\.isInteger\(entry\.meta\?\.chapter\) \? entry\.meta\.chapter : null;/,
-      '没有预填章号 —— 已经挂在第 3 章的那条，打开浮层会退回「整本书」');
-    const pick = diary.slice(diary.indexOf('function openLinkPick('));
-    const body = pick.slice(0, pick.indexOf('\n  }'));
-    assert.doesNotMatch(body, /items\.find\(|includes\(needle\)|toLowerCase\(\)/,
-      '在按书名模糊猜 —— 应该用 meta.book 精确匹配');
-  });
-
-  it('★ 书架上没有这本时说出来，而不是假装选中', () => {
-    assert.match(diary, /const linkOrphan = Boolean\(linkPick\?\.bookId\) && !books\.busy && books\.error === ''/,
-      '没有区分「已挂的书不在书架上」');
-    assert.match(diary, /这条原本挂在《\{linkPick\.bookTitle \|\| '那本书'\}》上，但书架上已经没有它了/,
-      '书不在书架上时没有解释');
-    // 目录是按 bookId 读的，书不在书架上就读不到 —— 那颗按钮不能还亮着。
-    assert.match(diary, /\{!linkOrphan && !linkPick\.outline\.asked && !linkPick\.outline\.busy && \(/,
-      '书不在书架上还让用户点「从目录里挑一章」—— 点了必然读不到');
-  });
-
-  it('★ 空态要分四种，不能一句「没有匹配的书」盖住「还没读」', () => {
-    // 0.40 那句话是**确定的假话**：书架没被拉过，任何书名都匹配不上。
-    assert.doesNotMatch(diary, /书架上没有匹配的书/, '又变回那句假话了');
-    assert.match(diary, /'正在读书架…'/, '没有「正在读」这一态');
-    assert.match(diary, /读不到书架：\$\{books\.error\}/, '没有「读失败」这一态');
-    assert.match(diary, /'书架里没有名字带这几个字的书。'/, '没有「搜索没命中」这一态');
-    assert.match(diary, /'书架上还没有书。'/, '没有「书架真的空」这一态');
-  });
-
-  it('★ 章标题缺失时不留一个悬空的「· 」', () => {
-    assert.match(diary, /: linkPick\.chapterTitle === ''\s*\n\s*\? `第 \$\{linkPick\.chapter\} 章`/,
-      '预填的章号没有章名时会渲染成「第 3 章 · 」');
-  });
-
-  it('★ 挂在文章上的条目要说明「挂到书会换掉出处」', () => {
-    assert.match(diary, /articleTitle: bookId === '' && parsed !== null && !parsed\.isBook \? parsed\.title : ''/,
-      '没有识别「这条原来挂在文章上」');
-    assert.match(diary, /这条现在挂在文章《\{linkPick\.articleTitle\}》上 —— 挂到书会把这个出处换成书。/,
-      '没提醒「挂到书会换掉原来的文章出处」—— 用户会以为是在加一个出处');
+      '时间轴的日期行丢了单行省略');
+    // ★ 展开区的条目：`今天 16:37` / `10-27 16:37`（`stampLabel`），不是只有 `16:37`。
+    assert.match(diary, /<span className="npr-diary-idea-when">\{stampLabel\(entry\.date, entry\.time, today\)\}<\/span>/,
+      '展开区的条目又只写时刻了 —— 同一本书的灵感到来自不同天');
+    // 正文两行（原来是一行 ellipsis，一条条挤成灰带）。
+    assert.match(diaryCss, /\.npr-diary-idea-text \{[^}]*-webkit-line-clamp: 2/, '条目正文又变回单行省略');
   });
 });
 

@@ -56,15 +56,18 @@ import { sanitizeHtml } from '../host/sanitize.js';
 import { markdownToHtml } from '../host/markdown.js';
 import {
   DIARY_MODULES, MOODS, REFLECTION_TEMPLATE, dateKey, monthKeyOf, normalizeMood, parseMonthKey,
-  parseSource, parseTags, shiftMonth, sourceLabel,
+  parseSource, parseTags, shiftMonth, stampLabel,
 } from '../diary-format.js';
 import {
   appendDiaryEntry, downloadDiaryBundle, fetchDiaryBook, fetchDiaryDashboard, fetchDiaryDay, fetchDiaryExport,
   fetchDiaryGate, fetchDiaryMonth, fetchDiarySecret, fetchDiaryStats, fetchDiaryTags, fetchDiaryTimeline,
-  lockDiaryGate, patchDiaryEntry, removeDiaryEntry, revealDiaryFolder, searchDiary, setupDiaryGate, unlockDiaryGate,
+  lockDiaryGate, removeDiaryEntry, revealDiaryFolder, searchDiary, setupDiaryGate, unlockDiaryGate,
 } from './diary-api.js';
-import { fetchAnnotations, fetchBooks, fetchDigestStatus, fetchEbookIndex, fetchStates } from './library-api.js';
+import { fetchAnnotations, fetchBooks, fetchStates } from './library-api.js';
 import { BOOK_STATE_LABELS, hasFinished } from '../library.js';
+import { coverGlyph, coverHue } from './book-cover.js';
+import { entryOrigin, originIcon, originJumpLabel, originMissNote, originTarget } from './diary-origin.js';
+import { placeRowMenu } from './row-menu.js';
 import { BookCover } from './BookCover.jsx';
 import { DiaryCalendar } from './DiaryCalendar.jsx';
 import { DiaryComposer } from './DiaryComposer.jsx';
@@ -214,6 +217,18 @@ const LINK_VIEWS = [
   { value: 'book', label: '按书本', icon: 'book-open' },
   { value: 'article', label: '按文章', icon: 'file-text' },
 ];
+
+/**
+ * 「出处」浮层的外框尺寸。
+ *
+ * ★ 写死而不是量 DOM：浮层要在**第一次出现**时就摆对位置，而那一刻它还没渲染。
+ *   宽度与 `refinements.css` 里 `.npr-diary-pop` 的 `width` 必须同值 ——
+ *   判据 `test/diary-origin.test.mjs` 会读 CSS 核对这一对数字。
+ * ★ 高度是**估算**（日期行 20 + 出处最多两行 36 + 按钮 28 + 内边距 24 ≈ 132）：
+ *   它只参与「别被窗口底边切掉」的夹取，估大一点比估小安全（估小了会被裁）。
+ */
+const ORIGIN_POP_W = 248;
+const ORIGIN_POP_H = 132;
 
 /**
  * 浮层里**不搜索时**最多铺多少个。
@@ -476,21 +491,13 @@ export function DiaryApp({
    */
   const [linkKey, setLinkKey] = useState('');
   /**
-   * 「把这一条挂到书上」的选书浮层。`null` = 关着。
+   * 正开着「出处」浮层的那个锚点（`null` = 关着）。
    *
-   * ★ 这是用户原话里唯一没落地的那半句：「灵感不仅可以单独存放，当某天你读到某本书的
-   *   某一页时，可以**一键把这个灵感关联到该书的目录节点上**」。
-   *   0.31 只做了**捕获时**的自动关联（读书按 `L` 写 `meta.book / chapter / page`），
-   *   而「我昨天随手记的一条，现在想挂到第 3 章」没有入口 —— 那才是「一键」。
-   *
-   * ★ 存的是**条目快照**（date / index / scope / 前几十字），不是下标引用：
-   *   浮层开着的时候后台可能刷新、换天、删掉别的一条，用下标去改会改错行。
-   *
-   * ★ 章节目录**不预加载**。`fetchEbookIndex` 对网盘书要先把整本拉下来（超时给到 2 分钟），
-   *   点一下书名就卡住两分钟是比「没有章节」更糟的体验 —— 所以默认是「整本书」，
-   *   用户明确点「从目录里挑一章」才去读目录。
+   * ★ 存的是**算好的坐标**而不是按钮节点：浮层是 `position: fixed`，而日记页能
+   *   上下滚 —— 拿节点去量，滚动之后要么量到一个已经不在这儿的按钮，要么每次滚动
+   *   都要重量一遍。打开那一下算一次，滚动就关掉（见下面那个 effect）。
    */
-  const [linkPick, setLinkPick] = useState(null);
+  const [originPop, setOriginPop] = useState(null);
   const [timeline, setTimeline] = useState({ days: [], truncated: false, busy: false, more: false });
 
   // ---- 读后感工作台 -------------------------------------------------------
@@ -912,6 +919,39 @@ export function DiaryApp({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moduleValue]);
 
+  /*
+   * 「按书本」要封面，而书架平时只在读后感页拉过（见上一条 effect）。
+   * ★ 依赖只写 `moduleValue / linkView`：把 `books.busy` 也写进去，一次失败的加载
+   *   会让这个 effect 反复重跑（busy 变 true → 重跑 → …）。
+   * ★ 拉不到就用生成封面（`sourceCover` 的兜底），**不是**空着等 —— 侧栏不该有一个
+   *   「等一个可能永远不来的请求」的骨架格。
+   */
+  useEffect(() => {
+    if (moduleValue !== 'inspiration' || linkView !== 'book') return;
+    if (books.items.length === 0 && !books.busy) void loadBooks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [moduleValue, linkView]);
+
+  /*
+   * 出处浮层的四条关闭路径：Esc、点外面（遮罩）、滚动、改窗口大小。
+   * ★ 滚动必须关：浮层是 `fixed`，列表一滚它就浮在**别的**条目上面，
+   *   而它说的还是刚才那一条 —— 「点错条目」就是这么来的。
+   *   捕获阶段收：滚动发生在内部容器（`.npr-diary-panel`）上，冒泡到不了 window。
+   */
+  useEffect(() => {
+    if (!originPop) return undefined;
+    const close = () => setOriginPop(null);
+    const onKey = (event) => { if (event.key === 'Escape') close(); };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('resize', close);
+    document.addEventListener('scroll', close, true);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', close);
+      document.removeEventListener('scroll', close, true);
+    };
+  }, [originPop]);
+
   // 组件卸载时把计时器收掉，别让它去 setState 一个已经不在的组件。
   useEffect(() => () => { if (peekTimer.current) clearTimeout(peekTimer.current); }, []);
 
@@ -1091,136 +1131,55 @@ export function DiaryApp({
   }
 
   /**
-   * 打开「挂到书」浮层。
+   * 打开「这条灵感是从哪儿记的」浮层。
    *
-   * ★ 只对**公开**条目开这个入口。侧栏「挂在书上」那一块是从 `timeline()` 建的，
-   *   而 `timeline()` 默认不带私密（`includePrivate` 默认 `false`）。给私密条目挂上书，
-   *   结果是在侧栏里永远看不见 —— 一个「写了但永远看不到」的动作比没有这个动作更糟。
-   * ★ 存的是条目**快照**（日期 / 序号 / 前 60 字），不是下标引用：浮层开着的时候
-   *   后台可能刷新、换天、删掉别的一条，用下标去改会改错行。
+   * 用户 2026-10-29 的原话：「如果是在 RSS 阅读期间按 L 添加的灵感，那这条点击
+   * 书籍图标弹出的是什么时间、在哪篇文章下记录的这条灵感，并有一个直接跳转到
+   * 这篇文章的按钮」。⇒ 这颗图标现在是**出处**，不是「挂到书上」。
+   *
+   * ★ 没有出处（直接在灵感页手记的那条）时**根本不渲染这颗图标** —— 同一个提法：
+   *   「如果我直接在灵感页记录下的灵感，就没必要去往文章上挂，也就是说就不应该有
+   *   这个书籍按钮显示」。判据在 `entryOrigin()`，不散在 JSX 里。
+   * ★ 坐标在**打开的那一下**算好（右对齐到按钮右缘，见 `placeRowMenu`），
+   *   而不是把按钮节点存下来每次渲染重量：日记页能滚，量一个已经滚走的按钮
+   *   会把浮层贴到一个不存在的位置上。
    */
-  function openLinkPick(entry) {
-    if (entry.scope === 'private') return;
-    /*
-     * ★ 书架只在「读后感」那一页拉过（见 `moduleValue` 的 effect）。灵感页上
-     *   `books.items` 是**空的** ⇒ 浮层永远说「书架上没有匹配的书」，而书架上其实有书
-     *   （用户 2026-10-27 的截图就是这个：书架上明明有《译文名著文库》，浮层却说没有）。
-     *   打开浮层时补拉一次，不另开接口。
-     */
-    if (books.items.length === 0 && !books.busy) void loadBooks();
-    /*
-     * ★ 这条**已经挂在某处**时，直接把那个来源选好、章号填好 —— 不用再搜一遍。
-     *   读书 / 读文章时按 L 记的灵感，`QuickCapture` 把当时的 bookId 写进了 `meta.book`，
-     *   所以这里是**精确匹配**，不是拿书名去模糊猜：猜错了会把灵感挂到另一本书上，
-     *   而两本书名常常只差一个译名（《九三年》/《九三年（叶尊译）》），用户看不出来。
-     * ★ 书架上没有这本（已移出书架 / 网盘书没进库）时**不假装选中**，只把书名摆出来
-     *   说明「原本挂在哪」，让用户从列表里另选 —— 见浮层里的 `linkOrphan` 提示。
-     */
-    const bookId = typeof entry.meta?.book === 'string' ? entry.meta.book : '';
-    const chapter = Number.isInteger(entry.meta?.chapter) ? entry.meta.chapter : null;
-    const parsed = parseSource(entry.source ?? '');
-    setLinkPick({
-      date: entry.date ?? selected,
-      index: entry.index,
-      scope: entry.scope ?? 'public',
-      excerpt: String(entry.body ?? '').replace(/\s+/g, ' ').slice(0, 60),
-      find: '',
-      bookId,
-      // 书架还没到之前先用 `source` 里拆出来的书名占位；到了之后用书架上的正式书名
-      // （`linkPickedTitle`）—— 预填的和书架上那本可能是同一本、写法不同。
-      bookTitle: bookId !== '' && parsed?.isBook ? parsed.title : '',
-      chapter,
-      chapterTitle: '',
-      // 这条原来是挂在**文章**上的（读 RSS 时按 L）。挂到书会把这个出处换掉，要说出来。
-      articleTitle: bookId === '' && parsed !== null && !parsed.isBook ? parsed.title : '',
-      outline: { asked: false, busy: false, items: [], error: '' },
-      busy: false,
-      error: '',
+  function openOrigin(event, origin) {
+    if (!origin) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const box = event.currentTarget.getBoundingClientRect();
+    const spot = placeRowMenu({
+      // 右对齐：浮层宽 248，而那颗图标在 320px 面板里离右缘只剩十几像素 ——
+      // 左对齐会被窗口右缘切掉一半。
+      x: box.right - ORIGIN_POP_W,
+      y: box.bottom + 6,
+      width: ORIGIN_POP_W,
+      height: ORIGIN_POP_H,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
     });
-  }
-
-  /** 在浮层里选一本书。**只换选择，不去读目录**（理由见 `askLinkOutline`）。 */
-  function pickLinkBook(item) {
-    setLinkPick((current) => current && {
-      ...current,
-      bookId: item.id,
-      bookTitle: item.title,
-      chapter: null,
-      chapterTitle: '',
-      outline: { asked: false, busy: false, items: [], error: '' },
-      error: '',
-    });
+    setOriginPop({ ...origin, left: spot.left, top: spot.top });
   }
 
   /**
-   * 「从目录里挑一章」才去读目录。
+   * 浮层里那颗「打开这本书 / 跳到这篇文章」。
    *
-   * ★ 不预加载：`fetchEbookIndex` 对网盘书要先把整本拉下来（超时给到 2 分钟）。
-   *   点一下书名就卡两分钟，比「没有章节可选」更糟 —— 用户会以为界面死了。
-   * ★ 两套目录：电子书是 `sections[]`（节号 1 起），PDF 是解读状态里的
-   *   `outline.chapters[]`。都没抽过就是空 —— 那就只剩「整本书」这一个选择，
-   *   界面上要**说出来**，不能让用户对着空列表猜。
+   * ★ 关浮层**先于**跳转：跳走的是整页（阅读器 / 书架），浮层留在原地只会
+   *   在回来时还贴在屏幕上，而它对应的那条已经不一定是当前这一页了。
+   * ★ 宿主没给回调（夹具、别的外壳）时这颗按钮不渲染 —— 见 `canOriginJump`。
+   *   画一颗点了没反应的按钮比不画更糟。
    */
-  async function askLinkOutline() {
-    const bookId = linkPick?.bookId;
-    if (!bookId || linkPick.outline.busy) return;
-    setLinkPick((current) => current && current.bookId === bookId
-      ? { ...current, outline: { ...current.outline, asked: true, busy: true, error: '' } }
-      : current);
-    let items = [];
-    let error = '';
-    try {
-      const index = await fetchEbookIndex(bookId).catch(() => null);
-      if (Array.isArray(index?.sections) && index.sections.length > 0) {
-        items = index.sections.map((section, at) => ({
-          n: at + 1,
-          title: section.title || `第 ${at + 1} 节`,
-        }));
-      } else {
-        const status = await fetchDigestStatus(bookId).catch(() => null);
-        const chapters = status?.outline?.chapters ?? [];
-        items = chapters.map((chapter, at) => ({
-          n: Number.isInteger(chapter.index) ? chapter.index : at + 1,
-          title: chapter.title || `第 ${at + 1} 章`,
-        }));
-      }
-    } catch (cause) {
-      error = cause.message;
+  function jumpOrigin(item) {
+    const target = originTarget(item);
+    setOrigin(null);
+    if (target === null) return;
+    if (target.kind === 'book' && typeof onOpenBook === 'function') {
+      onOpenBook({ bookId: target.bookId, title: target.title, page: target.page, chapter: target.chapter });
+      return;
     }
-    // ★ 回来要确认浮层还开着、而且还是**同一本书**：中途换书或关掉的话，
-    //   把 A 的目录画到 B 身上比不画更糟。
-    setLinkPick((current) => current && current.bookId === bookId
-      ? { ...current, outline: { asked: true, busy: false, items, error } }
-      : current);
-  }
-
-  /**
-   * 把浮层里的选择写回去。
-   *
-   * ★ 写 `source` 与 `meta` **两处**，因为它们回答两个不同的问题：
-   *   `meta.book / chapter` 是「按书反查」的键（侧栏分组），
-   *   `source` 是**给人看的那一行**（「引自 《书名》 · 第 3 章」）。
-   *   只写 meta 的话条目头上什么都不变，用户会以为没生效。
-   * ★ 只传要改的两个字段，**不传 body**：宿主侧现在允许局部改写（`updateEntry` 里
-   *   `body` 可选），所以这一下不会重写用户的原话。
-   * ★ 没选章就不传 `chapter` —— 传 `null` 会被 `Number(null) = 0` 收下，文件里
-   *   多一个 `"chapter":0`，而 0 章是不存在的（章号从 1 起）。
-   */
-  async function applyLink() {
-    const pick = linkPick;
-    if (!pick || pick.busy || pick.bookId === '') return;
-    const label = sourceLabel(pick.bookTitle, pick.chapterTitle);
-    const meta = pick.chapter === null
-      ? { book: pick.bookId }
-      : { book: pick.bookId, chapter: pick.chapter };
-    setLinkPick((current) => current && { ...current, busy: true, error: '' });
-    try {
-      await patchDiaryEntry(pick.date, pick.index, { source: label, meta }, pick.scope ?? 'public');
-      setLinkPick(null);
-      await refresh();
-      notify?.(`已挂到 ${label}`);
-    } catch (cause) {
-      setLinkPick((current) => current && { ...current, busy: false, error: cause.message });
+    if (target.kind === 'article' && typeof onOpenArticle === 'function') {
+      onOpenArticle(target.key);
     }
   }
 
@@ -1646,36 +1605,22 @@ export function DiaryApp({
     .filter((item) => item.count > 0);
 
   /**
-   * 「挂到书」浮层里那串书名，按搜索词就地缩小。
+   * 「按书本」里每一行的封面：优先用**书架上那一份**（有真封面），否则按书名画一张。
    *
-   * ★ 用 `books.items`（书架已经加载过的那一份），不另开一个接口：
-   *   浮层里再发一次 `/books` 只会多一次可能失败的请求，而列表本来就在内存里。
-   * ★ 书名可能很长（`《译文名著文库》 076[法]雨果-九三年（叶尊译…`），
-   *   所以 `title` 属性给全文、按钮上交给 CSS 截断 —— 这里不做字符串裁剪，
-   *   否则搜索命中全文、按钮上却看不见命中那一段。
+   * ★ 为什么要去书架取而不是直接用 `timeline()` 带着的那几个字段：`timeline()`
+   *   只给 `bookId` 和 `source` 那串文字，没有 `ext` —— 而 `ext` 决定了这张封面是
+   *   EPUB 真封面、PDF 首页还是生成封面（`coverKind()`）。少了它只能全画成生成封面，
+   *   于是一本 EPUB 在书架页有封面、在灵感页没有，看起来像两本不同的书。
+   * ★ 找不到（已移出书架 / 网盘书还没进库）就退回生成封面，**不画空白格子**：
+   *   那块格子是这本书在侧栏里的锚点，空着会把整行的行首撬掉。
+   * ★ 只在「按书本」里取封面：文章没有封面图（`timeline()` 不带 `image`，为一串
+   *   文章各拉一次正文来取图是把侧栏变成一个会发请求的列表），用同一种色块 +
+   *   首字的生成封面代替 —— 与「书架上没有封面的书」长得一样，本来也该一样。
    */
-  const linkBookList = books.items.filter((item) => {
-    const needle = (linkPick?.find ?? '').trim().toLowerCase();
-    return needle === '' || String(item.title).toLowerCase().includes(needle);
-  });
-
-  /**
-   * 浮层里「当前选中的是哪一本」。
-   *
-   * ★ 优先用**书架上那一份**的书名：预填时手上只有从 `source` 拆出来的名字，
-   *   它和书架上的正式书名可能不是同一个写法（少了译名、多了副标题）。
-   */
-  const linkPickedBook = books.items.find((item) => item.id === linkPick?.bookId) ?? null;
-  const linkPickedTitle = linkPick?.bookId ? (linkPickedBook?.title ?? linkPick.bookTitle) : '';
-  /**
-   * 已经挂着、但书架上找不到这本。
-   *
-   * ★ 这是**信息**不是错误：条目本身没坏（`source` 里还写着书名），只是没法再
-   *   「从目录里挑一章」（目录是按 bookId 去读的，书不在书架上就读不到）。
-   * ★ `books.busy` 时不下结论 —— 那一刻「找不到」只是「还没读到」。
-   */
-  const linkOrphan = Boolean(linkPick?.bookId) && !books.busy && books.error === ''
-    && linkPickedBook === null;
+  const bookById = new Map(books.items.map((item) => [item.id, item]));
+  const sourceCover = (item) => (item.kind === 'book'
+    ? (bookById.get(item.bookId) ?? { id: '', title: item.title })
+    : null);
 
   /*
    * 侧栏「挂在书上 / 挂在文章上」两块，分开放。
@@ -1713,6 +1658,19 @@ export function DiaryApp({
       empty: '还没有挂在文章上的灵感。读 RSS 时按 L 记一条，它就会出现在这里。',
       jump: '打开这篇文章',
     };
+
+  /**
+   * 出处浮层里那颗「去现场」按钮该不该出现。
+   *
+   * ★ 要两件事同时成立：这条**有 id**（老条目只有书名），且**宿主给了回调**。
+   *   少一个就画出一颗点了没反应的按钮 —— 比不画更糟，用户会以为功能坏了。
+   *   跳不了时浮层里换成一句解释（`originMissNote`），不是静静少一个按钮。
+   */
+  const originJump = originPop ? originTarget(originPop) : null;
+  const canOriginJump = originJump !== null
+    && (originJump.kind === 'book'
+      ? typeof onOpenBook === 'function'
+      : typeof onOpenArticle === 'function');
 
   const filteredBooks = books.items.filter((item) => (
     bookQuery.trim() === '' || item.title.toLowerCase().includes(bookQuery.trim().toLowerCase())
@@ -2056,30 +2014,63 @@ export function DiaryApp({
                     // 有没有「现场」可回：书要 bookId、文章要 article 字段。
                     // 0.30 之前的老条目只有书名 —— 那种就只能展开，不能跳（跳了也没地方去）。
                     const canJump = item.kind === 'book' ? item.bookId !== '' : item.article !== '';
+                    const cover = sourceCover(item);
                     return (
                       <div key={item.key} className={`npr-diary-src${open ? ' is-open' : ''}`}>
                         <button type="button" aria-expanded={open}
-                          className={`npr-diary-dayrow${linkKey === item.key ? ' npr-selected' : ''}`}
-                          /* 长书名必须能看全：侧栏 268px 放不下
-                             「《译文名著文库》 076[法]雨果-九三年（叶尊译）」，按钮上是省略号，
-                             全文只在这里。 */
+                          className={`npr-diary-srcrow${linkKey === item.key ? ' npr-selected' : ''}`}
+                          /* 长书名仍要能看全：侧栏 268px 装不下
+                             「《译文名著文库》 076[法]雨果-九三年（叶尊译）」，两行之后
+                             还是省略号 —— 全文只在这里。 */
                           title={`${item.key} · ${item.count} 条 · 最近一条在 ${item.last}`}
                           onClick={() => setOpenSrcKey(open ? '' : item.key)}>
-                          <span className="npr-diary-dayrow-date">{item.key}</span>
-                          <span className="npr-diary-srccount">{item.count}</span>
+                          {/*
+                            * 封面位（0.46.0）。用户 2026-10-29：「首先是这个书本的名称
+                            * 非常的不明显，建议可以放上书封面」——
+                            *   三十个字的书名在 268px 里怎么排版都认不出来，而一块封面
+                            *   是**认出来的**。书用真封面（`BookCover`：EPUB 封面 /
+                            *   PDF 首页 / 生成封面三选一），文章用同一套生成封面。
+                            */}
+                          <span className="npr-diary-srcrow-cover" aria-hidden="true">
+                            {cover !== null
+                              ? <BookCover book={cover} />
+                              : (
+                                <span className="npr-diary-srcrow-tile"
+                                  style={{ '--npr-cover-h': String(coverHue(item.title)) }}>
+                                  {coverGlyph(item.title)}
+                                </span>
+                              )}
+                          </span>
+                          <span className="npr-diary-srcrow-main">
+                            {/* 名称**两行**：一行省略等于把「这本是哪本」这个问题
+                                又推回给封面。两行 + 封面 = 认得出。 */}
+                            <span className="npr-diary-srcrow-title">{item.title}</span>
+                            <span className="npr-diary-srcrow-meta">
+                              {item.count} 条 · 最近 {stampLabel(item.last, '')}
+                            </span>
+                          </span>
                           <Icon name={open ? 'chevron-up' : 'chevron-down'} size={13} />
                         </button>
                         {open && (
                           <div className="npr-diary-srcbody">
-                            <ul className="npr-diary-daylist">
+                            <ul className="npr-diary-idealist">
                               {item.entries.map((entry) => (
                                 <li key={`${entry.date}-${entry.entryKey}`}>
+                                  {/*
+                                    * 展开区的条目（0.46.0 重排）。
+                                    * ★ 日期 + 时刻两行起步（`stampLabel`）：同一本书的
+                                    *   灵感到来自不同天，只写 `16:37` 回答不了「哪天」——
+                                    *   而这里**没有「天」这一层**（不像时间轴，日期在上一行）。
+                                    * ★ 第二行是正文，**换行而不是省略在一行里**：原来
+                                    *   `12px + 单行 ellipsis` 一条条挤成灰带，用户的原话是
+                                    *   「这个条目的显示也极其丑陋」。
+                                    */}
                                   <button type="button"
-                                    className={`npr-diary-dayitem${entry.date === selected && focusKey === entry.entryKey ? ' is-focus' : ''}`}
+                                    className={`npr-diary-idea${entry.date === selected && focusKey === entry.entryKey ? ' is-focus' : ''}`}
                                     title={`${entry.date} ${entry.time} ${entry.preview}`}
                                     onClick={() => jump(entry.date, entry.entryKey)}>
-                                    <span className="npr-diary-dayitem-time">{entry.time}</span>
-                                    <span className="npr-diary-dayitem-text">{entry.preview}</span>
+                                    <span className="npr-diary-idea-when">{stampLabel(entry.date, entry.time, today)}</span>
+                                    <span className="npr-diary-idea-text">{entry.preview}</span>
                                   </button>
                                 </li>
                               ))}
@@ -2661,6 +2652,14 @@ export function DiaryApp({
                       const tags = parseTags(entry.body);
                       const privateSide = entry.scope === 'private';
                       const key = entryKey(entry);
+                      /*
+                       * 这一条的**出处**（0.46.0）。
+                       * ★ 判据在 `entryOrigin()` 里，不散在这里写三元：它决定「有没有那颗
+                       *   图标」，而错了在界面上看不出来（多一颗点了没内容的 / 少一颗该有的）。
+                       * ★ 私密条目一律不给：私密那半边不进 `timeline()`，也不按来源组织，
+                       *   给出处只会多一颗点了没地方去的按钮。
+                       */
+                      const origin = privateSide ? null : entryOrigin(entry, entry.date ?? selected);
                       const entryMood = firstMood(entry.meta?.mood);
                       /*
                        * ★ 私密条目现在**由宿主决定给不给正文**（见 `gate`）。
@@ -2693,15 +2692,21 @@ export function DiaryApp({
                             {entry.source && <span className="npr-diary-source-tag" title={entry.source}>引自 {entry.source}</span>}
                             <span className="npr-diary-entry-actions">
                               {/*
-                                * 「挂到书」= 用户原话里那半句「一键把这个灵感关联到该书的目录节点上」。
-                                * ★ 只对**公开**条目开：侧栏「挂在书上」是从 `timeline()` 建的，
-                                *   而它默认不带私密 —— 给私密条目挂上书，侧栏里永远看不见。
+                                * 出处（0.46.0，取代原来的「挂到书上」）。
+                                * ★ 用户 2026-10-29：「如果是在 RSS 阅读期间按 L 添加的灵感，
+                                *   那这条点击书籍图标弹出的是什么时间、在哪篇文章下记录的
+                                *   这条灵感，并有一个直接跳转到这篇文章的按钮」；
+                                *   以及「直接在灵感页记录下的灵感……就不应该有这个书籍按钮显示」。
+                                *   ⇒ 图标 = 出处，没有出处就没有图标；点了给「何时 + 在哪儿的」
+                                *   和一条去现场的按钮。
                                 */}
-                              {!privateSide && (
+                              {origin !== null && (
                                 <button type="button" className="npr-diary-action"
-                                  title="挂到书上：把这一条关联到某本书的某一章"
-                                  aria-label="挂到书上"
-                                  onClick={() => openLinkPick(entry)}><Icon name="book-open" size={13} /></button>
+                                  title={`看这条灵感的出处：${origin.source}`}
+                                  aria-label="看这条灵感的出处"
+                                  onClick={(event) => openOrigin(event, origin)}>
+                                  <Icon name={originIcon(origin)} size={13} />
+                                </button>
                               )}
                               {confirmKey === key ? (
                                 <button type="button" className="npr-diary-action is-danger" disabled={busyKey !== ''}
@@ -2919,118 +2924,35 @@ export function DiaryApp({
         *   删掉别的一条都不会让它指错条目。
         */}
       {/*
-        * 「挂到书」浮层。和「展开全文」一样挂在 `.npr-diary-workarea` 上，
-        * 不挂在正文流里 —— 挂流里遮罩只盖住右列，左边导航还亮着。
-        * ★ 章节**默认是「整本书」**，要读目录得再点一次（`askLinkOutline`）：
-        *   网盘书的目录要把整本拉下来，点一下书名就卡两分钟是更糟的体验。
+        * 「出处」浮层（0.46.0）。挂在 `.npr-diary-workarea` 上、`position: fixed`，
+        * 坐标在打开那一下算好（见 `openOrigin`）。
+        * ★ 不是模态窗：它只说三件事（何时 / 出处 / 去现场），盖住整页就太重了 ——
+        *   用户点开只是想确认「这条是我在哪篇里写的」。所以只有一层很淡的遮罩，
+        *   点外面 / Esc / 滚动都关掉。
         */}
-      {linkPick && (
-        <div className="npr-diary-modal" role="dialog" aria-modal="true" aria-label="挂到书上"
-          onClick={() => { if (!linkPick.busy) setLinkPick(null); }}>
-          <div className="npr-diary-modal-card npr-diary-linkcard" onClick={(event) => event.stopPropagation()}>
-            <header className="npr-diary-modal-head">
-              <div className="npr-diary-modal-meta"><strong>挂到书上</strong></div>
-              <button type="button" className="npr-diary-modal-close" onClick={() => setLinkPick(null)}
-                aria-label="关闭" autoFocus><Icon name="x" size={14} /></button>
-            </header>
-            <div className="npr-diary-modal-body">
-              <p className="npr-diary-link-excerpt">{linkPick.excerpt}…</p>
-              {/* 挂在文章上的条目也能挂到书，但那会**换掉**它现在的出处 —— 先说清楚。 */}
-              {linkPick.articleTitle !== '' && (
-                <p className="npr-diary-sect-note">
-                  这条现在挂在文章《{linkPick.articleTitle}》上 —— 挂到书会把这个出处换成书。
-                </p>
-              )}
-              <input className="npr-diary-linkfind" type="search" value={linkPick.find}
-                placeholder="找一本书…" aria-label="找一本书"
-                onChange={(event) => setLinkPick((current) => current && { ...current, find: event.target.value })} />
-              {/* ★ 章节列表一打开，书列表就收窄（`is-compact`）。
-                  量出来的：书列表 190 + 章列表 190 同时在场时卡片内容 622px，
-                  而卡片上限是画框高 - 40 = 600 ⇒ 卡片 body 自己溢出 30px，
-                  变成「卡片 / 书列表 / 章列表」三层嵌套滚动（overscroll-behavior
-                  挡住链式传递，滚到底不会接着滚卡片，用户得把指针挪出来再滚）。
-                  收窄到 96px 省下 94px，body 不再滚。
-                  ★ 收窄之后「选的是哪本」只能靠下面的书名，所以那一行必须带书名 ——
-                    否则高亮行被滚出视野，用户就不知道自己在往哪本书上挂。 */}
-              <div className={`npr-diary-linkbooks${linkPick.outline.items.length > 0 ? ' is-compact' : ''}`}>
-                {linkBookList.map((item) => (
-                  <button key={item.id} type="button"
-                    className={`npr-diary-linkbook${linkPick.bookId === item.id ? ' is-picked' : ''}`}
-                    title={item.title}
-                    onClick={() => pickLinkBook(item)}>{item.title}</button>
-                ))}
-                {/*
-                  * ★ 空态必须分得清「还在读」「读失败」「书架真的空」「搜索没命中」。
-                  *   0.40 只有一句「书架上没有匹配的书」—— 而那时书架**根本没被拉过**
-                  *   （`loadBooks` 只在读后感页调），所以那是一句确定的假话。
-                  */}
-                {linkBookList.length === 0 && (
-                  <p className="npr-diary-sect-note">
-                    {books.busy
-                      ? '正在读书架…'
-                      : books.error !== ''
-                        ? `读不到书架：${books.error}`
-                        : books.items.length > 0
-                          ? '书架里没有名字带这几个字的书。'
-                          : '书架上还没有书。'}
-                  </p>
-                )}
-              </div>
-              {linkPick.bookId !== '' && (
-                <div className="npr-diary-linkchapter">
-                  <p className="npr-diary-linkpicked">
-                    {linkPickedTitle || '这本书不在书架上'} · {linkPick.chapter === null
-                      ? '整本书（不分章）'
-                      : linkPick.chapterTitle === ''
-                        ? `第 ${linkPick.chapter} 章`
-                        : `第 ${linkPick.chapter} 章 · ${linkPick.chapterTitle}`}
-                  </p>
-                  {linkOrphan && (
-                    <p className="npr-diary-sect-note">
-                      这条原本挂在《{linkPick.bookTitle || '那本书'}》上，但书架上已经没有它了 —— 换一本再挂。
-                    </p>
-                  )}
-                  {!linkOrphan && !linkPick.outline.asked && !linkPick.outline.busy && (
-                    <button type="button" className="npr-diary-dayload" onClick={() => void askLinkOutline()}>
-                      从目录里挑一章 ›
-                    </button>
-                  )}
-                  {linkPick.outline.busy && <p className="npr-diary-sect-note">正在读这本书的目录…</p>}
-                  {linkPick.outline.asked && !linkPick.outline.busy && linkPick.outline.items.length === 0 && (
-                    <p className="npr-diary-sect-note">
-                      {linkPick.outline.error
-                        ? `读不到目录：${linkPick.outline.error}`
-                        : '这本书还没有目录（没抽过正文 / 没解读过），只能挂到整本。'}
-                    </p>
-                  )}
-                  {linkPick.outline.items.length > 0 && (
-                    <div className="npr-diary-linkchapters">
-                      {linkPick.outline.items.map((item) => (
-                        <button key={`${item.n}-${item.title}`} type="button"
-                          className={`npr-diary-linkbook${linkPick.chapter === item.n ? ' is-picked' : ''}`}
-                          title={item.title}
-                          onClick={() => setLinkPick((current) => current
-                            && { ...current, chapter: item.n, chapterTitle: item.title })}>
-                          {item.n}. {item.title}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-            <footer className="npr-diary-linkfoot">
-              {linkPick.error !== '' && <p className="npr-diary-sect-note is-error">{linkPick.error}</p>}
-              <button type="button" className="npr-diary-action" disabled={linkPick.busy}
-                onClick={() => setLinkPick(null)}>取消</button>
-              <button type="button" className="npr-diary-save"
-                disabled={linkPick.bookId === '' || linkPick.busy}
-                onClick={() => void applyLink()}>
-                {linkPick.busy ? '正在挂…' : '挂上去'}
+      {originPop && (
+        <>
+          <div className="npr-diary-pop-backdrop" onClick={() => setOriginPop(null)} />
+          <div className="npr-diary-pop" role="dialog" aria-label="这条灵感的出处"
+            style={{ left: originPop.left, top: originPop.top }}>
+            <p className="npr-diary-pop-head">
+              <Icon name="clock" size={11} />
+              <span className="npr-diary-pop-when">
+                {/* 完整年月日 + 时刻：这里问的就是「什么时候记的」，
+                    `stampLabel` 的今天/昨天缩写在这个问题下反而含糊。 */}
+                {originPop.date} {originPop.time}
+              </span>
+            </p>
+            <p className="npr-diary-pop-src" title={originPop.source}>{originPop.source}</p>
+            {canOriginJump ? (
+              <button type="button" className="npr-diary-pop-jump" onClick={() => jumpOrigin(originPop)}>
+                {originJumpLabel(originPop)} ›
               </button>
-            </footer>
+            ) : (
+              <p className="npr-diary-pop-note">{originMissNote(originPop)}</p>
+            )}
           </div>
-        </div>
+        </>
       )}
 
       {expand && (

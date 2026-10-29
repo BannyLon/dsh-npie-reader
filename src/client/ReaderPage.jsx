@@ -29,6 +29,7 @@ import { AskArticle } from './AskArticle.jsx';
 import { articleAudioUrl } from '../media.js';
 import { formatDay, formatFullDay } from './format-time.js';
 import { printArticle } from './print-article.js';
+import { placeRowMenu, rowMenuItems } from './row-menu.js';
 import { channelAfterAdd, channelFailure, countFeeds, emptyListMessage, resolveChannel } from './channel-route.js';
 import { readChannelState, saveChannelState } from './channel-state.js';
 import { appendDiaryEntry } from './diary-api.js';
@@ -825,6 +826,17 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   };
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  /**
+   * 列表行的右键菜单（0.45.4）。
+   *
+   * `{ key, left, top }`：`key` 是哪一篇，`left/top` 是**已经夹进视口**的坐标
+   * （算法在 `row-menu.js` 的 `placeRowMenu` 里，可被真跑）。
+   *
+   * ★ 不存整条 entry：列表会刷新（标记已读、隐藏、加载更早），存下来的那份就成了
+   *   陈旧副本 —— 隐藏之后菜单里的「隐藏/恢复」会按旧值渲染。需要时从
+   *   `page.entries` 现取，取不到就整张菜单不渲染（那篇已被筛掉了）。
+   */
+  const [rowMenu, setRowMenu] = useState(null);
   const [focused, setFocused] = useState(false);
   const [reading, setReading] = useState(FALLBACK_READING);
   /**
@@ -1333,6 +1345,113 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   };
 
   /**
+   * 列表行的右键菜单：**对着某一篇**弹在鼠标处（0.45.4，用户要求）。
+   *
+   * ★ 为什么是右键而不是每行一颗「…」：侧栏只有 256–320px，每行再加一个常驻控件
+   *   会把标题挤到 130px 以下（0.45.3 刚为封面位量过这个数）；而悬停才出现的按钮
+   *   与右键**在发现成本上是一回事**，后者还不动版式。用户在三个选项里选了右键。
+   * ★ `preventDefault` 是必须的：宿主是一个 Electron 页面，不拦掉会弹出系统菜单
+   *   （「重新加载 / 检查元素 / 打印整个窗口」），两层菜单同时出现。
+   * ★ 坐标先夹进视口（`placeRowMenu`）：右键可能落在列表最后一行、贴着窗口右下角，
+   *   不夹的话菜单有一半在窗口外 —— 而它不会报错，只是「点不到」。
+   */
+  const openRowMenuAt = (x, y, entry) => {
+    if (!entry?.key) return;
+    const spot = placeRowMenu({
+      x, y,
+      viewportWidth: window.innerWidth, viewportHeight: window.innerHeight,
+    });
+    setRowMenu({ key: entry.key, left: spot.left, top: spot.top });
+  };
+  const openRowMenu = (event, entry) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openRowMenuAt(event.clientX, event.clientY, entry);
+  };
+
+  /**
+   * 执行右键菜单里的一项。
+   *
+   * ★ 打印 / 导出**不先把文章打开**（那是 `openArticle` 干的活，它会顺手把这篇标成
+   *   已读）。这里只 `getArticle` 取正文：用户在列表里右键一篇没读过的文章导出
+   *   Markdown，不该因此把它变成已读 —— 那是两件事。
+   * ★ 版本取 `reading.defaultVersion`，与 `openArticle` 同一条规则：导出 / 打印的是
+   *   「你下次打开它会看到的那一版」，不是写死的原文。
+   * ★ 隐藏走 `hideArticle`（带撤销 toast、并从当前页摘掉），不另写一份：同一个动作
+   *   两处实现，行为迟早会漂。
+   */
+  const runRowAction = async (kind, key) => {
+    setRowMenu(null);
+    if (!key) return;
+    if (kind === 'hide') { await hideArticle(key); return; }
+    if (kind === 'unhide') { await unhideArticle(key); return; }
+    const data = await run(api.getArticle(key), { errorPrefix: '读取正文失败' });
+    if (!data?.article) return;
+    const version = resolveReadingVersion(reading.defaultVersion, data);
+    const html = readerBodyHtml({
+      active: version,
+      articleHtml: data.html,
+      version: data.versions?.[version],
+      baseUrl: data.article?.url,
+    });
+    const title = readerTitle({ active: version, versions: data.versions, article: data.article });
+    if (kind === 'print') {
+      try {
+        printArticle({ title, url: data.article?.url, version: VERSION_LABELS[version], html });
+      } catch (error) {
+        notify(`打印失败：${error?.message ?? String(error)}`, true);
+      }
+      return;
+    }
+    try {
+      downloadText(markdownFileName(title, data.article?.publishedAt), articleToMarkdown({
+        title,
+        url: data.article?.url,
+        author: data.article?.author,
+        publishedAt: data.article?.publishedAt,
+        version: VERSION_LABELS[version],
+        html,
+      }));
+      notify('已导出 Markdown');
+    } catch (error) {
+      notify(`导出失败：${error?.message ?? String(error)}`, true);
+    }
+  };
+
+  /**
+   * 右键菜单的关闭：点外面、按 Esc、滚动、改窗口大小。
+   *
+   * ★ 四条都要有，缺一条就是一个「关不掉的浮层」：
+   *   · 点外面 —— 菜单挂在列表旁边而不是 modal 里，没有遮罩层替它接这一下；
+   *   · Esc —— 键盘用户唯一的退路（右键菜单本来就不是键盘可达的，所以下面
+   *     还补了 Shift+F10 / 菜单键，见行上的 `onKeyDown`）；
+   *   · 滚动 —— 菜单是 `position: fixed`，列表滚走之后它会**浮在别的文章上**，
+   *     而它上面写着的还是原来那一篇；
+   *   · resize —— 夹取算的是按下那一刻的视口。
+   * ★ 用 `pointerdown` 而不是 `click`：在别处按下时就该收，等到 click 会先让
+   *   那一次点击落到下面的元素上（右键另一行时尤其明显）。
+   */
+  useEffect(() => {
+    if (!rowMenu) return undefined;
+    const close = () => setRowMenu(null);
+    const onPointerDown = (event) => {
+      if (event.target?.closest?.('.npr-rowmenu')) return;
+      close();
+    };
+    const onKey = (event) => { if (event.key === 'Escape') close(); };
+    window.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('resize', close);
+    document.addEventListener('scroll', close, true);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', close);
+      document.removeEventListener('scroll', close, true);
+    };
+  }, [rowMenu]);
+
+  /**
    * 生成一个中文版本；`force` = 丢掉缓存重新生成。
    *
    * ★ 「重新生成」必须走菜单，不能靠正文区那个按钮：它只在版本**缺失**
@@ -1384,7 +1503,7 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     // 让它们同时响应两套语义，用户会看到列表在他看不见的地方被选中。
     if (mode !== 'feeds') return undefined;
     const onKey = (event) => {
-      if (dialog || pickerOpen || askContext || appearanceOpen || menuOpen || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (dialog || pickerOpen || askContext || appearanceOpen || menuOpen || rowMenu || event.ctrlKey || event.metaKey || event.altKey) return;
       if (event.target?.closest?.('input,textarea,select,[contenteditable="true"]')) return;
       if (event.key === 'j' || event.key === 'k') { event.preventDefault(); navigate(event.key === 'j' ? 1 : -1); }
       else if (event.key === '[' || event.key === 'f') { event.preventDefault(); setFocused((current) => !current); }
@@ -1394,7 +1513,7 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dialog, pickerOpen, askContext, appearanceOpen, menuOpen, page.entries, selected?.article?.key, mode]);
+  }, [dialog, pickerOpen, askContext, appearanceOpen, menuOpen, rowMenu, page.entries, selected?.article?.key, mode]);
 
   /**
    * `L` = 灵感速记浮层（2026-10-26，用户明确要的「读 RSS 或电子书时随时按 L」）。
@@ -1412,14 +1531,14 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
       if (event.key !== 'l' && event.key !== 'L') return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (mode === 'diary') return;
-      if (dialog || pickerOpen || askContext || appearanceOpen || menuOpen || addMenu || showAddFeed) return;
+      if (dialog || pickerOpen || askContext || appearanceOpen || menuOpen || rowMenu || addMenu || showAddFeed) return;
       if (event.target?.closest?.('input,textarea,select,[contenteditable="true"]')) return;
       event.preventDefault();
       setQuickOpen(true);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [mode, dialog, pickerOpen, askContext, appearanceOpen, menuOpen, addMenu, showAddFeed]);
+  }, [mode, dialog, pickerOpen, askContext, appearanceOpen, menuOpen, rowMenu, addMenu, showAddFeed]);
 
   // 模式落盘 + 书架被设置关掉时强制回订阅。
   // ★ 关掉书架必须**同时**把用户从书架里请出去：只把入口按钮藏掉的话，
@@ -1911,7 +2030,20 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
             )}
             {page.entries.map((entry) => (
               <button key={entry.key} type="button" className={`npr-entry${selected?.article?.key === entry.key ? ' npr-selected' : ''}${entry.read ? ' npr-read' : ''}${entry.summary ? '' : ' npr-no-summary'}`}
-                aria-pressed={selected?.article?.key === entry.key} onClick={() => void openArticle(entry.key)}>
+                aria-pressed={selected?.article?.key === entry.key} onClick={() => void openArticle(entry.key)}
+                /* 右键 = 这一篇的操作菜单（打印 / 导出 Markdown / 隐藏）。见 `openRowMenu`。 */
+                onContextMenu={(event) => openRowMenu(event, entry)}
+                /* ★ 键盘等价物：菜单键与 Shift+F10 是 Windows / Linux 上「上下文菜单」的
+                   标准键位，macOS 没有这习惯但也不会误触。右键菜单本身**不可 Tab 到达**，
+                   没有这一条的话，键盘用户永远拿不到这三项 —— 而它们不是装饰，
+                   「隐藏这篇文章」是这一页唯一能把它从列表里去掉的手段。 */
+                onKeyDown={(event) => {
+                  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+                    event.preventDefault();
+                    const box = event.currentTarget.getBoundingClientRect();
+                    openRowMenuAt(box.left + 24, box.top + 28, entry);
+                  }
+                }}>
                 <span className="npr-entry-copy">
                   <span className="npr-entry-meta">
                     <span className="npr-source-name">{entry.channelName || channels.find((item) => item.key === entry.channelKey)?.name || currentChannel?.name}</span>
@@ -1934,6 +2066,37 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
               </button>
             )}
           </div>
+          {/*
+            列表行的右键菜单（0.45.4）。
+
+            ★ 挂在 `.npr-list` **外面**、`aside` 里面：`.npr-list` 是 `overflow: auto`
+              的滚动容器，虽然 `position: fixed` 本来就不受它裁切，但放在里面会让
+              「滚动时菜单跟着滚」这一类误解永远存在。放外面还有一个实际好处 ——
+              `document` 上那条 `scroll` 监听只用来收菜单，逻辑简单。
+            ★ 菜单项从 `rowMenuItems(entry)` 取，`entry` **现从 `page.entries` 查**：
+              查不到就整张不渲染（那篇在菜单打开期间被隐藏 / 被搜掉了，弹一个
+              指向已不存在文章的菜单只会让人点了没反应）。
+            ★ `role="menu"` + 每项 `role="menuitem"`：右键菜单对读屏器是「一个菜单」，
+              不是「三个散落的按钮」。焦点不主动抢（右键时焦点本来就还在列表里），
+              所以不做 focus trap —— 它没有遮罩、按 Esc 就退，抢焦点反而会让
+              键盘用户的当前位置丢失。
+          */}
+          {rowMenu && (() => {
+            const entry = page.entries.find((item) => item.key === rowMenu.key);
+            if (!entry) return null;
+            return (
+              <div className="npr-menu npr-rowmenu" role="menu" aria-label="文章操作"
+                style={{ left: `${rowMenu.left}px`, top: `${rowMenu.top}px` }}>
+                {rowMenuItems(entry).map((item) => (
+                  <button key={item.kind} type="button" role="menuitem"
+                    onClick={() => void runRowAction(item.kind, rowMenu.key)}>
+                    <Icon name={item.icon} size={15} />
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            );
+          })()}
         </aside>
         <div className="npr-resize" role="separator" aria-orientation="vertical" onPointerDown={startDrag}
           onDoubleClick={() => { setListWidth(300); localStorage.setItem('npr.listWidth', '300'); }} />

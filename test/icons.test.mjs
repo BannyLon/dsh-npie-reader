@@ -111,6 +111,16 @@ describe('图标名', () => {
       'DiaryApp.jsx: item.icon',
       // 来源：linkViewMeta 里两处 icon 字段（book-open / file-text），同上
       'DiaryApp.jsx: linkViewMeta.icon',
+      // 0.46：出处图标的名字由 `diary-origin.js` 的 `originIcon()` 给（书 / 文章两档）。
+      // 放在数据层而不是 JSX 的三元里，就是因为这一条扫描 —— 三元里的 `'book'` 会被
+      // 当成图标名去查，查不到就红。
+      'DiaryApp.jsx: originIcon(origin)',
+      // 来源：`row-menu.js` 的 `rowMenuItems()` 返回项里的 icon 字段（file-check /
+      // download / eye-off），由下一条「数据里的 icon 字段」断言核对。
+      // ★ 0.45.4 之前这里是 `name={kind === 'print' ? 'file-check' : …}` 的三元 ——
+      //   那写法**反而会被上面的字面量断言扫到**，而三元里的比较值 `'print'` /
+      //   `'markdown'` 会被当成图标名，制造两条假红。图标名是数据，挪进那张表才干净。
+      'ReaderPage.jsx: item.icon',
       // 来源：TABS 每项的 icon 字段（0.44.4 从三元组改成对象，才扫得到）
       'SettingsPage.jsx: icon',
     ];

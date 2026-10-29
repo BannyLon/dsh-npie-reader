@@ -23,6 +23,7 @@ import {
   BOOK_SOURCE_LABELS,
   BOOK_SOURCES_MAX,
   BOOK_STATE_LABELS,
+  BOOK_STATE_MARKS,
   BOOK_STATES,
   BOOKS_PAGE_LIMIT,
   applyStatePatch,
@@ -851,6 +852,52 @@ describe('「阅读」列表：added', () => {
     assert.equal(kinds(view)[0], 'restart');
     assert.equal(view.dim, true, '和「读完」同理：同页里「未开始 / 在读」能点，这两格不能');
   });
+
+  /**
+   * 封面角标 + 元信息徽章（0.45.3）。
+   *
+   * ★ 用户原话：「读完、在读、弃读我觉得要有一个明显的区分……是不是可以分别加个
+   *   醒目角标？」「我觉得 A 角标好像醒目一些。C 的话就是还是放在全文字里，很难发现」。
+   *   于是封面右上角那一个方块成了**唯一**说状态的地方（阅读页），元信息行只留进度。
+   *
+   * ★ 钉三件事：
+   *   ① 每个状态都有角标字 —— 缺一个，那一格的书就没有状态可看；
+   *   ② 角标字**跟着徽章文字走**，不是跟着 `name` 走：`unread` 与 `reading` 的徽章
+   *      都是「在读」，角标也必须同字。否则同一本书角标说「未读」、徽章说「在读」；
+   *   ③ 终态（读完 / 弃读）的 `badgeProgress` 是空串 —— 角标已经说了，元信息行
+   *      再说一遍的代价是**行高**（320px 实测：一行 17 → 两行 43，整列变松）。
+   */
+  it('★ bookRowView：角标字跟着**徽章**走，终态不再重复写在元信息行（0.45.3）', () => {
+    // ① 四格都有字，且只占一个字（角标是 17×17 的方块，两个字会溢出）。
+    for (const state of BOOK_STATES) {
+      const mark = rowView(state).badgeMark;
+      assert.equal(typeof mark, 'string');
+      assert.equal(mark.length <= 1, true, `${state} 的角标是「${mark}」—— 方块只有 17px 宽，装不下两个字`);
+    }
+    // ② 「未开始 / 在读」同字：它们本来就同一条进度轴。
+    assert.equal(rowView('unread').badgeMark, rowView('reading').badgeMark, '「未开始」与「在读」的角标必须一致 —— 徽章文字就是一致的');
+    assert.equal(rowView('read').badgeMark, '完');
+    assert.equal(rowView('dropped').badgeMark, '弃');
+    // 三个终态/进行态的角标必须两两不同，否则「一眼分辨」这件事就没做到。
+    const marks = ['reading', 'read', 'dropped'].map((s) => rowView(s).badgeMark);
+    assert.equal(new Set(marks).size, 3, `三档角标字重复了：${marks.join(' / ')}`);
+
+    // ③ 只有「还在读」的两格留进度；终态留空。
+    assert.equal(rowView('reading', { page: 24, pages: 387 }).badgeProgress, '读到 24 / 387 页');
+    assert.equal(rowView('unread').badgeProgress, '未开始');
+    assert.equal(rowView('read').badgeProgress, '', '「读完」的角标已经说了，元信息行再说一遍会把行挤高');
+    assert.equal(rowView('dropped').badgeProgress, '', '同上');
+
+    // ★ 反向不变量：`badgeProgress` 不许**再带**状态前缀。
+    //   `badgeText` 是「在读 · 读到 24 / 387 页」，去掉的那一段正是角标现在负责的部分；
+    //   如果哪天它又变成整句，元信息行就会在 320px 下多占一行 —— 那是 0.45.3 修掉的那个坑。
+    for (const state of ['unread', 'reading']) {
+      const view = rowView(state, { page: 24, pages: 387 });
+      assert.equal(view.badgeText.includes(view.badgeProgress), true, '进度必须是整句徽章的一部分，否则两处文案会各说各话');
+      assert.equal(view.badgeProgress.includes(BOOK_STATE_LABELS[state]), false, `${state} 的进度里又带上了状态词`);
+    }
+  });
+
 
   it('★ bookRowView：`dim` 只给**不可点开**的那几格，且两格必须一致', () => {
     // 压暗是一种**对比**手段：整页都不可点时它没有信息量（书架页），只有

@@ -248,8 +248,7 @@
 .npr-channel-option-wrap.is-stale .npr-channel-subtitle { color: var(--dsw-alias-state-error-primary); }
 
 /* 侧栏「+」的下拉：把「添加自己的订阅源」提到一级入口 */
-.npr-addmenu-backdrop { position: fixed; inset: 0; z-index: 39; }
-.npr-addmenu {
+.npr-addmenu-backdrop { position: fixed; inset: 0; z-index: 39; }.npr-addmenu {
   position: fixed; z-index: 40; width: 236px; padding: 6px;
   border: 1px solid color-mix(in srgb, var(--npr-fg) 12%, var(--npr-bg)); border-radius: 11px;
   background: var(--npr-bg); color: var(--npr-fg);
@@ -263,6 +262,26 @@
 .npr-addmenu button:hover { background: color-mix(in srgb, var(--npr-fg) 6%, var(--npr-bg)); }
 .npr-addmenu button > svg { flex: 0 0 auto; margin-top: 2px; color: var(--npr-muted); }
 .npr-addmenu small { display: block; margin-top: 2px; color: var(--npr-muted); font-size: 11px; }
+
+/**
+ * 列表行的右键菜单（0.45.4）。
+ *
+ * ★ 复用 `.npr-menu` 的外观（同一套底色、描边、行高、hover），只覆盖**定位**：
+ *   原来那套是 `position: absolute; top: 36px; right: 0`（挂在工具栏那颗按钮下），
+ *   而这里的坐标来自鼠标，必须 `fixed` + `left/top`。
+ * ★ 选择器写成 `.npr-menu.npr-rowmenu`（两个类）而不是单写 `.npr-rowmenu`：
+ *   `.npr-menu` 的 absolute / top / right 是同样权重的一条规则，谁在后面谁赢 ——
+ *   而两张样式表（PANEL_CSS 与 refinements.css）的先后顺序不该被这个功能依赖。
+ * ★ `width` 写死 **196px**，与 `src/client/row-menu.js` 的 `ROW_MENU_WIDTH` 是同一个数：
+ *   夹取在菜单渲染**之前**就要算，那时量不到它。两个数不一致的后果是「贴右缘时
+ *   菜单被裁 14px」—— 判据 `test/row-menu.test.mjs` 会读这段 CSS 核对。
+ * ★ `position: fixed` 而不是 absolute：这个菜单挂在 `.npr-list` 外面，但窗口滚动 /
+ *   列表滚动都不该带着它跑（滚动即关闭，见 `ReaderPage.jsx` 里那条 effect）。
+ */
+.npr-root .npr-menu.npr-rowmenu {
+  position: fixed; top: auto; right: auto; z-index: 45;
+  width: 196px; min-width: 0;
+}
 
 /* 「有订阅源已经很久没更新」的提示。
    ★ 它说的是「某个源陈旧了」，**不是错误** —— 以前却用了一整块错误红边框的
@@ -909,9 +928,76 @@
    ★ 只加 `disabled` 是**看不出来**的：`.npr-bookrow-main` 的 `color` 是显式写死的，
      禁用态与可点态外观一模一样 ⇒ 看起来能点、点了没反应。 */
 .npr-bookrow-dim .npr-bookrow-title { color: var(--npr-muted); }
-.npr-bookrow-main { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; padding: 10px 4px 10px 14px; border: 0; background: transparent; color: var(--npr-fg); font: inherit; text-align: left; cursor: pointer; }
+/* ── 一行书：封面列 + 文字列（0.45.3）────────────────────────────────────
+   ★ 0.45.3 之前这里是 `flex-direction: column`，标题 / 元信息 / 丛书三块直接
+     摞在按钮里。加封面位之后改成 **row（封面 + body）**，body 内部仍是 column。
+   ★ 为什么不「有封面时 row、没封面时 column」：那样两套布局必须同时维护，而
+     `is-cover` 一删，回到 column 的那一半就成了没人验证过的死分支。现在封面
+     只是 row 里的**第一个可选子元素**，有没有它，布局方向都一样 —— 书架页
+     （2634 行）与阅读页（十几行）走的是同一条 CSS。
+   ★ columngap 用 9px 而不是 8：封面右侧有 1px 描边（`box-shadow` 的 spread），
+     8px 的视觉间隙只有 7px，比「封面与文字」该有的呼吸更紧。 */
+.npr-bookrow-main { display: flex; align-items: flex-start; gap: 9px; flex: 1; min-width: 0; padding: 10px 4px 10px 14px; border: 0; background: transparent; color: var(--npr-fg); font: inherit; text-align: left; cursor: pointer; }
+.npr-bookrow-body { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+/* 封面列：宽度是**唯一**要改的那一个数，高度由 `.npr-diary-cover` 的 3:4 算出来。
+   ★ 36px 是在 268px 侧栏下限下试出来的：再宽 4px，标题可用宽就掉到 113px
+     （`如何阅读一本书` 这种 7 字书名要折行）。判据在
+     `scripts/check-library-sidebar-layout.mjs` 的封面那一条。
+   ★ `z-index` 只为了让出血的角标压在下一行之上（否则下一行的 `border-bottom`
+     会从角标中间划过去）。不参与任何堆叠上下文之外的东西。 */
+.npr-root .npr-bookrow-cover { position: relative; z-index: 1; flex: 0 0 auto; width: var(--npr-cover-w, 36px); align-self: flex-start; }
+/* ★ 封面列宽**只有这一个数**：`.npr-bookrow-cover` 的 `var()` 兜底值与这里写同一个数，
+   这是有意为之（与切换控件那组变量同一个套路）—— 样式表没加载时行也得是对的，
+   而「兜底值」不会在改主值时自动跟着变，所以两边必须一起改。
+   改宽度的代价可量：36 → 40 会让 268px 侧栏下的标题可用宽从 118 掉到 114。 */
+.npr-root { --npr-cover-w: 36px; }
+/* 小尺寸下那圈投影要收：`.npr-diary-cover` 的 `0 2px 4px` 是给 3:4 大卡（约 140px 宽）
+   设计的，36px 上会糊成一团灰边。0 0 0 1px 的描边保留 —— 浅色封面的右缘要靠它
+   和背景分开。
+   ★ 比例从 3:4 改成 **2:3**（36×54）：书墙那格是 140×187，3:4 在大卡上是对的；
+     但列表里一行有「两行标题 + 两行元信息」约 80px 高，3:4 的 48px 封面只有它的
+     六成，看上去像一张缩得太小的图贴在行首。2:3 的 54px 与文字块基本齐平，
+     也正好是纸质书的常见开本比例。`object-fit: cover` 保证真封面被裁而不是被拉扁。 */
+.npr-root .npr-bookrow-cover .npr-diary-cover { aspect-ratio: 2 / 3; box-shadow: 0 0 0 1px color-mix(in srgb, var(--npr-fg) 12%, transparent); }
+/* 生成式封面的首字与书名说明在小尺寸下都没有意义（3 个字 22px 会撑破 36px 宽，
+   而那串 9.5px 的说明根本读不出来）—— 只留底色。底色本身来自书名哈希，
+   已经是「这本书的颜色」，足够当辨识锚点。 */
+.npr-root .npr-bookrow-cover .npr-diary-cover-glyph { font-size: 17px; }
+.npr-root .npr-bookrow-cover .npr-diary-cover-caption { display: none; }
+/**
+ * 状态角标（0.45.3）：压在一张封面上，说「这本书读到哪儿了」。
+ *
+ * ★ 为什么角标是**实底**而徽章是**描边**：两者在同一个视觉场里，一个是「贴在
+ *   封面上的贴纸」，一个是「文字行里的标签」。贴纸必须能压住封面的颜色 ——
+ *   封面可能是浅色（`#f0f0f3` 的生成式底色）也可能是深色实拍，描边在任何一种
+ *   上都读不清。实底 + 反色字才是唯一在两种封面上都成立的做法。
+ * ★ 出血 4px：贴纸压在封面边角上（不是内嵌），这是「角标」这个形态本身的语义。
+ *   不这么做的话它就只是个更小的胶囊，和元信息行里的徽章分不开。
+ */
+.npr-root .npr-bookrow-flag { position: absolute; top: -4px; right: -4px; display: flex; align-items: center; justify-content: center; min-width: 17px; height: 17px; padding: 0 3px; border-radius: 5px; font-size: 10px; font-weight: 600; line-height: 1; letter-spacing: 0; }
+/**
+ * 三档，逐档一个理由（用户的原话是「读完、在读、弃读我觉得要有一个明显的区分」）：
+ *
+ *   在读 → **强调色实底**。它是唯一「还在进行」的状态，也是这一页多数行的状态，
+ *          用色相把它和另外两个终态分开。
+ *   读完 → **正文色反白**（`--npr-fg` 底 + `--npr-bg` 字）。这是全套里对比度
+ *          最高的一块 —— 「完成」值得最高对比，而它靠**明度**而不是第四个色相
+ *          成立（多一种色相就会和强调色、和来源徽章的青绿打架）。
+ *   弃读 → **中性淡底 + muted 字**。语义是「停下了，不是出错」：所以不用红
+ *          （红在深色界面里读作「出错了」），而是往下减一档亮度 —— 形态上是
+ *          「弱化」，和三档里另外两个正好构成 强 / 最强 / 弱 的梯队。
+ *
+ * ★ 三处颜色全部**从令牌派生**，没有写死任何 `#fff` / `#000`：浅色主题下
+ *   `--npr-fg` 是深色、`--npr-bg` 是浅色，反白关系自动翻转，不必为浅色单写一套。
+ */
+.npr-root .npr-bookrow-flag.npr-flag-reading { background: var(--npr-accent-strong); color: var(--npr-bg); }
+.npr-root .npr-bookrow-flag.npr-flag-read { background: var(--npr-fg); color: var(--npr-bg); }
+.npr-root .npr-bookrow-flag.npr-flag-dropped { background: color-mix(in srgb, var(--npr-fg) 15%, var(--npr-bg)); color: var(--npr-muted); }
 .npr-bookrow-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; font-weight: 600; line-height: 1.5; }
 .npr-bookrow-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; color: var(--npr-muted); font-size: 11px; }
+/* 「格式 · 体积」是一个不可拆的组（0.45.3）：320px 侧栏下它会被挤到元信息的第二行，
+   拆开就成了「PDF 留在上一行、7.7 MB 独自下来」的孤儿。 */
+.npr-bookrow-file { white-space: nowrap; }
 .npr-bookrow-series { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--npr-faint); font-size: 11px; }
 /* 「暂不支持阅读」用告警色而不是普通灰：它是一句**结论**，不是元数据。
    ★ 令牌真名是 `warn`，不是 `warning` —— 写错时声明会**整条静默失效**（退化成继承色），
@@ -2820,14 +2906,80 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
    上面那一组统一给出，这里不再重复写。 */
 .npr-root .npr-diary-views > .npr-diary-view { display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 0 4px; }
 
-/* ── 来源行（书 / 文章）与它的二级展开 ────────────────────────────────
-   ★ 行本身是 `.npr-diary-dayrow`（与时间轴同一套 hover/选中），只把「条数」换成胶囊。
-   ★ `.npr-diary-srcbody` 不再加左边线：`.npr-diary-daylist` 自己有一条，
-     外面再套一条就是双线，在 268px 里看起来像缩进错位。 */
+/* ── 来源行（书 / 文章）与它的二级展开（0.46.0 重排）──────────────
+   用户 2026-10-29 的三条：①「这个书本的名称非常的不明显，建议可以放上书封面」；
+   ②「书展开的灵感条目是以时间开头的，时间开头有什么用，不应该是日期+时间吗」；
+   ③「这个条目的显示也极其丑陋」。
+   ★ 行不再是 `.npr-diary-dayrow`（那是时间轴的「日期 + 条数」行，一行文字）。
+     来源行现在有封面、有第二行元信息，是**另一块**排版 —— 共用一套 class 只会让
+     两边互相牵制（改时间轴的行高会顺手动到封面）。 */
 .npr-diary-src { margin-bottom: 1px; }
-.npr-diary-srccount { flex: 0 0 auto; min-width: 18px; padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--npr-fg) 7%, transparent); color: var(--npr-faint); font-size: 11px; font-weight: 500; line-height: 17px; text-align: center; font-variant-numeric: tabular-nums; }
-.npr-diary-src.is-open > .npr-diary-dayrow { background: color-mix(in srgb, var(--npr-fg) 5%, transparent); font-weight: 600; }
+
+/* 行：封面 36 + 文字列 + 箭头。`align-items: flex-start` 是因为封面比两行文字高。 */
+.npr-root .npr-diary-srcrow {
+  display: flex; align-items: flex-start; gap: 9px;
+  width: calc(100% - 12px); margin: 1px 6px; padding: 5px 8px 6px;
+  border: 0; border-radius: 7px; background: transparent; color: var(--npr-fg);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.npr-root .npr-diary-srcrow:hover { background: var(--npr-hover); }
+.npr-root .npr-diary-srcrow.npr-selected { background: color-mix(in srgb, var(--npr-fg) 7%, transparent); font-weight: 600; }
+.npr-diary-src.is-open > .npr-diary-srcrow { background: color-mix(in srgb, var(--npr-fg) 5%, transparent); }
+.npr-diary-src.is-open > .npr-diary-srcrow .npr-diary-srcrow-title { font-weight: 600; }
+
+/* 封面列：宽 36 与书架那一列**同一个数**（`--npr-cover-w`），这样两页里同一本书
+   的封面一样大。高度由 2:3 算出来（36×54）—— 3:4 的 48px 只到文字块的六成，
+   看着像一张缩得太小的图贴在行首（0.45.3 在书架行上已经量过一次）。 */
+.npr-root .npr-diary-srcrow-cover { flex: 0 0 auto; width: var(--npr-cover-w, 36px); }
+.npr-root .npr-diary-srcrow-cover .npr-diary-cover {
+  aspect-ratio: 2 / 3;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--npr-fg) 12%, transparent);
+}
+.npr-root .npr-diary-srcrow-cover .npr-diary-cover-glyph { font-size: 17px; }
+.npr-root .npr-diary-srcrow-cover .npr-diary-cover-caption { display: none; }
+
+/* 文章没有封面图：用**同一套**生成封面（色相来自标题哈希 + 首字），
+   与「书架上没有封面的书」长得一样 —— 它们本来就都是「只有名字的来源」。 */
+.npr-diary-srcrow-tile {
+  display: flex; align-items: center; justify-content: center;
+  aspect-ratio: 2 / 3; width: 100%; border-radius: 4px;
+  background: linear-gradient(158deg, hsl(var(--npr-cover-h, 212) 30% 54%), hsl(calc(var(--npr-cover-h, 212) + 26) 32% 36%));
+  color: #fff; font-size: 17px; font-weight: 600; line-height: 1;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 22%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--npr-fg) 12%, transparent);
+}
+
+.npr-diary-srcrow-main { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+/* 名称**两行**：一行省略时「《译文名著文库》 076[法]雨果-九三年（叶尊译）」只剩
+   前 8 个字，等于没写。`-webkit-line-clamp` 按排版结果截，侧栏拖宽拖窄都还是两行。 */
+.npr-diary-srcrow-title {
+  display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  font-size: 12.5px; line-height: 1.45; word-break: break-word;
+}
+.npr-diary-srcrow-meta { font-size: 11px; color: var(--npr-faint); font-variant-numeric: tabular-nums; }
 .npr-diary-srcbody { padding: 0 0 2px; }
+
+/* ── 来源展开区里的条目（0.46.0）────────────────────────────────────
+   ★ 两行：上面「日期 + 时刻」，下面正文。原来是一行 `11px 时刻 + 12px 单行省略`，
+     一条条挤成一条灰带 —— 用户的原话是「极其丑陋」。
+   ★ 正文**换行**（最多两行）而不是省略：一条灵感通常就是一两行，掐掉后半句
+     等于让人点进去才看得懂。 */
+.npr-diary-idealist { list-style: none; margin: 0 6px 2px 16px; padding: 2px 0 2px 10px; border-left: 1px solid var(--npr-border); }
+.npr-root button.npr-diary-idea {
+  display: flex; flex-direction: column; gap: 2px;
+  width: 100%; margin: 1px 0; padding: 5px 7px 6px;
+  border: 0; border-radius: 6px; background: transparent; color: var(--npr-muted);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.npr-root button.npr-diary-idea:hover { background: var(--npr-hover); }
+.npr-root button.npr-diary-idea:hover .npr-diary-idea-text { color: var(--npr-fg); }
+.npr-root button.npr-diary-idea.is-focus { background: color-mix(in srgb, var(--npr-accent) 12%, transparent); box-shadow: inset 2px 0 0 var(--npr-accent); }
+.npr-root button.npr-diary-idea.is-focus .npr-diary-idea-text { color: var(--npr-fg); }
+.npr-diary-idea-when { font-size: 10.5px; color: var(--npr-faint); font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.npr-diary-idea-text {
+  display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  font-size: 12.5px; line-height: 1.5; word-break: break-word;
+}
 
 /* ── 侧栏时间轴：日期行可展开 ───────────────────────────────────────────
    ★ 展开出来的条目用「一道 2px 竖线 + 12px 缩进」表达从属关系，而不是再套一层框：
@@ -3302,35 +3454,47 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-diary-modal-body { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 12px 14px; font-size: 15px; }
 .npr-diary-modal-tags { padding: 0 14px 12px; margin-top: 0; }
 
-/* ── 「挂到书」浮层 ───────────────────────────────────────────────────
-   卡片比「展开全文」窄（420px）：它是一次「挑一个就走」的选择，不是阅读。
-   ★ 两块列表（书 / 章）各自滚动、各自限高：书架几百本时不滚动就点不到底部，
-     而章动辄几十条，不分开滚会让「挂上去」那颗按钮被推出可视区。 */
-.npr-diary-linkcard { width: min(420px, 100%); }
-.npr-diary-link-excerpt { margin: 0 0 10px; color: var(--npr-muted); font-size: 12.5px; line-height: 1.6; }
-/* 只有一条底线，不是盒子 —— 和侧栏「找一本书」同一套语言。 */
-.npr-diary-linkfind { width: 100%; margin: 0 0 8px; padding: 5px 0; border: 0; border-bottom: 1px solid var(--npr-border); background: transparent; color: var(--npr-fg); font: inherit; font-size: 13px; outline: none; }
-.npr-diary-linkfind:focus { border-bottom-color: var(--npr-fg); }
-.npr-diary-linkbooks { display: flex; flex-direction: column; gap: 1px; max-height: 190px; overflow: auto; overscroll-behavior: contain; }
-/* 章节列表一打开就收窄书列表：190 + 190 + 头脚 = 622 > 卡片上限 600，
-   body 会自己溢出 30px ⇒ 三层嵌套滚动。96px ≈ 3 行，够「认得出是哪本」，
-   要换书上面还有搜索框。★ 收窄后书名必须写进下面那行，否则高亮行滚出视野。 */
-.npr-diary-linkbooks.is-compact { max-height: 96px; }
-.npr-diary-linkchapters { display: flex; flex-direction: column; gap: 1px; max-height: 190px; overflow: auto; overscroll-behavior: contain; margin-top: 4px; }
-/* ★ `flex: 0 0 auto` 是**必须的**，不是保险：列表是 flex 列 + max-height + overflow，
-   子项默认 flex-shrink:1 ⇒ 装不下时**行被压扁**而不是溢出滚动。10 本书压进 190px
-   每行只剩 18px，而文字行高 18.75px ⇒ 每一行都被垂直切掉半截，看起来像「渲染坏了」。
-   量出来的判据：`scrollHeight` 恒等于 `clientHeight`（永远滚不动）。
-   改成 `flex: 0 0 auto` 之后 10 本 = 316px > 190 ⇒ 真的滚，每行保持 30.75px。 */
-.npr-root .npr-diary-linkbook { display: block; width: 100%; flex: 0 0 auto; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12.5px; line-height: 1.5; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.npr-root .npr-diary-linkbook:hover { background: var(--npr-hover); }
-/* 选中：淡底 + 左侧一道竖线。**不用实心反白** —— 书和章会同时各选中一项，
-   两块都反白会让人以为「整块是一个按钮」。 */
-.npr-root .npr-diary-linkbook.is-picked { background: color-mix(in srgb, var(--npr-fg) 8%, transparent); box-shadow: inset 2px 0 0 var(--npr-fg); font-weight: 600; }
-.npr-diary-linkchapter { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--npr-border); }
-.npr-diary-linkpicked { margin: 0 0 2px; color: var(--npr-fg); font-size: 12.5px; }
-.npr-diary-linkfoot { display: flex; align-items: center; gap: 8px; justify-content: flex-end; flex-shrink: 0; padding: 9px 12px; border-top: 1px solid var(--npr-border); }
-.npr-diary-linkfoot .npr-diary-sect-note { flex: 1; margin: 0; }
+/* ── 「出处」浮层（0.46.0）────────────────────────────────────────────
+   ★ 不是模态窗：三行内容（何时 / 出处 / 去现场）盖住整页太重，而用户点开它
+     只是想确认「这条我是在哪篇里写的」。所以是 `fixed` 的小卡片 + 一层几乎看不见的
+     遮罩（遮罩只负责接「点外面关掉」这一下）。
+   ★ 宽度 248 与 `DiaryApp.jsx` 的 `ORIGIN_POP_W` 必须同值（判据 `test/diary-origin.test.mjs`
+     会读这一行核对）—— 浮层要在第一次出现时摆对位置，而那一刻量不到自己。
+   ★ `z-index` 压在模态（40）之下：出处浮层永远不该盖在「展开全文」上面。
+   ★ 实测（Chromium，`.build/preview/diary-source-0460-*` 里的探针）：`.npr-root` 的
+     `container-type: inline-size` **不会**让它成为 fixed 子元素的包含块 —— 量到
+     `left` 就是视口坐标（56 而不是 25+56）。所以 `left/top` 可以直接用
+     `getBoundingClientRect()` 的值。若哪天某个祖先加了 `transform` / `filter` /
+     `contain: paint`，这条会**静默失效**（浮层错位到面板左上角），届时要改成
+     绝对定位并减掉祖先的 rect。 */
+.npr-diary-pop-backdrop { position: fixed; inset: 0; z-index: 29; }
+.npr-diary-pop {
+  position: fixed; z-index: 30;
+  width: 248px; padding: 10px 12px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--npr-border-strong, var(--npr-border));
+  background: var(--npr-surface, var(--npr-bg));
+  box-shadow: 0 10px 28px rgb(0 0 0 / 18%), 0 1px 3px rgb(0 0 0 / 12%);
+}
+.npr-diary-pop-head { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; color: var(--npr-faint); }
+.npr-diary-pop-when { font-size: 11px; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+/* 出处那串：**最多两行**。书名可以长到三十几个字，全铺出来会把去现场的按钮
+   顶出卡片；两行 + `title` 全文是这栏里的通用做法（书架行、来源行都一样）。 */
+.npr-diary-pop-src {
+  display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  margin: 0 0 8px; color: var(--npr-fg); font-size: 12.5px; line-height: 1.55; word-break: break-word;
+}
+/* ★ 主按钮用**实心反白**（`--npr-fg` 底 / `--npr-bg` 字），与 `.npr-diary-save`
+   （「记下来」「挂上去」）同一套：品牌绿 `--npr-accent` 在浅色主题里是 #7ddcae，
+   拿它当按钮文字色对比度只有 1.9:1 —— 截图里那句「打开这本书」几乎是看不清的。 */
+.npr-root button.npr-diary-pop-jump {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 5px 10px; border: 1px solid var(--npr-fg); border-radius: 7px;
+  background: var(--npr-fg); color: var(--npr-bg);
+  font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.npr-root button.npr-diary-pop-jump:hover { background: color-mix(in srgb, var(--npr-fg) 88%, var(--npr-bg)); }
+.npr-diary-pop-note { margin: 0; color: var(--npr-muted); font-size: 11.5px; line-height: 1.55; }
 
 .npr-tagsheet { position: absolute; inset: 0; z-index: 30; display: flex; flex-direction: column; min-height: 0; padding: 14px 0 0; background: var(--npr-bg); }
 .npr-tagsheet-head { display: flex; align-items: center; gap: 8px; padding: 0 14px 10px; }

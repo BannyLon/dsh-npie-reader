@@ -21,6 +21,23 @@ export const BOOK_STATE_LABELS = {
 };
 
 /**
+ * 状态 → **单字角标**（0.45.3）。
+ *
+ * ★ 为什么不是 `BOOK_STATE_LABELS[name]` 的第一个字：那样「未读」和「在读」都取到
+ *   「未」/「在」，而这两格在界面上**是同一件事**（`BADGE_TEXT` 把它们都写成
+ *   「在读 · 进度」，见 `bookRowView`）。角标必须**跟着徽章文字走**，不是跟着
+ *   `name` 走 —— 否则同一本书会有「角标说未读、徽章说在读」这种自相矛盾。
+ * ★ 三个字各不相同（在 / 完 / 弃），且都是状态词的首字，扫一眼能对回筛选条上那三格。
+ * ★ `unread` 与 `reading` 同字是**故意的**：它们本来就是同一条进度轴上的两格。
+ */
+export const BOOK_STATE_MARKS = {
+  unread: '在',
+  reading: '在',
+  read: '完',
+  dropped: '弃',
+};
+
+/**
  * 阅读页状态筛的**分组**。
  *
  * ★ 这是界面与判据的**单一来源**：`LibraryApp` 只负责渲染，`filterBooks` 只负责按
@@ -586,7 +603,7 @@ export function readingProgressLabel(state) {
  * @param options.canReflect - 这个页面有没有「写读后感」这个去处（默认没有）。
  *   ★ 只有「读完」那一行会用到它：读完 = 可以写读后感。为假时不画那颗按钮，
  *     而不是画一颗点了没反应的 —— 那是本项目最怕的形态。
- * @returns `{ badgeText, badgeState, actions, statusLabel, openable, openHint, dim }`
+ * @returns `{ badgeText, badgeState, badgeMark, actions, statusLabel, openable, openHint, dim }`
  *   - `actions`：右侧的**按钮**，**0–2 个**，按显示顺序，每项是 `{ kind, text, title, label }`；
  *   - `statusLabel`：右侧的**状态标签**（组件据此渲染 `span` 而不是 `button`），或 `null`；
  *   - ★ 两者**恰好有一个非空** —— 那个位置要么是动作、要么是状态，没有第三种形态。
@@ -612,6 +629,20 @@ export function bookRowView(book, state, options = {}) {
     : BOOK_STATE_LABELS[name];
 
   /**
+   * 只有进度、没有状态前缀的那一段（0.45.3）。
+   *
+   * ★ 为什么需要它：阅读页的书籍行加了封面角标，角标已经说了「在 / 完 / 弃」，
+   *   元信息行里再写一遍「在读 · 读到 24 / 387 页」就是**说两遍** —— 而这一行的
+   *   代价是硬的：加封面吃掉 45px 之后，那串字会把 `PDF / 7.7 MB` 挤到下一行，
+   *   行高从 76 涨到 96，整个列表变松（0.45.3 的实测夹具里看得一清二楚）。
+   * ★ 终态（读完 / 弃读）在这里返回**空串**：它们的徽章文字就是状态本身
+   *   （「读完」两个字），角标说完之后没有第二个信息可留。
+   * ★ `未开始` 也照常返回：角标说「在」、文字说「未开始」，读起来是
+   *   「在读，但还没开始」—— 这与筛选条把「未开始」归进「在读」是同一套模型。
+   */
+  const badgeProgress = (name === 'unread' || name === 'reading') ? readingProgressLabel(state) : '';
+
+  /**
    * 未加入「阅读」：唯一的动作是**加入**。
    *
    * ★ 徽章不显示 —— 书架里 2634 本全是「未读」，每人一个灰牌子等于没有信息
@@ -623,6 +654,8 @@ export function bookRowView(book, state, options = {}) {
     return {
       badgeText: '',
       badgeState: name,
+      badgeMark: BOOK_STATE_MARKS[name],
+      badgeProgress,
       actions: [{
         kind: 'add',
         text: '+ 阅读',
@@ -652,6 +685,8 @@ export function bookRowView(book, state, options = {}) {
     return {
       badgeText,
       badgeState: name,
+      badgeMark: BOOK_STATE_MARKS[name],
+      badgeProgress,
       actions: [],
       statusLabel: {
         text: '已开始阅读',
@@ -681,6 +716,8 @@ export function bookRowView(book, state, options = {}) {
     return {
       badgeText,
       badgeState: name,
+      badgeMark: BOOK_STATE_MARKS[name],
+      badgeProgress,
       actions: [
         {
           kind: 'restart',
@@ -725,6 +762,8 @@ export function bookRowView(book, state, options = {}) {
     return {
       badgeText,
       badgeState: name,
+      badgeMark: BOOK_STATE_MARKS[name],
+      badgeProgress,
       actions: [
         ...(canReflect ? [{
           kind: 'reflect',
@@ -769,6 +808,8 @@ export function bookRowView(book, state, options = {}) {
   return {
     badgeText,
     badgeState: name,
+    badgeMark: BOOK_STATE_MARKS[name],
+    badgeProgress,
     actions: [{
       kind: 'drop',
       text: '弃读',
