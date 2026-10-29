@@ -36,9 +36,18 @@ function definedNames() {
 
 const defined = definedNames();
 
+/**
+ * 要扫的源文件。
+ *
+ * ★ 0.47 起也扫 `.js`：**图标名有一半已经从 JSX 挪进数据层**了 ——
+ *   `row-menu.js` 的 `rowMenuItems()` 与 `diary-origin.js` 的 `originIcon()`
+ *   都是「把名字当数据」的产物（正是为了绕开动态 `name` 扫不到的问题）。
+ *   只扫 `.jsx` 的话，那几处名字**一个都没被核对过** —— 守卫看起来是绿的，
+ *   而它保护的恰好是它没读的那几个文件。
+ */
 function clientSources() {
   return readdirSync(clientDir)
-    .filter((file) => /\.jsx$/.test(file))
+    .filter((file) => /\.(jsx|js)$/.test(file))
     .map((file) => ({ file, text: readFileSync(join(clientDir, file), 'utf8') }));
 }
 
@@ -107,11 +116,10 @@ describe('图标名', () => {
        *   所以如实登记在这里：这一处是真漏网，不是「已经查过了」。
        */
       'ChannelPicker.jsx: name',
-      // 来源：上面 LINK_VIEWS 的 icon 字段（按时间 / 按书本 / 按文章），由下一条断言核对
-      'DiaryApp.jsx: item.icon',
-      // 来源：linkViewMeta 里两处 icon 字段（book-open / file-text），同上
-      'DiaryApp.jsx: linkViewMeta.icon',
-      // 0.46：出处图标的名字由 `diary-origin.js` 的 `originIcon()` 给（书 / 文章两档）。
+      // 0.47：来源收窄横条上那颗图标 —— `originIcon()` 取的，传进去的是 scope 对象。
+      // 「按书本 / 按文章」两档删掉之后，横条是它的第一处用处。
+      'DiaryApp.jsx: originIcon(sourceScope)',
+      // 出处 chip 上的图标：同一个 `originIcon()`，传的是条目算出来的 origin。
       // 放在数据层而不是 JSX 的三元里，就是因为这一条扫描 —— 三元里的 `'book'` 会被
       // 当成图标名去查，查不到就红。
       'DiaryApp.jsx: originIcon(origin)',
@@ -153,8 +161,11 @@ describe('图标名', () => {
     assert.deepEqual(missing, [], `数据里这些 icon 字段不存在：\n${missing.join('\n')}`);
     // 防「正则失配 ⇒ 一个都没扫到 ⇒ 空对空全绿」。
     assert.ok(checked >= 8, `只核到 ${checked} 个 icon 字段（${checkedFiles.join(' ') || '一个文件都没命中'}），正则可能已失配`);
+    // 两端都要扫到才算数：`SettingsPage.jsx` 是「UI 里的数据表」、
+    // `row-menu.js` 是「挪到 .js 里的数据表」—— 两个位置各扫到一处，说明
+    // 这条断言真的覆盖到了两种放法，而不是只命中一边就全绿。
     assert.ok(checkedFiles.some((line) => line.startsWith('SettingsPage.jsx'))
-      && checkedFiles.some((line) => line.startsWith('DiaryApp.jsx')),
+      && checkedFiles.some((line) => line.startsWith('row-menu.js')),
       `两端都要扫到才算数，实际命中：${checkedFiles.join(' ') || '(无)'}`);
   });
 });

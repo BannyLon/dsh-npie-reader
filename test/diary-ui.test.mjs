@@ -63,7 +63,16 @@ function resetsFocusOnDiary(code) {
   return /if\s*\(\s*mode\s*===\s*'diary'\s*\)\s*setFocused\(\s*false\s*\)/.test(code);
 }
 
-const modeEffect = effectAt(reader, 'setSelected(undefined)');
+/**
+ * 「切模块时清空选中」那条 effect 的正文。
+ *
+ * ★ 锚点**不能**用 `setSelected(undefined)`：`hideArticle()` 里也有同样一句（隐藏的正好是
+ *   当前这篇时清掉右侧），而 `effectAt()` 取的是文件里**第一处**。0.45 加了那次「隐藏后
+ *   清右侧」之后，这个锚点就悄悄指到了另一个 effect 上 —— 于是这一组两条一直是红的，
+ *   而代码本身是对的（假红比不测更糟：它教人忽略红灯）。
+ * ★ 改用只在那一处出现的模式守卫：`if (mode !== 'library') return;`（全文件唯一）。
+ */
+const modeEffect = effectAt(reader, "if (mode !== 'library') return;");
 
 describe('入口：三个 tab 都在，且语义说得清', () => {
   it('ViewSwitch 渲染三个按钮（订阅 / 书 / 日记），选中态各自独立', () => {
@@ -457,79 +466,55 @@ describe('灵感模块：情绪 / 标签 / 时间轴 / 关联到书', () => {
     assert.match(diary, /const query = `#\$\{tag\}`/);
   });
 
-  it('★ 侧栏 = 一个视图切换器 + 标签 + 当前那一档；正文摘要只在**展开**时才读', () => {
-    // 用户 2026-10-27：「侧边栏的显示实在是不符合常理」，随后又补了一句
-    // 「侧边栏是不是要有时间轴啊，比如点击今天，展开今天记录的时间轴」。
-    // 分页步长必须是**一个常量**，不能两处各写一个 30：「加载更早」要拿它算
-    // 「再往前多少天」，各写一次就会漂开（改了首屏、翻页还按旧的走）。
+  it('★ 侧栏 = 一条时间轴：没有「按时间 / 按书本 / 按文章」', () => {
+    // 用户 2026-10-29：「左边栏不应该分三个选项卡「按时间」、「按书本」、按文章。
+    //   而应该只有按时间的时间轴，不管是在 RSS 文章阅读期间还是在读电子书期间按 L
+    //   创建的灵感还是在灵感专题页下记录的灵感都显示在时间轴上，只是时间轴上的
+    //   条目做个区分」。
+    // ★ 他那句「逻辑不对」是准的：那三档不是三个视图，是**同一份数据的三种排法**
+    //   （`timeline()` 每条已带 book/chapter/page/article）；而「按书本」还要换一整套
+    //   行结构（来源行 → 展开 → 条目），于是同一件事有了两套排序、两套条目样式。
     assert.match(diary, /const TIMELINE_PAGE = 30;/, '时间轴没有分页步长常量');
     assert.match(diary, /fetchDiaryTimeline\(\{ limit: TIMELINE_PAGE \}\)/, '首屏没按步长取');
     assert.match(diary, /fetchDiaryTags\(\)/);
     for (const label of ['标签', '时间轴']) {
-      // 「标签」这块的标题现在带一个计数徽章（标签几千个时，先看见数量比先看见云有用），
-      // 所以判据从 `>标签<` 放宽成「标题以这个字开头」—— 它守的是「这一块存在且叫这个名字」，
-      // 不是「标题后面紧跟闭合标签」。
+      // 「标签」这块的标题带一个计数徽章，所以判据是「标题以这个字开头」，
+      // 它守的是「这一块存在且叫这个名字」。
       assert.ok(diary.includes(`>${label}`), `侧栏少了「${label}」这一块的标题`);
     }
-    // ★ 0.41：侧栏不再是「标签 / 时间轴 / 挂在书上 / 挂在文章上」四块纵向平铺。
-    //   后两块会随读书与订阅**单调增长**，永远压在栏底 ⇒ 改成和「按时间」平级的视图。
-    assert.match(diary, /const LINK_VIEWS = \[/, '没有一级视图清单');
-    for (const value of ["value: 'time'", "value: 'book'", "value: 'article'"]) {
-      assert.ok(diary.includes(value), `视图清单里少了 ${value}`);
+    for (const gone of ['LINK_VIEWS', 'setLinkView', 'openSrcKey', 'linkViewMeta', 'linkedSources', 'npr-diary-views']) {
+      // 反向对照就写在同一条里：留着任何一处，「三档」就还在，只是长成了另一个样子。
+      assert.equal(diary.includes(gone), false, `三档视图的残留还在：${gone}`);
     }
-    assert.match(diary, /role="tablist" aria-label="灵感视图"/, '切换器没有 tablist 语义');
-    assert.match(diary, /aria-selected=\{linkView === item\.value\}/, '切换器没有选中态');
-    assert.match(diary, /const \[linkView, setLinkView\] = useState\('time'\)/, '没有视图状态（默认应是按时间）');
-    // 切档要**清掉二级展开**：在「按书本」里展开了一本，切到「按文章」还留着那一本，
-    // 下次切回来会莫名其妙展开着一条 —— 而用户根本没点它。
-    assert.match(diary, /setLinkView\(item\.value\); setOpenSrcKey\(''\);/, '切档没有收起上一档的展开');
-    // ★ 切换器必须在 `.npr-diary-panel` **外面**：面板是 overflow:auto，
-    //   放进去会跟着内容一起滚走 —— 而「我现在按什么看」必须一直在。
-    const viewsAt = diary.indexOf('<div className="npr-diary-views"');
-    const panelAt = diary.indexOf('<div className="npr-diary-panel">', viewsAt);
-    assert.ok(viewsAt > 0, '没有视图切换器');
-    assert.ok(panelAt > viewsAt, '切换器跑到滚动区里面了 —— 往下翻就看不见当前是哪一档');
-    // ★ 展开态：日期行带 aria-expanded，展开后才渲染当天条目。
-    assert.match(diary, /aria-expanded=\{open\}/, '日期行不是可展开的 —— 时间轴只剩「哪几天写过」');
+    // ★ 聚合不是第三个选项卡，而是时间轴的**一次收窄**：换数据源，不换渲染。
+    //   换成两套渲染，就又会漂出两套排序 / 两套条目样式 —— 那正是它难用的原因。
+    assert.match(diary, /const timelineDays = sourceScope === null \? timeline\.days : sourceDays\.days/,
+      '收窄没有走「换数据源」这条路');
+    assert.match(diary, /const recentDays = timelineDays/, '时间轴没有用统一的那份数据源');
+    assert.match(diary, /fetchDiarySource\(\{ book: scopeBook, article: scopeArticle \}\)/, '没有按来源取全量');
+    // 横条**只在收窄时**出现：默认态这一栏一个筛选控件都没有。
+    assert.match(diary, /\{sourceScope !== null && \(\s*<div className=\{`npr-diary-scope/,
+      '来源横条不是「只在收窄时出现」');
+    assert.match(diary, /aria-label="回到全部灵感"/, '收窄态没有出口 —— 进去了出不来');
+  });
+
+  it('★ 时间轴：日期行可展开，折叠态不读正文', () => {
+    // 用户 2026-10-27：「侧边栏是不是要有时间轴啊，比如点击今天，展开今天记录的
+    // 时间轴」。0.32.0 这里只给「日期 + 条数」，点一下直接跳走 —— 侧栏因此只剩
+    // 「哪几天写过」，回答不了「那天写了什么」，也就不算时间轴。
+    assert.match(diary, /aria-expanded=\{open\}/, '日期行不是可展开的');
     assert.match(diary, /const open = openDay === item\.date/, '没有「同一次只展开一天」的状态');
     const openBlock = /\{open && \(([\s\S]*?)\n\s*\)\}/.exec(diary);
     assert.ok(openBlock, '没有找到「展开后渲染」的分支');
     assert.match(openBlock[1], /entry\.preview/, '展开分支里没有摘要 —— 展开了也看不到写了什么');
-    // ★ 但**折叠态**绝不能读 preview：那正是 0.31.0 被否掉的做法（把正文抄一遍）。
-    //   判据要**逐个可展开行**去量：0.41 起有两处 `aria-expanded`（时间轴的日期行、
-    //   「按书本」的来源行），整文件一刀切 `doesNotMatch` 会被另一处的展开分支误伤。
     const collapsedRows = [...diary.matchAll(/aria-expanded=\{open\}/g)].map((hit) => (
       diary.slice(hit.index, diary.indexOf('</button>', hit.index))
     ));
-    assert.ok(collapsedRows.length >= 2, `可展开的行只找到 ${collapsedRows.length} 处 —— 判据锚点失效`);
+    assert.ok(collapsedRows.length >= 1, `可展开的行只找到 ${collapsedRows.length} 处 —— 判据锚点失效`);
     for (const row of collapsedRows) {
       assert.doesNotMatch(row, /\.preview/, '折叠态也在读 entry.preview —— 正文又被抄了一遍');
     }
     assert.match(diary, /entry\.kind !== '读后感'/, '时间轴没有滤掉读后感');
-  });
-
-  it('★ 出处：读的时候记下的才有那颗图标，手记的没有', () => {
-    // 用户 2026-10-29 的两句原话：
-    //   「如果是在 RSS 阅读期间按 L 添加的灵感，那这条点击书籍图标弹出的是什么时间、
-    //    在哪篇文章下记录的这条灵感，并有一个直接跳转到这篇文章的按钮」；
-    //   「如果是我直接在灵感页记录下的灵感，就没必要去往文章上挂，也就是说就不应该有
-    //    这个书籍按钮显示，挂书本同理」。
-    // ⇒ 这颗图标＝出处，不是「挂到书上」。「挂到书上」那整套（选书浮层 / 章节列表 /
-    //   改写 source）已按同一句话删掉 —— 手记的灵感不往任何东西上挂。
-    assert.match(diary, /const origin = privateSide \? null : entryOrigin\(entry, entry\.date \?\? selected\)/,
-      '条目没有算出处 —— 要么每一条都长一颗点了没内容的图标，要么一条都不长');
-    assert.match(diary, /\{origin !== null && \(/, '没有出处的条目仍然画了那颗图标');
-    assert.match(diary, /onClick=\{\(event\) => openOrigin\(event, origin\)\}/, '图标点了不打开出处');
-    assert.doesNotMatch(diary, /openLinkPick|applyLink|askLinkOutline/, '「挂到书」的入口还留着');
-    assert.doesNotMatch(diaryCss, /npr-diary-linkbook/, '挂书浮层的样式还留着');
-
-    // 浮层里三件事：何时 / 出处 / 去现场。缺哪一件都是「点开还是不知道在哪写的」。
-    assert.match(diary, /<span className="npr-diary-pop-when">/, '浮层没有说「什么时候记的」');
-    assert.match(diary, /<p className="npr-diary-pop-src" title=\{originPop\.source\}>/, '浮层没有说出处');
-    assert.match(diary, /\{originJumpLabel\(originPop\)\} ›/, '浮层里没有「去现场」的按钮');
-    // 跳不了（书已移出书架 / 老条目只有书名）时不画死按钮，换成一句解释。
-    assert.match(diary, /\{canOriginJump \? \(/, '跳不了的时候仍然画了一颗点了没反应的按钮');
-    assert.match(diary, /\{originMissNote\(originPop\)\}/, '跳不了的时候没有解释');
   });
 
   it('★ 「加载更早」：时间轴能往前翻，不是只给最近 30 天', () => {
@@ -570,46 +555,6 @@ describe('灵感模块：情绪 / 标签 / 时间轴 / 关联到书', () => {
       '又退回了「只看了最近 N 天」的死胡同');
   });
 
-  it('★ 「按书本」把已关联的灵感按来源归拢，点一行展开、展开区里回那本书', () => {
-    // 「灵感流转」的另一半：在书里按 L 记的灵感会带 `source`，但**界面必须能按来源反查**，
-    // 否则它只是一条普通灵感，用户永远不知道自己挂过什么。
-    assert.match(diary, /function linkedSources\(days\)/, '没有按来源归拢的判据');
-    // ★ 分组键的解析在 `diary-format.js`（`QuickCapture` 写入侧要用同一套判断），
-    //   日记页只消费结果 —— 两边各写一份正则，迟早对不上。
-    assert.match(diary, /const parsed = parseSource\(entry\.source\)/, '没有从 source 认出「挂在哪儿」');
-    // ★ 0.41：不再分成两块平铺，而是同一套结构按档位取数据 ——
-    //   两块同时铺就是用户说的「无限向下延伸，挤占空间」。
-    assert.match(diary, /const linkViewRows = linkView === 'book' \? linkedBookRows/,
-      '「按书本」没有按档位取数据 —— 两档会同时铺出来');
-    assert.match(diary, /\{linkView !== 'time' && \(/, '来源那一块没有被条件渲染');
-    // ★ 0.46.0：来源行改成「封面 + 两行名字 + 一行元信息」——
-    //   用户 2026-10-29「这个书本的名称非常的不明显，建议可以放上书封面」。
-    //   一行文字的 `npr-diary-dayrow-date` 已经被这一块取代（时间轴还在用那个类）。
-    assert.match(diary, /<span className="npr-diary-srcrow-title">\{item\.title\}<\/span>/, '来源行没把名字显示出来');
-    assert.match(diary, /<BookCover book=\{cover\} \/>/, '书没有用真封面（EPUB/PDF/生成封面的三选一）');
-
-    // ★ 点一行 = **展开这一本的灵感**，不是直接跳走。
-    //   「按书本」这个视图里用户的问题是「这本书我想过什么」，直接跳走等于把问题推回阅读器。
-    assert.match(diary, /onClick=\{\(\) => setOpenSrcKey\(open \? '' : item\.key\)\}/,
-      '点一行不是展开 —— 要么还是直接跳走，要么根本没有二级');
-    assert.match(diary, /const \[openSrcKey, setOpenSrcKey\] = useState\(''\)/, '没有二级展开的状态');
-    assert.match(diary, /const open = openSrcKey === item\.key/, '没有「同一次只展开一个来源」的判据');
-    // 展开区里必须**逐条列出来**（带日期/时间/摘要），否则「按书本」只是一个更长的跳转列表。
-    assert.match(diary, /\{item\.entries\.map\(\(entry\) => \(/, '展开区没有列出这个来源下的灵感');
-    assert.match(diary, /jump\(entry\.date, entry\.entryKey\)/, '展开区里的条目点了不跳');
-
-    // ★ 用户 2026-10-27：「挂在书上为什么还会有日记显示的内容」—— 点一本书要回那本书。
-    //   0.41 把这条从「行点击」挪到「展开区里的第二个按钮」：两种行为不压在同一个点击目标上。
-    assert.match(diary, /function openSource\(item\)[\s\S]{0,900}?onOpenBook\(\{ bookId: item\.bookId/,
-      '「打开这本书」没有回到那本书 —— 又只是把日记筛了一遍');
-    // 「回到现场」还得落在**那一页**：落在第 1 页只是回到这本书，没回到那个位置。
-    assert.match(diary, /page: item\.page, chapter: item\.chapter \}\)/, '回书没带上页码/章节');
-    // 兜底路径（老条目只有书名 / 书已删）仍要能筛，并且要把筛选态留住。
-    assert.match(diary, /jump\(item\.last, item\.entryKey, \{ keepLink: true \}\)/,
-      '兜底路径没有滚到最近那一条，或没留住筛选态');
-    // ★ 拿不到 id 时不能画一颗点了没反应的按钮：要说清「只能在这里看」。
-    assert.match(diary, /这本书已经不在书架上了，只能在这里看这些灵感。/, '书已删时没有解释');
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1104,8 +1049,14 @@ describe('0.35：标签扩展性 / 私密逐条查看 / 读后感空状态', () 
   it('★ 私密：切模块 / 上锁 / 再点一次都会收回（不只靠计时器）', () => {
     assert.match(diary, /const PEEK_MS = 30_000/);
     assert.match(diary, /function hidePeek\(/, '没有「收起来」这个动作');
-    assert.match(diary, /\}, \[moduleValue\]\);[\s\S]{0,80}?hidePeek\(\)|hidePeek\(\);[\s\S]{0,200}?\}, \[moduleValue\]\);/,
-      '切模块时没有收回 —— 看完的那条会跟着用户去别的页');
+    // ★ 0.47 起这个 effect 里多了两件事（退出情绪筛选、退出来源收窄），写「hidePeek
+    //   距 `[moduleValue]` 不超过 N 个字符」那种窗口判据，会被新加的注释直接挤爆
+    //   （这次又踩了一遍：真绿变假红）。改成把 effect 的**函数体**切出来再断言。
+    const moduleEffect = effectAt(diary, 'hidePeek()');
+    assert.ok(moduleEffect, '切模块的那个 effect 没找到 —— 锚点失效');
+    assert.match(moduleEffect, /hidePeek\(\);/, '切模块时没有收回 —— 看完的那条会跟着用户去别的页');
+    // 来源收窄同一个道理：它是「对这个来源的一次提问」，换模块不该还留着。
+    assert.match(moduleEffect, /setSourceScope\(null\);/, '切模块时没有退出来源收窄 —— 横条会跟着用户去别的页');
     // 窗口给到 400：`lockNow` 开头有一个 try/catch，第一个 `}` 落在 catch 里，
     // 用 300 字符 + 首个右括号会把 `hidePeek()` 挡在窗口外（写这条时踩过一次）。
     assert.match(diary, /async function lockNow\(\)[\s\S]{0,400}?hidePeek\(\)/, '上锁时没有收回');
@@ -1170,9 +1121,13 @@ describe('0.36：时间轴联动 / 一天太长 / 标签全量', () => {
     assert.ok(pick, 'pick 没找到');
     assert.match(pick[1], /setFocusKey\(''\)/, '换天没有清掉上一条的高亮');
     assert.match(pick[1], /setDayAll\(false\)/, '换天没收回「展开了更早的」');
-    // ★ 2026-10-27：「挂在书上」筛完之后再点时间轴就回不去了 —— 换天必须退出来源筛选。
-    assert.match(pick[1], /if \(opts\?\.keepLink !== true\) setLinkKey\(''\)/,
-      '换天没有退出来源筛选 —— 点了时间轴还困在「只显示挂在 X 上」');
+    // ★ 0.47 反过来：换天**不**退出来源收窄。0.46 及之前它是个隐形字符串状态，
+    //   所以只能靠 `pick()` 顺手清空兜底（用户当时抱怨「点时间轴就回不去了」）。
+    //   现在它是顶上一条看得见、点得掉的横条 —— 换了天还悄悄失效，反而像横条坏了。
+    assert.equal(/setLinkKey|keepLink/.test(pick[1]), false,
+      '换天还在偷偷退出收窄 —— 横条会变成「有时有效有时无效」');
+    assert.match(diary, /aria-label="回到全部灵感"[\s\S]{0,200}?setSourceScope\(null\)/,
+      '收窄没有显式出口 —— 那就只能靠「换天偷偷失效」兜底，用户会觉得横条坏了');
   });
 });
 
@@ -1320,28 +1275,22 @@ describe('0.38：写作坞的闸 / 提示词换行 / 侧栏保留 / 来源筛选
       '把伴读那边的横滚也一起改掉了 —— 那是另一个页面的既定行为');
   });
 
-  it('★ 「挂在书上」点一行 = 收窄 + 跳那天 + 滚到最近一条', () => {
-    assert.match(diary, /const \[linkKey, setLinkKey\] = useState\(''\);/, '没有来源筛选状态');
+  it('★ 右侧「只显示这一个来源」跟着收窄走，不另存一份状态', () => {
+    // ★ 0.47：`linkKey` 不再是用户点出来的，而是从 `sourceScope` **派生**的。
+    //   两处各存一份（一个选中的书 + 一个筛选键）迟早对不上 —— 横条关掉了、
+    //   右侧还筛着某本书，就变成「一整天只剩 2 条」这种没人能解释的假象。
+    assert.match(diary, /const linkKey = sourceScope === null \? '' : sourceScope\.label;/,
+      '来源筛选键没有从收窄派生 —— 横条与右侧会各说各的');
+    assert.equal(diary.includes('setLinkKey'), false, '还在单独维护一个筛选键');
     assert.match(diary, /const listEntries = linkKey === ''[\s\S]{0,200}?sourceKey\(entry\.source\) === linkKey/,
-      '列表没有被筛选（点了书名还是显示一整天）');
+      '列表没有被筛选（收窄了却还铺一整天）');
     // 顶栏那条「7 条」说的是这一天的总量，不能跟着筛 —— 否则会以为记录变少了。
     assert.match(diary, /`\$\{visibleEntries\.length\} 条`/, '顶栏的条数被筛选影响了');
-    // 出口要一直在：筛选态必须能一键回到全部。
-    assert.match(diary, /只显示挂在 <b>\{linkKey\}<\/b> 上的/, '筛选条没说清「现在只显示什么」');
-    assert.match(diary, /onClick=\{\(\) => setLinkKey\(''\)\}>全部<\/button>/, '筛选态没有出口');
-  });
-
-  it('★ 文章也算「挂在某处」：分组认得出，且不套书名号', () => {
-    assert.match(diary, /function sourceKey\(source\)/, '没有来源归一（书和文章没法分组）');
-    // ★ 解析本体在 `diary-format.js`：写入侧（`QuickCapture`）与读取侧（这里）必须同一套，
-    //   否则「存进去的书名」和「分组用的书名」会慢慢漂开。
-    assert.match(diary, /parseSource\(source\)\?\.label/, '来源键没有走统一解析');
-    assert.match(diary, /kind: parsed\.isBook \? 'book' : 'article'/, '没有区分书和文章');
-    // ★ 0.41：文章那一块不再是独立 section，而是「按文章」这一档的标题与文案。
-    assert.match(diary, /head: '挂在文章上'/, '文章那一档不见了 —— RSS 的灵感没地方去');
-    assert.match(diary, /const linkViewRows = linkView === 'book' \? linkedBookRows\s*\n?\s*: linkView === 'article' \? linkedArticleRows/,
-      '「按文章」没有按档位取数据');
-    // 文章不套书名号这条规则本身由 `test/diary-format.test.mjs` 的 `parseSource` 用例守。
+    // 空态要说清「为什么这里是空的」，并指向横条右端的 ✕（唯一出口）。
+    assert.match(diary, /这一天没有记自这个来源的灵感。/, '收窄后的空态没说清原因');
+    // ★ 来源归一仍是**一个**函数：收窄时拿它比，写入侧（`QuickCapture`）也拿它比。
+    assert.match(diary, /function sourceKey\(source\) \{/, '没有来源归一（收窄后没法比）');
+    assert.match(diary, /parseSource\(source\)\?\.label/, '来源键没有走统一解析 —— 会和写入侧漂开');
   });
 });
 
@@ -1392,112 +1341,109 @@ describe('0.39：页脚按模块报自己的数（灵感页不该闻到私密）
 });
 
 // ---------------------------------------------------------------------------
-// 0.41：灵感侧栏的信息架构 —— 从「四块纵向平铺」改成「一个视图切换器 + 当前那一档」
+// 0.47：不是「三个选项卡」，是**一条时间轴 + 一次收窄**
 //
-// ★ 用户 2026-10-27 的原话：「时间轴无限拉长……'挂在书上'和'挂在文章上'……随着书本和
-//   文章越读越多，这两部分也会无限向下延伸，挤占空间」，建议「提升为和标签同级的
-//   筛选维度切换器」。
-// ★ 这两块的增长是**单调**的（读一本多一行，永不减少），而时间轴也在长 ——
-//   三块抢一条纵向空间，最先被挤掉的正是书和文章，而那恰好是最想按它找的维度。
-// ⇒ 改成和「按时间」平级的视图，一次只铺一档。
+// ★ 用户 2026-10-29 推翻了 0.41：「左边栏不应该分三个选项卡「按时间」、「按书本」、
+//   按文章。而应该只有按时间的时间轴……只是时间轴上的条目做个区分」。
+//   那三档不是三个视图，是同一份数据的三种排法；而「按书本」还换掉了一整套行结构
+//   （来源行 → 展开 → 条目）—— 于是同一件事有了两套排序、两套条目样式，而两排
+//   长得一样的分段控件（一个换页、一个筛选）只能靠用户自己猜。
+// ⇒ 现在只有一条时间轴。「这本书 / 这篇文章的全部灵感」是**换数据源、不换渲染**：
+//   入口在出处卡片里，出口是顶上那条带 ✕ 的横条 —— 进与出都在你正站的地方。
 // ---------------------------------------------------------------------------
-describe('0.41：灵感侧栏是一个切换器 + 当前那一档', () => {
-  it('★ 三档齐全，且每档的图标**真的存在**', () => {
-    assert.match(diary, /const LINK_VIEWS = \[/, '没有视图清单');
-    for (const value of ["value: 'time'", "value: 'book'", "value: 'article'"]) {
-      assert.ok(diary.includes(value), `视图清单里少了 ${value}`);
+describe('0.47：一条时间轴 + 出处 chip + 收窄', () => {
+  it('★ 出处 chip：有出处的才画，带字、按来源取色', () => {
+    // 用户 2026-10-29：「如果我直接在灵感页记录下的灵感，就没必要去往文章上挂……
+    //   就不应该有这个书籍按钮显示」。判据在 `entryOrigin()`，JSX 里不写三元。
+    assert.match(diary, /const origin = privateSide \? null : entryOrigin\(entry, entry\.date \?\? selected\)/,
+      '出处判据没集中在 entryOrigin() 里');
+    assert.match(diary, /\{origin !== null && \(/, 'chip 不是「有出处才渲染」—— 手记的灵感也会长出一颗');
+    // ★ 0.46 是一颗 13px 裸图标，用户看不出那是什么。现在是图标 + 出处名。
+    assert.match(diary, /<span className="npr-diary-origin-name">\{origin\.title\}<\/span>/,
+      'chip 没把出处名写出来 —— 那颗图标仍然是哑的');
+    assert.match(diary, /<Icon name=\{originIcon\(origin\)\} size=\{11\} \/>/,
+      'chip 的图标名散在 JSX 里（三元里的字面量会被图标判据当成图标名）');
+    assert.match(diary, /onClick=\{\(event\) => openOrigin\(event, origin\)\}/, 'chip 点了不开卡片');
+    // 底色按来源分（书=暖褐 / 文章=品牌色）。
+    assert.match(diaryCss, /\.npr-diary-origin\.is-book \{[^}]*background: color-mix\(in srgb, #b4762a 14%, transparent\)/,
+      '书的 chip 没有自己的底色');
+    assert.match(diaryCss, /\.npr-diary-origin\.is-article \{[^}]*background: color-mix\(in srgb, var\(--npr-accent\) 13%, transparent\)/,
+      '文章和书长得一样 —— 用户分不出这条是在哪类来源里记的');
+    // ★ 但**不铺整行**：整行底色会和 `.is-focus` 的高亮叠成第三种颜色 ——
+    //   来源是属性、高亮是状态，只有状态配铺满一行。
+    assert.equal(/npr-diary-entry\.is-(book|article)/.test(diaryCss), false,
+      '又改回「整行铺底色」了 —— 会和选中高亮叠成第三种颜色');
+  });
+
+  it('★ 卡片：封面 + 标题 + 元信息 + 记于何时 + 摘要 + 去现场', () => {
+    // 用户 2026-10-29 要的是四样：「文章的封面，文章的核心信息简介，什么时间在这篇
+    //   文章下创建，跳转到该文章」。少一样，这张卡片就答不全他的问题。
+    assert.match(diary, /<span className="npr-diary-pop-cover"/, '卡片没有封面位');
+    assert.match(diary, /<BookCover book=\{originBook\} \/>/, '书没用真封面（书架那一份）');
+    assert.match(diary, /<img className="npr-diary-pop-img" src=\{originEntry\.image\}/, '文章没用 RSS 的封面图');
+    assert.match(diary, /<span className="npr-diary-pop-tile"/, '没有封面时留了空框（该用同一套生成封面）');
+    assert.match(diary, /记于 \{originPop\.date\} \{originPop\.time\}/, '卡片没写「什么时间记的」');
+    assert.match(diary, /<p className="npr-diary-pop-summary">\{originCardSummary\}<\/p>/, '卡片没有摘要');
+    assert.match(diary, /onClick=\{\(\) => jumpOrigin\(originPop\)\}/, '卡片没有「去现场」');
+    // 元信息由数据层拼（章 / 页 / 频道·作者·发布日），不在 JSX 里堆三元。
+    assert.match(diary, /const originCardMeta = \(\(\) => \{/, '元信息没有独立的拼装函数');
+    // ★ 封面两种比例：书 2:3、文章 1:1 —— 硬把 RSS 的横图裁成 2:3 会把标题裁掉。
+    assert.match(diaryCss, /\.npr-diary-pop\.is-book \.npr-diary-pop-cover \{ height: 60px/, '书封比例变了');
+    assert.match(diaryCss, /\.npr-diary-pop\.is-article \.npr-diary-pop-cover \{ height: 40px/, '文章封面也用 2:3 了');
+  });
+
+  it('★ 文章的信息走 entryMeta，不走 getArticle（画卡片不能去抓正文）', () => {
+    // ★ `getArticle()` 会 `ensureArticle → hydrateBody` 去原文页抓正文。为了画一张
+    //   300px 的卡片发一次网络请求，离线时它就永远停在「正在读这篇文章的信息…」。
+    assert.match(diary, /await api\.entryMeta\(origin\.articleKey\)/, '没有走只读的 entryMeta');
+    assert.equal(/api\.getArticle/.test(diary), false, '又去原文页抓正文了 —— 离线时卡片会一直转');
+    // 竞态：连点两条文章时，先发的那次不许把后发的结果盖掉。
+    assert.match(diary, /if \(originLoadRef\.current !== token\) return;/, '卡片没有防竞态 —— 连点两条会显示上一条的信息');
+  });
+
+  it('★ 收窄 = 换数据源，不换渲染（同一套 days 形状、同一套 JSX）', () => {
+    assert.match(diary, /const timelineDays = sourceScope === null \? timeline\.days : sourceDays\.days/,
+      '收窄没走「换数据源」—— 又会漂出第二套行结构');
+    assert.match(diary, /const timelineBusy = sourceScope === null \? timeline\.busy : sourceDays\.busy/,
+      '忙碌态没跟着换 —— 收窄时会先闪一句「还没有灵感」');
+    assert.match(diary, /const recentDays = timelineDays/, '时间轴没吃统一的那份数据源');
+    // ★ 收窄后不能再给「加载更早」：`bySource()` 已经是全部，那个按钮在这里是假的。
+    assert.match(diary, /\{sourceScope === null && timeline\.truncated && \(/, '收窄后还留着「加载更早」');
+    // 依赖写**原始值**，不写 `sourceScope` 对象：对象每次渲染都是新的，会让这个
+    // effect 在每次父组件渲染时重扫一遍全盘。
+    assert.match(diary, /const scopeBook = sourceScope\?\.kind === 'book' \? sourceScope\.id : '';/,
+      'effect 依赖写成对象了 —— 每次渲染重扫一遍');
+  });
+
+  it('★ 横条：只在收窄时出现，说清「不是全部」，并且自带出口', () => {
+    assert.match(diary, /\{sourceScope !== null && \(\s*<div className=\{`npr-diary-scope/,
+      '横条不是「只在收窄时出现」—— 默认态又多了一个筛选控件');
+    assert.match(diary, /\{sourceDays\.busy \? '正在数…' : `全部 \$\{sourceDays\.total\} 条`\}/,
+      '横条没印出这个来源一共有多少条');
+    assert.match(diary, /aria-label="回到全部灵感"[\s\S]{0,200}?setSourceScope\(null\)/,
+      '横条没有出口 —— 进去了出不来');
+    // 暖褐必须混 `--npr-fg`：写死 #8a5610 在深色主题下就是「深棕字压在深底上」。
+    assert.match(diaryCss, /\.npr-diary-scope\.is-book \{[^}]*color: color-mix\(in srgb, #b4762a 45%, var\(--npr-fg\)\)/,
+      '暖褐写死了 —— 深色主题下看不见');
+    // 它**不 sticky**：收窄后的列表通常只有几天，钉住它会白占一行高度。
+    assert.doesNotMatch(diaryCss, /\.npr-diary-scope \{[^}]*position: sticky/,
+      '横条被钉住了 —— 收窄后列表很短，白占一行高度');
+  });
+
+  it('★ 聚合入口只在出处卡片里，不另开一个「按书本」视图', () => {
+    assert.match(diary, /function openOriginScope\(\)/, '没有「收窄到这个来源」这个动作');
+    assert.match(diary, /这本书的全部灵感/, '卡片里没有书的聚合入口');
+    assert.match(diary, /这篇文章的全部灵感/, '卡片里没有文章的聚合入口');
+    // 收窄前先把卡片关掉、把展开的天收回：两者都挂在「全部」那一份列表上。
+    const body = /function openOriginScope\(\) \{([\s\S]{0,900}?)\n  \}/.exec(diary);
+    assert.ok(body, 'openOriginScope 没找到 —— 锚点失效');
+    assert.match(body[1], /setOriginPop\(null\)/, '收窄了卡片还贴着 —— 它对应的那条已经不在列表里了');
+    assert.match(body[1], /setOpenDay\(''\)/, '收窄后还留着展开的那一天（日期集合变了）');
+    // ★ 反向对照：三档的残骸一个都不许回来。它们回来时不会报错，只会「多一块东西」。
+    for (const gone of ['LINK_VIEWS', 'linkedSources', 'linkViewRows', 'npr-diary-srcrow', 'npr-diary-views']) {
+      assert.equal(diary.includes(gone), false, `三档的残骸还在：${gone}`);
     }
-    // ★ 图标名写错**不会报错**：`Icon` 组件对未知名字是 `PATHS[name] ?? PATHS.circle`
-    //   —— 界面上会静默画成一个圆圈，看起来像「设计如此」。所以名字必须逐个对表。
-    //   （预览夹具那边更狠：`icon()` 对未知名字直接抛，跑一次就暴露。）
-    const icons = readFileSync(join(clientDir, 'icons.jsx'), 'utf8');
-    for (const name of ['clock', 'book-open', 'file-text', 'tag']) {
-      assert.match(icons, new RegExp(`\\n  '?${name}'?:`), `icons.jsx 里没有 "${name}" —— 会静默画成圆圈`);
-    }
-    for (const name of ["icon: 'clock'", "icon: 'book-open'", "icon: 'file-text'"]) {
-      assert.ok(diary.includes(name), `切换器里少了 ${name}`);
-    }
-  });
-
-  it('★ 默认「按时间」；切档要收起上一档的二级展开', () => {
-    assert.match(diary, /const \[linkView, setLinkView\] = useState\('time'\)/,
-      '默认档不是「按时间」—— 打开日记多半是看「最近写了什么」');
-    // 在「按书本」里展开了一本，切到「按文章」还留着它，下次切回来会莫名其妙展开着。
-    assert.match(diary, /setLinkView\(item\.value\); setOpenSrcKey\(''\);/,
-      '切档没有收起上一档的展开');
-  });
-
-  it('★ 切换器排在标签下面，且滚远了也不消失（sticky）', () => {
-    // 用户 2026-10-27：「调下位置，[切换器] 这部分放到标签下面」。
-    // ⇒ 顺序是「标签 → 切换器 → 当前那一档」，不是「切换器顶在最上面」。
-    const tagsAt = diary.indexOf('<Icon name="tag" size={12} />标签');
-    const viewsAt = diary.indexOf('<div className="npr-diary-views"');
-    const panelAt = diary.indexOf('<div className="npr-diary-panel">');
-    assert.ok(tagsAt > 0, '标签区块不见了');
-    assert.ok(viewsAt > 0, '没有视图切换器');
-    assert.ok(tagsAt < viewsAt, '切换器又跑到标签上面去了');
-    assert.ok(panelAt < viewsAt, '切换器在面板外面 —— 那它就不是「标签下面」，而是另一条顶栏');
-    // ★ 但它在滚动区里，所以必须自己钉住：「按书本」的列表会一直变长，
-    //   翻几屏之后要切回「按时间」还得滚回顶上找它，那就等于没有切换器。
-    assert.match(diaryCss, /\.npr-diary-viewbar \{[^}]*position: sticky[^}]*top: 0/,
-      '切换器在滚动区里却没有 sticky —— 往下翻就看不见当前是哪一档');
-    // ★ 不透明的底：sticky 条下面有行在滚，背景透明会让两行字叠在一起。
-    assert.match(diaryCss, /\.npr-diary-viewbar \{[^}]*background: var\(--npr-bg-2\)/,
-      'sticky 条没有底色 —— 滚动时下面的行会从边距里透出来');
-    assert.match(diary, /role="tablist" aria-label="灵感视图"/, '没有 tablist 语义');
-    assert.match(diary, /role="tab"\s*\n?\s*aria-selected=\{linkView === item\.value\}/, 'tab 没有 aria-selected');
-  });
-
-  it('★ 一次只铺一档：两块「长龙」必须真的消失', () => {
-    // 判据打在**旧结构**上：以前是两个并列的 section，各自条件渲染。
-    // 它们一旦回来，纵向空间就又开始被抢 —— 而这正是用户要解决的那件事。
-    assert.doesNotMatch(diary, /linkedBookRows\.length > 0 &&/, '「挂在书上」又变回了独立的纵向区块');
-    assert.doesNotMatch(diary, /linkedArticleRows\.length > 0 &&/, '「挂在文章上」又变回了独立的纵向区块');
-    assert.match(diary, /const linkViewRows = linkView === 'book' \? linkedBookRows/,
-      '没有按档位取数据 —— 两档会同时铺出来');
-    assert.match(diary, /\{linkView !== 'time' && \(/, '来源区块没有被档位条件渲染');
-    // 时间轴那一档反过来：不是「按时间」时要隐藏。
-    assert.match(diary, /<section className="npr-diary-sect" hidden=\{linkView !== 'time'\}>/,
-      '切到书/文章档时时间轴还占着位置');
-  });
-
-  it('★ 标签是三档共用的筛选器，不是第四档', () => {
-    // ★ 标签和「按什么浏览」是**正交**的：在「按书本」里也应该能按标签收窄。
-    //   做成第四档会让人以为「按标签」是一个并列的内容视图。
-    const tagsAt = diary.indexOf('<Icon name="tag" size={12} />标签');
-    assert.ok(tagsAt > 0, '标签区块不见了');
-    // 标签必须在「按档位二选一」那段之前 —— 也就是不属于任何一档。
-    const viewBranch = diary.indexOf("{linkView !== 'time' && (");
-    assert.ok(tagsAt < viewBranch, '标签被塞进了某一档里面 —— 切档就看不见了');
-  });
-
-  it('★ 空态要说清「为什么这里是空的」', () => {
-    assert.match(diary, /还没有挂在书上的灵感。读书时按 L 记一条，它就会出现在这里。/,
-      '书档空着时没有解释');
-    assert.match(diary, /还没有挂在文章上的灵感。读 RSS 时按 L 记一条，它就会出现在这里。/,
-      '文章档空着时没有解释');
-    // 文案跟着行为走：点一行现在是**展开**，不是「回到那本书」。
-    assert.doesNotMatch(diary, /点一行回到那本书的对应页/, '文案还写着旧行为 —— 用户会按错');
-    assert.match(diary, /点一本展开它的灵感/, '文案没有说清点一行会发生什么');
-  });
-
-  it('★ 来源行：封面 + 两行名称 + 元信息；展开区条目是「日期 + 时刻」两行', () => {
-    // 0.45.4 及之前这里是「一行 `书名…  [4] ∨`」：书名被截成前 8 个字，条数是右对齐
-    // 胶囊。用户 2026-10-29 的原话是「这个书本的名称非常的不明显」——
-    // 现在是 36×54 封面 + 两行名字 + 一行「N 条 · 最近 10-27」，胶囊去掉（条数进那行）。
-    assert.match(diary, /title=\{`\$\{item\.key\} · \$\{item\.count\} 条 · 最近一条在 \$\{item\.last\}`\}/,
-      '来源行没有 title 全文');
-    assert.match(diaryCss, /\.npr-diary-srcrow-title \{[^}]*-webkit-line-clamp: 2/, '名称又变回一行省略');
-    assert.match(diary, /\{item\.count\} 条 · 最近 \{stampLabel\(item\.last, ''\)\}/, '元信息没有条数/最近日期');
-    assert.doesNotMatch(diary, /npr-diary-srccount/, '条数胶囊还在 —— 它和元信息行里的「N 条」是同一件事说两遍');
-    // 单行省略仍要留在时间轴那一行上（`.npr-diary-dayrow-date`），但来源行不再用它。
-    assert.match(diaryCss, /\.npr-diary-dayrow-date \{[^}]*text-overflow: ellipsis[^}]*white-space: nowrap/,
-      '时间轴的日期行丢了单行省略');
-    // ★ 展开区的条目：`今天 16:37` / `10-27 16:37`（`stampLabel`），不是只有 `16:37`。
-    assert.match(diary, /<span className="npr-diary-idea-when">\{stampLabel\(entry\.date, entry\.time, today\)\}<\/span>/,
-      '展开区的条目又只写时刻了 —— 同一本书的灵感到来自不同天');
-    // 正文两行（原来是一行 ellipsis，一条条挤成灰带）。
-    assert.match(diaryCss, /\.npr-diary-idea-text \{[^}]*-webkit-line-clamp: 2/, '条目正文又变回单行省略');
+    assert.equal(/linkView/.test(diary), false, '还有 linkView 这个档位状态');
   });
 });
 
@@ -1580,7 +1526,12 @@ describe('0.43：私密侧栏的「本月情绪」与「那年今日」', () => 
 
   it('★ 换天 / 切模块 / 上锁都要退出情绪筛选', () => {
     // 反向对照：漏掉任何一处，都会出现「人在 3 号，顶部却写着只看本月 😄」。
-    const pick = diary.slice(diary.indexOf('const pick = (date, opts = undefined) => {'));
+    // ★ 锚点只锚到 `const pick = (date`：0.47 把 `opts` 参数删了（收窄有了显式出口，
+    //   换天不再需要「保住筛选」那个选项），写全签名会让这条判据在签名变化时**静默**
+    //   变成 indexOf(-1) —— 报的是「没有退出情绪筛选」，而真正坏的是锚点。
+    const pickAt = diary.indexOf('const pick = (date');
+    assert.notEqual(pickAt, -1, '锚点失效：pick() 不见了');
+    const pick = diary.slice(pickAt);
     assert.match(pick.slice(0, pick.indexOf('\n  };')), /setMoodFilter\(null\)/,
       'pick() 没有退出情绪筛选');
     assert.match(diary, /setMoodFilter\(null\);\s*\n\s*setDraft\(''\);/, 'lockNow() 没有退出情绪筛选');

@@ -40,6 +40,17 @@ export const SEARCH_RESULT_DEFAULT = 30;
 export const SEARCH_RESULT_MAX = 100;
 /** 时间轴一次最多给多少天。 */
 export const TIMELINE_DAY_LIMIT = 60;
+/**
+ * 「某一个来源的全部灵感」最多看多少个文件。
+ *
+ * ★ 不能借用 `SEARCH_FILE_LIMIT`（400）：那一档设计给「搜索，先看最近的」，
+ *   而这里的答案是**「这本书一共有多少条」**。三年日记就超过 400 个文件，
+ *   借用它会让横条上那个数字变成「最近 400 天里的 N 条」—— 一个看起来是全部、
+ *   其实不全的数字，正是 `bySource()` 存在的理由。
+ * ★ 仍留一个上限：目录异常（被塞了几十万个文件）时不能把主进程拖死。
+ *   两万天 = 五十多年，正常日记永远到不了。
+ */
+export const SOURCE_SCAN_LIMIT = 20_000;
 
 function coded(code, message) {
   const error = new Error(message);
@@ -644,6 +655,34 @@ export function createDiaryStore(options = {}) {
    * `before` 传一个 `YYYY-MM-DD` 就只给比它更早的（「加载更早」）。
    * `includePrivate` 同 `tags()`：默认 false，只有界面显式打开。
    */
+  /**
+   * 时间轴上一条的投影。
+   *
+   * ★ 抽出来是因为「时间轴」和「按来源看全部灵感」**必须同形**：客户端把两者塞进
+   *   同一个渲染（日期行 → 条目），形状一有偏差，症状是「按来源进来时条目点不动」
+   *   这种只存在于一条路径上的毛病 —— 而两边的单测各自都是绿的。
+   * ★ `date` 不放进条目：日分组的上层已经有它了（时间轴和按来源都一样）。
+   */
+  function timelineEntry(scope, index, entry) {
+    return {
+      scope,
+      index,
+      time: entry.time,
+      kind: entry.kind,
+      source: entry.source,
+      mood: entry.meta?.mood ?? '',
+      // 「灵感流转」的落地证据：在书里按 L 记的灵感带着这三个字段。
+      book: entry.meta?.book ?? null,
+      chapter: entry.meta?.chapter ?? null,
+      page: entry.meta?.page ?? null,
+      // 挂在文章上的那一条记的是订阅源里的 key：日记页点一下要能回到那一篇，
+      // 而不是把用户丢回「这一天」的日记列表（0.39 之前就是这样）。
+      article: entry.meta?.article ?? null,
+      tags: parseTags(entry.body),
+      preview: entry.body.replace(/\s+/g, ' ').slice(0, 160),
+    };
+  }
+
   async function timeline(input = {}) {
     const asked = Number(input.limit);
     const limit = Number.isFinite(asked) && asked > 0
@@ -654,24 +693,7 @@ export function createDiaryStore(options = {}) {
     const scan = await scanDays(({ date, scope, index, entry }) => {
       if (before !== '' && date >= before) return;
       const day = days.get(date) ?? { date, entries: [] };
-      day.entries.push({
-        scope,
-        index,
-        time: entry.time,
-        kind: entry.kind,
-        source: entry.source,
-        mood: entry.meta?.mood ?? '',
-        // 「灵感流转」的落地证据：在书里按 L 记的灵感带着这三个字段。
-        // 侧栏按 `book` 分组就是「哪些灵感已经挂到书上了」，不需要再扫一遍。
-        book: entry.meta?.book ?? null,
-        chapter: entry.meta?.chapter ?? null,
-        page: entry.meta?.page ?? null,
-        // 挂在文章上的那一条记的是订阅源里的 key：日记页点一下要能回到那一篇，
-        // 而不是把用户丢回「这一天」的日记列表（0.39 之前就是这样）。
-        article: entry.meta?.article ?? null,
-        tags: parseTags(entry.body),
-        preview: entry.body.replace(/\s+/g, ' ').slice(0, 160),
-      });
+      day.entries.push(timelineEntry(scope, index, entry));
       days.set(date, day);
     }, { includePrivate: input.includePrivate === true });
     const ordered = [...days.values()]
@@ -717,6 +739,50 @@ export function createDiaryStore(options = {}) {
     // 新的在前：读后感是「最近写了什么」的视图，不是年表。
     entries.sort((left, right) => right.date.localeCompare(left.date) || right.time.localeCompare(left.time));
     return { bookId: id, entries, total: entries.length, scanned: scan.scanned, truncated: scan.truncated };
+  }
+
+
+  /**
+   * 某一个来源（一本书 / 一篇文章）的**全部**灵感，跨天。
+   *
+   * ★ 为什么不复用 `timeline({ limit })` 再在客户端筛：时间轴只读最近 N 天
+   *   （`TIMELINE_DAY_LIMIT`），于是「这本书 7 条」实际是「最近 30 天里的 7 条」——
+   *   一个看起来是全部、其实不全的数字，比不显示更糟。这条必须扫完。
+   * ★ `kind !== '读后感'` 与时间轴的取舍**同一条**：灵感模块不看读后感，
+   *   否则「这本书的灵感」里会掺进整篇读后感。
+   * ★ 只扫公开那半边：私密模块有它自己的一套（加锁、逐条、不外泄），
+   *   把它并进这里等于绕过那道闸门。
+   * ★ 返回形状与 `timeline()` 的 `days` 完全一致（见 `timelineEntry`）：
+   *   客户端拿它直接替换 `timeline.days`，不需要第二套渲染。
+   */
+  async function bySource(input = {}) {
+    const bookId = typeof input.book === 'string' ? input.book.trim() : '';
+    const articleKey = typeof input.article === 'string' ? input.article.trim() : '';
+    if ((bookId === '') === (articleKey === '')) {
+      throw coded('BAD_SOURCE', '按来源查灵感需要且只需要一个 book / article');
+    }
+    if (bookId !== '' && !/^[A-Za-z0-9_-]{1,64}$/.test(bookId)) {
+      throw coded('BAD_BOOK', `无效的书籍 id：${bookId}`);
+    }
+    if (articleKey !== '' && articleKey.length > 200) {
+      throw coded('BAD_ARTICLE', '文章 key 太长');
+    }
+    const days = new Map();
+    const scan = await scanDays(({ date, scope, index, entry }) => {
+      if (scope !== 'public') return;
+      if (entry.kind === '读后感') return;
+      if (bookId !== '' && entry.meta?.book !== bookId) return;
+      if (articleKey !== '' && entry.meta?.article !== articleKey) return;
+      const day = days.get(date) ?? { date, entries: [] };
+      day.entries.push(timelineEntry(scope, index, entry));
+      days.set(date, day);
+    }, { fileLimit: SOURCE_SCAN_LIMIT });
+    const ordered = [...days.values()]
+      .sort((left, right) => right.date.localeCompare(left.date))
+      .map((day) => ({ ...day, entries: day.entries.sort((left, right) => left.time.localeCompare(right.time)) }));
+    const total = ordered.reduce((sum, day) => sum + day.entries.length, 0);
+    const result = { days: ordered, total, scanned: scan.scanned, truncated: scan.truncated };
+    return result;
   }
 
   /**
@@ -867,6 +933,7 @@ export function createDiaryStore(options = {}) {
     tags,
     timeline,
     byBook,
+    bySource,
     exportAll,
     stats,
     secret,

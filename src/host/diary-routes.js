@@ -100,6 +100,10 @@ function diaryErrorStatus(error) {
   if (code === 'DISK_IO' || code === 'DISK_BAD_PATH' || code === 'EIO') return 500;
   if (code === 'ENTRY_NOT_FOUND' || code === 'ENOENT') return 404;
   if (code === 'EMPTY_ENTRY' || code === 'BAD_DATE' || code === 'BAD_MONTH' || code === 'BAD_BOOK') return 400;
+  // ★ 0.47：按来源查灵感时「一个 book / article 都没给」（`BAD_SOURCE`）与
+  //   「文章 key 长得不像 key」（`BAD_ARTICLE`）都是**请求不对**。落在默认的 500 上，
+  //   用户看到的是「插件坏了」，而真正该改的是那次请求。
+  if (code === 'BAD_SOURCE' || code === 'BAD_ARTICLE') return 400;
   // 口令闸门：弱口令是**请求不对**（400），锁着是**没权限**（403），
   // 口令文件读不出来是**我们自己坏了**（500，别让用户去改口令试）。
   if (code === 'GATE_WEAK' || code === 'GATE_UNSET') return 400;
@@ -158,6 +162,7 @@ function segment(value) {
  * @param handlers.tags - 可选，`async ({ includePrivate }) => { tags, scanned, truncated }`
  * @param handlers.timeline - 可选，`async ({ limit, before, includePrivate }) => { days, total, scanned, truncated }`
  * @param handlers.byBook - 可选，`async (bookId) => { bookId, entries, total }`（读后感工作台用）
+ * @param handlers.bySource - 可选，`async ({ book, article }) => { days, total }`（「这本书 / 这篇文章的全部灵感」）
  *
  * ★ **`includePrivate: true` 只在这一层出现**（`/search` `/tags` `/timeline` 三条）。
  *   这三条都是「用户本人在这台机器上看自己的日记」，界面会给私密条目打小锁；
@@ -174,7 +179,7 @@ function segment(value) {
  */
 export function makeDiaryRoutes(handlers = {}) {
   const {
-    read, readFull, append, updateEntry, removeEntry, listMonth, dashboard, search, tags, timeline, byBook,
+    read, readFull, append, updateEntry, removeEntry, listMonth, dashboard, search, tags, timeline, byBook, bySource,
     exportAll, stats, secretStatus, reveal, gate,
     log = () => {},
   } = handlers;
@@ -451,6 +456,27 @@ export function makeDiaryRoutes(handlers = {}) {
           //   往往正是第一次想确认这件事。只回 `{ok:true}` 就等于把路径藏起来了。
           const result = await reveal();
           return sendJson(res, 200, { ok: true, ...(result ?? {}) });
+        } catch (error) {
+          return fail(res, error);
+        }
+      }
+
+      // ---- GET /source?book=<id> | ?article=<key> ---------------------------
+      //
+      // 「这个来源的全部灵感」。灵感侧栏只有一条时间轴，聚合不另开视图 ——
+      // 从出处卡片点进来，时间轴原地收窄成这个来源（0.47）。
+      // ★ 用**查询参数**而不是路径段：文章 key 是 `feed:<hash>`，走路径要再编码一层，
+      //   而编码错了的表现是「某些文章的聚合打不开」，只在部分数据上出现。
+      if (parts.length === 1 && parts[0] === 'source') {
+        if (method !== 'GET') return methodNotAllowed(res);
+        if (typeof bySource !== 'function') return sendJson(res, 501, { ok: false, error: '按来源查灵感没有接上' });
+        const book = url.searchParams.get('book') ?? '';
+        const article = url.searchParams.get('article') ?? '';
+        if ((book === '') === (article === '')) {
+          return sendJson(res, 400, { ok: false, error: '需要一个 book 或 article', code: 'BAD_SOURCE' });
+        }
+        try {
+          return sendJson(res, 200, { ok: true, ...(await bySource({ book, article })) });
         } catch (error) {
           return fail(res, error);
         }

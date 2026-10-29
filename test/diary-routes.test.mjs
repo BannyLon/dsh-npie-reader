@@ -103,6 +103,8 @@ before(async () => {
     tags: options => fullStore.tags(options),
     timeline: options => fullStore.timeline(options),
     byBook: bookId => fullStore.byBook(bookId),
+    // 0.47：「这本书 / 这篇文章的全部灵感」—— 时间轴的一次收窄，走的是同一个 store。
+    bySource: options => fullStore.bySource(options),
     exportAll: options => fullStore.exportAll(options),
     stats: () => fullStore.stats(),
     secretStatus: () => fullStore.secret.status(),
@@ -504,6 +506,98 @@ describe('GET /book/:bookId（读后感工作台）', () => {
 
   it('方法不对 ⇒ 405', async () => {
     assert.equal((await callFull('/book/l29fc96838f2d0e5d', { method: 'POST' })).status, 405);
+  });
+});
+
+/**
+ * 0.47：`GET /source?book=` / `?article=` —— 灵感的聚合成了一次**收窄**。
+ *
+ * ★ 为什么是查询参数而不是路径段：文章 key 是 `feed:<hash>`，走路径要再编码一层，
+ *   编错了只在**部分数据**上出现（「有些文章的聚合打不开」）。
+ */
+describe('GET /source（这本书 / 这篇文章的全部灵感）', () => {
+  const BOOK = 'lbook_source_1';
+  const OTHER = 'lbook_source_2';
+  const ARTICLE = 'feed:294';
+
+  // ★ 用**远一点**的日期 + 独立 book id：这个文件里的 `fullStore` 是共用的，
+  //   落在 2026-08 会改到「这一天 / 这个月 / 那年今日」那几条断言的结果。
+  before(async () => {
+    await fullStore.append({
+      date: '2025-06-01', time: '09:00', kind: '灵感', body: '书里的第一条',
+      source: '《九三年》 · 第 3 章', meta: { book: BOOK, chapter: 3 },
+    });
+    await fullStore.append({
+      date: '2025-06-03', time: '21:00', kind: '灵感', body: '书里的第二条',
+      source: '《九三年》 · 第 9 章', meta: { book: BOOK, chapter: 9 },
+    });
+    await fullStore.append({
+      date: '2025-06-02', time: '08:00', kind: '灵感', body: '另一本书的',
+      source: '《悲惨世界》', meta: { book: OTHER },
+    });
+    await fullStore.append({
+      date: '2025-06-02', time: '22:00', kind: '灵感', body: '文章下的',
+      source: '第 294 期', meta: { article: ARTICLE },
+    });
+    // ★ 两件**不该**混进来：整篇读后感属于读后感工作台；私密那半边有它自己的闸门。
+    await fullStore.append({ date: '2025-06-03', time: '23:00', kind: '读后感', body: '一整篇读后感', meta: { book: BOOK } });
+    await fullStore.append({
+      date: '2025-06-04', time: '10:00', kind: '灵感', body: '私密里的',
+      vis: 'private', meta: { book: BOOK },
+    });
+  });
+
+  it('没接上 ⇒ 501（老版本插件不会因此整块 500）', async () => {
+    assert.equal((await call(`/source?book=${BOOK}`)).status, 501);
+  });
+
+  it('按书 ⇒ 200，跨天、日期倒序、同一天按时刻升序', async () => {
+    const res = await callFull(`/source?book=${BOOK}`);
+    assert.equal(res.status, 200);
+    assert.equal(res.json.ok, true);
+    assert.equal(res.json.total, 2);
+    assert.deepEqual(res.json.days.map(day => day.date), ['2025-06-03', '2025-06-01']);
+    assert.deepEqual(res.json.days.map(day => day.entries.map(e => e.preview)), [['书里的第二条'], ['书里的第一条']]);
+    // 形状与时间轴的 `days` **完全一致**：客户端拿它直接替换 `timeline.days`。
+    const first = res.json.days[0].entries[0];
+    assert.deepEqual(Object.keys(first).sort(),
+      ['article', 'book', 'chapter', 'index', 'kind', 'mood', 'page', 'preview', 'scope', 'source', 'tags', 'time']);
+    assert.equal(first.chapter, 9, '章节没带出来 —— 卡片上的「第 9 章」就没了');
+    assert.equal(first.date, undefined, '条目里不该有 date（上层 day 已经有）');
+  });
+
+  it('★ 读后感与私密都不进来（两件都是别处的门）', async () => {
+    const res = await callFull(`/source?book=${BOOK}`);
+    const bodies = res.json.days.flatMap(day => day.entries.map(e => e.preview));
+    assert.equal(bodies.includes('一整篇读后感'), false, '读后感混进了「这本书的灵感」');
+    assert.equal(bodies.includes('私密里的'), false, '私密那半边被并进来了 —— 绕过了它的闸门');
+    assert.equal(bodies.includes('另一本书的'), false, '别的书的灵感混进来了');
+  });
+
+  it('★ 按文章：key 里那个冒号不用手动编码（所以走查询参数）', async () => {
+    const res = await callFull(`/source?article=${encodeURIComponent(ARTICLE)}`);
+    assert.equal(res.status, 200);
+    assert.equal(res.json.total, 1);
+    assert.equal(res.json.days[0].entries[0].preview, '文章下的');
+    assert.equal(res.json.days[0].entries[0].article, ARTICLE);
+  });
+
+  it('两个都给 / 都不给 ⇒ 400 BAD_SOURCE（不是「两个都筛一遍」）', async () => {
+    for (const path of ['/source', '/source?book=&article=', `/source?book=${BOOK}&article=${encodeURIComponent(ARTICLE)}`]) {
+      const res = await callFull(path);
+      assert.equal(res.status, 400, path);
+      assert.equal(res.json.code, 'BAD_SOURCE', path);
+    }
+  });
+
+  it('book id 非法 ⇒ 400 BAD_BOOK（不是 500）', async () => {
+    const res = await callFull('/source?book=a%20b');
+    assert.equal(res.status, 400);
+    assert.equal(res.json.code, 'BAD_BOOK');
+  });
+
+  it('方法不对 ⇒ 405', async () => {
+    assert.equal((await callFull(`/source?book=${BOOK}`, { method: 'POST' })).status, 405);
   });
 });
 

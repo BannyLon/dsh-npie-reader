@@ -60,7 +60,7 @@ import {
 } from '../diary-format.js';
 import {
   appendDiaryEntry, downloadDiaryBundle, fetchDiaryBook, fetchDiaryDashboard, fetchDiaryDay, fetchDiaryExport,
-  fetchDiaryGate, fetchDiaryMonth, fetchDiarySecret, fetchDiaryStats, fetchDiaryTags, fetchDiaryTimeline,
+  fetchDiaryGate, fetchDiaryMonth, fetchDiarySecret, fetchDiarySource, fetchDiaryStats, fetchDiaryTags, fetchDiaryTimeline,
   lockDiaryGate, removeDiaryEntry, revealDiaryFolder, searchDiary, setupDiaryGate, unlockDiaryGate,
 } from './diary-api.js';
 import { fetchAnnotations, fetchBooks, fetchStates } from './library-api.js';
@@ -106,6 +106,17 @@ function dayLabel(date, today) {
  */
 function entryKey(entry) {
   return `${entry?.scope ?? 'public'}-${entry?.index ?? 0}`;
+}
+
+/**
+ * ISO 时间串 → `YYYY-MM-DD`。不是合法时间就空串。
+ * ★ 订阅源的 `publishedAt` 是 ISO（`toISOString()`），而 `stampLabel` 认的是
+ *   `YYYY-MM-DD`：直接喂 ISO 会原样印出 `2026-10-28T09:12:33.000Z`。
+ */
+function isoDay(iso) {
+  const date = new Date(typeof iso === 'string' ? iso : '');
+  if (Number.isNaN(date.getTime())) return '';
+  return dateKey(date);
 }
 
 /** 一条记录/一天的第一个心情（没有就空串）。老版本的 emoji 会在这里被换成当前这版。 */
@@ -200,35 +211,20 @@ const AI_DAY_PROMPT = [
  */
 const TAG_SIDE = 6;
 
-/**
- * 灵感侧栏的**一级视图**：按时间 / 按书本 / 按文章。
- *
- * ★ 为什么要有这个切换器（用户 2026-10-27 的原话）：
- *   「挂在书上 / 挂在文章上……随着书本和文章越读越多，这两部分也会无限向下延伸，
- *     挤占空间」，建议「提升为和标签同级的筛选维度切换器」。
- *   在此之前三块是**纵向平铺**的：时间轴先长到几十天，书和文章永远被压在栏底，
- *   读得越多越找不到 —— 而它们的数量增长是**单调**的，平铺迟早会失败。
- * ★ 为什么不是四个（把「标签」也做成视图）：标签是**筛选器**，不是内容列表 ——
- *   它和这三档是正交的（在「按书本」里也应该能按标签收窄）。所以它留在切换器下面，
- *   三档都能用，而不是变成第四档（那会让人以为「按标签」是一个并列的内容视图）。
- */
-const LINK_VIEWS = [
-  { value: 'time', label: '按时间', icon: 'clock' },
-  { value: 'book', label: '按书本', icon: 'book-open' },
-  { value: 'article', label: '按文章', icon: 'file-text' },
-];
 
 /**
- * 「出处」浮层的外框尺寸。
+ * 出处卡片的外框尺寸。
  *
- * ★ 写死而不是量 DOM：浮层要在**第一次出现**时就摆对位置，而那一刻它还没渲染。
+ * ★ 写死而不是量 DOM：卡片要在**第一次出现**时就摆对位置，而那一刻它还没渲染。
  *   宽度与 `refinements.css` 里 `.npr-diary-pop` 的 `width` 必须同值 ——
  *   判据 `test/diary-origin.test.mjs` 会读 CSS 核对这一对数字。
- * ★ 高度是**估算**（日期行 20 + 出处最多两行 36 + 按钮 28 + 内边距 24 ≈ 132）：
- *   它只参与「别被窗口底边切掉」的夹取，估大一点比估小安全（估小了会被裁）。
+ * ★ 0.47 从 248 加宽到 300：卡片多了封面、标题、摘要（0.46 只有三行字）。
+ *   300 是「能放下两行摘要」与「不把 320px 的右栏盖住」之间的那个数。
+ * ★ 高度是**估算**（封面 60 + 标题两行 40 + 摘要两行 36 + 时间 20 + 按钮 30 +
+ *   内边距 24 ≈ 210）：它只参与「别被窗口底边切掉」的夹取，估大一点比估小安全。
  */
-const ORIGIN_POP_W = 248;
-const ORIGIN_POP_H = 132;
+const ORIGIN_POP_W = 300;
+const ORIGIN_POP_H = 214;
 
 /**
  * 浮层里**不搜索时**最多铺多少个。
@@ -322,94 +318,6 @@ function sourceKey(source) {
   return parseSource(source)?.label ?? '';
 }
 
-/**
- * 时间轴里「已经挂在一个来源上」的灵感，按来源归拢。
- *
- * ★ 按 `source` 而不是 `meta.book` 分组：`source` 是**人可读**的（`《深度工作》· 第 3 章`），
- *   `meta.book` 是书架内部 id，书单被 `BOOKS_PAGE_LIMIT` 截断时前端根本映射不出书名。
- *   两者在「按 L 记灵感」时是同时写入的，用哪个都不丢信息，但只有 `source` 能直接显示。
- * ★ 带上 `entryKey`（最近那一条的）：只给日期是不够的 —— 那一天可能有七条，
- *   跳过去用户看到的还是原来那一屏，只是日期变了，这就是「点了不对应」。
- * ★ 还要带上**去现场**需要的那几样（`bookId` / `page` / `article`）：
- *   0.38 点一行只会在日记里筛出这一天的那几条，用户 2026-10-27 的原话是
- *   「挂在书上为什么还会有日记显示的内容」—— 点一本书该回那本书，不是看日记。
- */
-function linkedSources(days) {
-  const map = new Map();
-  for (const day of days) {
-    for (const entry of day.entries ?? []) {
-      if (entry.scope !== 'public' || entry.kind === '读后感') continue;
-      const parsed = parseSource(entry.source);
-      if (parsed === null) continue;
-      const key = parsed.label;
-      const cell = map.get(key) ?? {
-        key,
-        kind: parsed.isBook ? 'book' : 'article',
-        title: parsed.title,
-        count: 0,
-        last: day.date,
-        entryKey: entryKey(entry),
-        bookId: '',
-        article: '',
-        page: null,
-        chapter: null,
-        /*
-         * 这个来源底下的**条目本身**。
-         * ★ 0.41 之前只存 count：侧栏只能显示「《深度工作》 4 条」，点一下跳去别处，
-         *   用户要问「哪四条」。现在一级视图就是「按书本」，展开必须能直接看到这四条，
-         *   否则「按书本」只是一个更长的跳转列表，没有回答那个问题。
-         * ★ 存的是**快照**（time/preview/date/key），不是 `entry` 引用：
-         *   `timeline.days` 每次刷新都会换一批对象，拿着旧引用去比 `focusKey` 会失效。
-         */
-        entries: [],
-      };
-      cell.entries.push({
-        date: day.date,
-        time: entry.time ?? '',
-        preview: entry.preview ?? '',
-        entryKey: entryKey(entry),
-        // 序号用来在同一天里定先后。不存它就只能按 `entryKey` 字符串排，
-        // 而那是 `public-10` / `public-9` —— 字典序会把 10 排到 9 前面。
-        index: Number.isInteger(entry.index) ? entry.index : 0,
-      });
-      cell.count += 1;
-      // 同一天内按记录顺序往后覆盖：最后写入的就是这一天最新的那一条。
-      if (day.date >= cell.last) {
-        cell.last = day.date;
-        cell.entryKey = entryKey(entry);
-        // 页码/章节必须跟 bookId **同源**：一个是「回哪本书」，一个是「回到第几页」，
-        // 取了两条不同记录的话会落到另一本书的页上。
-        if (entry.book) {
-          cell.bookId = entry.book;
-          cell.page = Number.isInteger(entry.page) ? entry.page : null;
-          cell.chapter = Number.isInteger(entry.chapter) ? entry.chapter : null;
-        }
-        if (entry.article) cell.article = entry.article;
-      }
-      // 兜底：最近那条缺 id（老条目只写了书名）时，用同组里另一条有 id 的顶上 ——
-      // 否则「回到那本书」会在一组数据里时灵时不灵。
-      if (cell.bookId === '' && entry.book) {
-        cell.bookId = entry.book;
-        cell.page = Number.isInteger(entry.page) ? entry.page : null;
-        cell.chapter = Number.isInteger(entry.chapter) ? entry.chapter : null;
-      }
-      if (cell.article === '' && entry.article) cell.article = entry.article;
-      map.set(key, cell);
-    }
-  }
-  return [...map.values()]
-    .map((cell) => ({
-      ...cell,
-      // 展开区里**最近的在最上面**：从「按书本」进来的人想知道「我最近对这本书想到什么」。
-      entries: [...cell.entries].sort((left, right) => (
-        right.date.localeCompare(left.date) || right.index - left.index
-      )),
-    }))
-    .sort((left, right) => (
-      right.last.localeCompare(left.last) || right.count - left.count || left.title.localeCompare(right.title)
-    ));
-}
-
 export function DiaryApp({
   onExit, notify, api, SessionProvider, renderSlot, intent, onOpenBook, onOpenArticle,
 }) {
@@ -489,7 +397,6 @@ export function DiaryApp({
    *   对应上刚才点的那个书名。所以点一行必须同时把列表**收窄**成那个来源，
    *   并给出「现在只显示挂在《X》上的 · 全部」这条出口。
    */
-  const [linkKey, setLinkKey] = useState('');
   /**
    * 正开着「出处」浮层的那个锚点（`null` = 关着）。
    *
@@ -498,6 +405,18 @@ export function DiaryApp({
    *   都要重量一遍。打开那一下算一次，滚动就关掉（见下面那个 effect）。
    */
   const [originPop, setOriginPop] = useState(null);
+  /**
+   * 卡片里那段「这篇文章是什么」：`{ busy, entry, error }`。
+   *
+   * ★ 只有文章才有（书的封面/书名/章节在日记条目里就带齐了）。走
+   *   `api.entryMeta()`，**不是** `api.getArticle()` —— 后者会去原文页抓正文，
+   *   为了显示一张出处卡片发一个网络请求，慢且可能失败。
+   * ★ `error` 单独存：取不到（订阅源里的 key 已经失效）和「还没取完」要分开，
+   *   前者该说「这篇已经不在订阅里了」，后者只说「正在读…」。
+   */
+  const [originMeta, setOriginMeta] = useState({ busy: false, entry: null, error: '' });
+  /** 连开两张卡片时，只让最后那张的数据落地（先发后至会把 A 的摘要贴到 B 上）。 */
+  const originLoadRef = useRef(0);
   const [timeline, setTimeline] = useState({ days: [], truncated: false, busy: false, more: false });
 
   // ---- 读后感工作台 -------------------------------------------------------
@@ -606,20 +525,29 @@ export function DiaryApp({
   /** 侧栏时间轴里展开的那一天（同一次只展开一天）。 */
   const [openDay, setOpenDay] = useState('');
   /**
-   * 侧栏一级视图：`time` / `book` / `article`（见 `LINK_VIEWS`）。
+   * 「只看一个来源」（0.47）。`null` = 全部。
    *
-   * ★ 不持久化：每次进页面回到「按时间」。理由是这三档的**默认值就是最常用的那个**
-   *   （打开日记多半是看「最近写了什么」），而记住上次的档位会让「怎么今天打开是书单」
-   *   变成一个要重新学习的状态。真要按书翻，点一下的代价小于「界面不按预期打开」。
+   * ★ 侧栏**只有一条时间轴**，聚合不再是第三个选项卡，而是时间轴的**一次收窄**：
+   *   数据换了来源，渲染一行都不换（`bySource()` 返回的 `days` 与时间轴同形）。
+   *   用户 2026-10-29：「左边栏不应该分三个选项卡，而应该只有按时间的时间轴……
+   *   只是时间轴上的条目做个区分」。而「这本书我记了什么」并没有消失 ——
+   *   它从出处卡片进来，带着「你现在只看一个来源」那一条可关的横条。
+   * ★ 不持久化：它是**一次提问的答案**，不是一档常驻视图。切模块就收回。
    */
-  const [linkView, setLinkView] = useState('time');
+  const [sourceScope, setSourceScope] = useState(null);
+  /** 来源收窄时的时间轴数据（`bySource()`，与 `timeline.days` 同形）。 */
+  const [sourceDays, setSourceDays] = useState({ days: [], total: 0, busy: false, error: '' });
   /**
-   * 「按书本 / 按文章」里**二级展开**的那一个来源（`linkedSources()` 的 key）。
+   * 右侧列表按来源收窄用的键。
    *
-   * ★ 同一次只展开一个：268px 的侧栏，展开两个就等于把第三个挤出去，
-   *   而用户来这一档是**找一个来源**，不是同时看两个。
+   * ★ 从 `sourceScope` **派生**，不另存一份状态：两处各存一个布尔/字符串，
+   *   迟早会出现「侧栏已经回到全部、右边还在筛」那种半截状态 —— 而那时
+   *   用户看到的是「这一天的灵感少了几条」，找不到原因。
+   * ★ 必须声明在 `sourceScope` **之后**：`const` 有暂时性死区，挪到前面会直接
+   *   抛 `Cannot access 'sourceScope' before initialization`（0.47.0 首版就是这样，
+   *   整个日记页白屏）。
    */
-  const [openSrcKey, setOpenSrcKey] = useState('');
+  const linkKey = sourceScope === null ? '' : sourceScope.label;
   const [stats, setStats] = useState(null);
   /**
    * AI 面板的宽度（百分比），可拖动。
@@ -916,21 +844,46 @@ export function DiaryApp({
     // 「只看本月某一档情绪」也是这一页的临时视图：切走再回来应该落在今天，
     // 而不是落在一张三天前的筛选列表上。
     setMoodFilter(null);
+    // 来源收窄同理：它是「对这个来源的一次提问」，换模块就不该还留着。
+    setSourceScope(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moduleValue]);
 
-  /*
-   * 「按书本」要封面，而书架平时只在读后感页拉过（见上一条 effect）。
-   * ★ 依赖只写 `moduleValue / linkView`：把 `books.busy` 也写进去，一次失败的加载
-   *   会让这个 effect 反复重跑（busy 变 true → 重跑 → …）。
-   * ★ 拉不到就用生成封面（`sourceCover` 的兜底），**不是**空着等 —— 侧栏不该有一个
-   *   「等一个可能永远不来的请求」的骨架格。
+  /**
+   * 来源收窄时的时间轴数据。
+   *
+   * ★ 依赖写 `scopeBook / scopeArticle` 两个**原始值**，不写 `sourceScope` 对象：
+   *   对象每次渲染都是新的（`setSourceScope({...})`），写对象会让这个 effect
+   *   在每次父组件渲染时重跑一遍全盘扫描 —— 而结果一个字都不会变。
+   * ★ 关掉收窄时把数据也清掉：留着它，「回到全部」那一下会先用旧数据闪一下，
+   *   而那份旧数据里只有某一个来源的几天。
    */
+  const scopeBook = sourceScope?.kind === 'book' ? sourceScope.id : '';
+  const scopeArticle = sourceScope?.kind === 'article' ? sourceScope.id : '';
   useEffect(() => {
-    if (moduleValue !== 'inspiration' || linkView !== 'book') return;
-    if (books.items.length === 0 && !books.busy) void loadBooks();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [moduleValue, linkView]);
+    if (scopeBook === '' && scopeArticle === '') {
+      setSourceDays({ days: [], total: 0, busy: false, error: '' });
+      return undefined;
+    }
+    let alive = true;
+    setSourceDays({ days: [], total: 0, busy: true, error: '' });
+    (async () => {
+      try {
+        const payload = await fetchDiarySource({ book: scopeBook, article: scopeArticle });
+        if (!alive) return;
+        setSourceDays({
+          days: payload.days ?? [],
+          total: payload.total ?? 0,
+          busy: false,
+          error: '',
+        });
+      } catch (cause) {
+        if (!alive) return;
+        setSourceDays({ days: [], total: 0, busy: false, error: cause.message });
+      }
+    })();
+    return () => { alive = false; };
+  }, [scopeBook, scopeArticle]);
 
   /*
    * 出处浮层的四条关闭路径：Esc、点外面（遮罩）、滚动、改窗口大小。
@@ -1019,13 +972,12 @@ export function DiaryApp({
   /**
    * 换一天。
    *
-   * ★ `keepLink` 只给「回到现场」那条兜底路径用（见 `openSource`）：点书名正常是
-   *   打开那本书，只有拿不到书 id 时才留在日记里筛。除此之外**任何手动导航**
-   *   （时间轴、月历、前一天/后一天、搜索命中、写完一条）都必须退出来源筛选。
-   *   用户 2026-10-27 的原话：「点击选择完挂在书上的条目后，再点击时间轴的条目
-   *   就回不去了」—— 筛选是**对着一个来源**的临时视图，换了地方就该失效。
+   * ★ 换天**不再**清掉来源收窄（0.47）。它现在是一条显式的横条，看得见、点得掉，
+   *   所以「换了天就悄悄失效」反而会让人以为横条坏了。0.46 及之前它是个隐形的
+   *   字符串状态，才必须靠 `pick()` 顺手清空来兜底（用户当时抱怨的正是
+   *   「点击时间轴的条目就回不去了」）。
    */
-  const pick = (date, opts = undefined) => {
+  const pick = (date) => {
     setSelected(date);
     setConfirmKey('');
     /* 换一天时把「刚才定位到哪一条」和「展开了更早的」都收回：
@@ -1033,7 +985,6 @@ export function DiaryApp({
        `jump()` 是 pick + setFocusKey，同一个事件里后者生效（React 批处理，顺序即结果）。 */
     setFocusKey('');
     setDayAll(false);
-    if (opts?.keepLink !== true) setLinkKey('');
     // 情绪筛选也是「对着这个月的一档情绪」的临时视图 —— 换了天就该失效，
     // 否则点进去看到的是那一天，而顶部还写着「只看本月 😄」。
     setMoodFilter(null);
@@ -1051,8 +1002,8 @@ export function DiaryApp({
    *   收掉，用户的原话是「为什么这个搜索框我一点击内容条它就消失」。
    *   导航和检索是两个独立的状态，不该互相打断：搜索框只由搜索按钮与 Esc 关。
    */
-  const jump = (date, key = '', opts = undefined) => {
-    pick(date, opts);
+  const jump = (date, key = '') => {
+    pick(date);
     if (key) {
       setFocusKey(key);
       // 序号每次都动：同一条再点一次也要滚回去（`setFocusKey` 同值是 no-op）。
@@ -1150,9 +1101,11 @@ export function DiaryApp({
     event.stopPropagation();
     const box = event.currentTarget.getBoundingClientRect();
     const spot = placeRowMenu({
-      // 右对齐：浮层宽 248，而那颗图标在 320px 面板里离右缘只剩十几像素 ——
-      // 左对齐会被窗口右缘切掉一半。
-      x: box.right - ORIGIN_POP_W,
+      // ★ 0.46 是**右对齐**（`box.right - 宽度`），因为那时卡片只有 248 宽、贴着
+      //   右端那颗图标才不别扭。现在卡片 300 宽，右对齐会被窗口右缘推回去、
+      //   离来源那条 chip 越来越远 —— 改成贴 chip 的**左缘**，让它看起来是从
+      //   那句话上「长出来」的。
+      x: box.left,
       y: box.bottom + 6,
       width: ORIGIN_POP_W,
       height: ORIGIN_POP_H,
@@ -1160,6 +1113,59 @@ export function DiaryApp({
       viewportHeight: window.innerHeight,
     });
     setOriginPop({ ...origin, left: spot.left, top: spot.top });
+    void loadOriginCard(origin);
+  }
+
+  /**
+   * 卡片里那段「这篇文章是什么」。
+   *
+   * ★ 书的封面来自**书架那一份**（`BookCover` 需要 `ext` 才能画真封面），
+   *   而灵感模块平时不拉书架 —— 所以这里补一次，且只在需要时拉：
+   *   为了画一张卡片去拉整个书架，等于每次打开灵感页都多一次请求。
+   */
+  async function loadOriginCard(origin) {
+    const token = originLoadRef.current + 1;
+    originLoadRef.current = token;
+    if (origin.kind !== 'article') {
+      setOriginMeta({ busy: false, entry: null, error: '' });
+      if (books.items.length === 0 && !books.busy) void loadBooks();
+      return;
+    }
+    if (origin.articleKey === '' || typeof api?.entryMeta !== 'function') {
+      setOriginMeta({ busy: false, entry: null, error: '' });
+      return;
+    }
+    setOriginMeta({ busy: true, entry: null, error: '' });
+    try {
+      const payload = await api.entryMeta(origin.articleKey);
+      if (originLoadRef.current !== token) return;
+      setOriginMeta({ busy: false, entry: payload?.entry ?? null, error: '' });
+    } catch (cause) {
+      if (originLoadRef.current !== token) return;
+      setOriginMeta({ busy: false, entry: null, error: cause.message });
+    }
+  }
+
+  /**
+   * 「这个来源的全部灵感」—— 把时间轴收窄，不另开视图。
+   *
+   * ★ 先关卡片再收窄：卡片挂在条目上，条目属于「全部」那一份列表；列表一换，
+   *   它对应的那条就不在了，而卡片还贴在屏幕上说着它。
+   * ★ 同时展开的那一天也收回：收窄后日期集合变了，`openDay` 指着一个不在列表里的
+   *   日期会让「哪几天是展开的」变成随机状态。
+   */
+  function openOriginScope() {
+    if (originPop === null) return;
+    const scope = {
+      kind: originPop.kind,
+      id: originScopeId,
+      label: originPop.label,
+      title: originPop.title,
+    };
+    setOriginPop(null);
+    if (scope.id === '') return;
+    setOpenDay('');
+    setSourceScope(scope);
   }
 
   /**
@@ -1172,7 +1178,7 @@ export function DiaryApp({
    */
   function jumpOrigin(item) {
     const target = originTarget(item);
-    setOrigin(null);
+    setOriginPop(null);
     if (target === null) return;
     if (target.kind === 'book' && typeof onOpenBook === 'function') {
       onOpenBook({ bookId: target.bookId, title: target.title, page: target.page, chapter: target.chapter });
@@ -1414,34 +1420,9 @@ export function DiaryApp({
     void runSearch(query);
   }
 
-  /** 退出筛选：连查询词一起清掉，侧栏回到「标签 / 时间轴 / 挂在书上」三块检索器。 */
+  /** 退出检索：连查询词一起清掉，侧栏回到「标签 + 时间轴」。 */
   function clearFilter() {
     setSearch((current) => ({ ...current, open: false, query: '', hits: [], scanned: 0, truncated: false }));
-    setLinkKey('');
-  }
-
-  /**
-   * 点侧栏「挂在书上 / 挂在文章上」里的一行：**回到现场**。
-   *
-   * ★ 0.38 的做法是在日记里把列表收窄成这个来源，并跳到那一天。用户的判词是
-   *   「挂在书上为什么还会有日记显示的内容」——他说得对：点一本书得到一页日记，
-   *   那这个分组就只是日记的一个筛选器，不是「挂回那一章」。
-   *   ⇒ 现在点书就**打开那本书**（翻到最近那条所在的页），点文章就打开那一篇。
-   * ★ 拿不到 id 时才退化成筛选（0.30 之前的老条目只有书名、书也可能已经被删）。
-   *   兜底走 `keepLink: true`：`pick()` 默认会清筛选，这里要留着它。
-   * ★ 宿主没给回调（夹具、别的外壳）同样落到筛选 —— 不画一颗点了没反应的按钮。
-   */
-  function openSource(item) {
-    if (item.kind === 'book' && item.bookId !== '' && typeof onOpenBook === 'function') {
-      onOpenBook({ bookId: item.bookId, title: item.title, page: item.page, chapter: item.chapter });
-      return;
-    }
-    if (item.kind === 'article' && item.article !== '' && typeof onOpenArticle === 'function') {
-      onOpenArticle(item.article);
-      return;
-    }
-    setLinkKey(item.key);
-    jump(item.last, item.entryKey, { keepLink: true });
   }
 
   async function reveal() {
@@ -1596,68 +1577,64 @@ export function DiaryApp({
     box.querySelector('input')?.focus();
   }
 
+  /**
+   * 时间轴当下要铺的那份数据：来源收窄时换成 `bySource()`，否则就是普通时间轴。
+   *
+   * ★ 两者**同形**（`days[{date, entries[]}]`），所以这里是 `const` 换数据源，
+   *   而不是换渲染 —— 聚合视图之所以不该是第三个选项卡，就是为了不出现第二套
+   *   条目样式与第二套排序（0.47 之前「按书本」两样都有）。
+   * ★ 必须排在 `recentDays` **之前**：`const` 有暂时性死区，下面再引用它就是白屏。
+   */
+  const timelineDays = sourceScope === null ? timeline.days : sourceDays.days;
+  const timelineBusy = sourceScope === null ? timeline.busy : sourceDays.busy;
+
   /** 灵感侧栏的「时间轴」：日期 + 条数 + **当天的条目**（点开才展开，见 openDay）。 */
-  const recentDays = timeline.days
+  const recentDays = timelineDays
     .map((item) => {
       const ideas = (item.entries ?? []).filter((entry) => entry.kind !== '读后感' && entry.scope === 'public');
       return { date: item.date, count: ideas.length, entries: ideas };
     })
     .filter((item) => item.count > 0);
 
-  /**
-   * 「按书本」里每一行的封面：优先用**书架上那一份**（有真封面），否则按书名画一张。
-   *
-   * ★ 为什么要去书架取而不是直接用 `timeline()` 带着的那几个字段：`timeline()`
-   *   只给 `bookId` 和 `source` 那串文字，没有 `ext` —— 而 `ext` 决定了这张封面是
-   *   EPUB 真封面、PDF 首页还是生成封面（`coverKind()`）。少了它只能全画成生成封面，
-   *   于是一本 EPUB 在书架页有封面、在灵感页没有，看起来像两本不同的书。
-   * ★ 找不到（已移出书架 / 网盘书还没进库）就退回生成封面，**不画空白格子**：
-   *   那块格子是这本书在侧栏里的锚点，空着会把整行的行首撬掉。
-   * ★ 只在「按书本」里取封面：文章没有封面图（`timeline()` 不带 `image`，为一串
-   *   文章各拉一次正文来取图是把侧栏变成一个会发请求的列表），用同一种色块 +
-   *   首字的生成封面代替 —— 与「书架上没有封面的书」长得一样，本来也该一样。
-   */
+  /** 书架那份：书名 → `ext`（决定这本书画真封面还是生成封面）。 */
   const bookById = new Map(books.items.map((item) => [item.id, item]));
-  const sourceCover = (item) => (item.kind === 'book'
-    ? (bookById.get(item.bookId) ?? { id: '', title: item.title })
-    : null);
-
-  /*
-   * 侧栏「挂在书上 / 挂在文章上」两块，分开放。
-   * ★ 为什么分开而不是一个「挂在读过的东西上」：书与文章在**去哪里**这件事上不同 ——
-   *   书能回到那一章，文章能回到那一篇。混在一列里，用户看到的只是一个书名号的差别，
-   *   而那个差别恰好是「点了会发生什么」的全部提示。
-   */
-  const linked = linkedSources(timeline.days);
-  const linkedBookRows = linked.filter((item) => item.kind === 'book');
-  const linkedArticleRows = linked.filter((item) => item.kind === 'article');
-
+  /** 出处卡片上那块封面用的书；找不到就是 `null`（卡片改画首字块，不留空框）。 */
+  const originBook = originPop?.kind === 'book' ? (bookById.get(originPop.bookId) ?? null) : null;
   /**
-   * 当前视图要铺的那一列（时间档为空 —— 时间轴是另一套结构，不走这里）。
+   * 出处卡片的三行字：标题 / 出处元信息 / 摘要。
    *
-   * ★ 只算**当前这一档**：三档同时铺就是原来的纵向长龙，切换器等于没做。
-   * ★ 文案跟着档位走：同一句「点一行回到那本书」在「按书本」里是错的 ——
-   *   现在点一行是**展开这一本的灵感**，「去书里」是展开区里的第二个按钮。
-   *   文案说错，用户就会按错（而且会以为功能坏了）。
+   * ★ 标题**优先用订阅源那条**（`titleZh || title`），退回到日记里记下的那串：
+   *   记灵感时写进 `source` 的可能是个截断过的标题，而 `entryMeta()` 给的是完整的。
+   * ★ 章节页码只在**确实是整数**时印出来：0.30 的老条目没有这两个字段，
+   *   印一个 `第 0 章` 是在编造。
    */
-  const linkViewRows = linkView === 'book' ? linkedBookRows
-    : linkView === 'article' ? linkedArticleRows
-      : [];
-  const linkViewMeta = linkView === 'book'
-    ? {
-      icon: 'book-open',
-      head: '挂在书上',
-      note: '读书时按 L 记的灵感 —— 点一本展开它的灵感，展开区里可以回到那本书。',
-      empty: '还没有挂在书上的灵感。读书时按 L 记一条，它就会出现在这里。',
-      jump: '打开这本书',
+  const originEntry = originMeta.entry;
+  const originCardTitle = originPop === null
+    ? ''
+    : (originPop.kind === 'article'
+      ? (originEntry?.titleZh || originEntry?.title || originPop.title)
+      : originPop.title);
+  const originCardMeta = (() => {
+    if (originPop === null) return '';
+    if (originPop.kind === 'book') {
+      const bits = [];
+      if (Number.isInteger(originPop.chapter) && originPop.chapter > 0) bits.push(`第 ${originPop.chapter} 章`);
+      if (Number.isInteger(originPop.page) && originPop.page > 0) bits.push(`第 ${originPop.page} 页`);
+      return bits.join(' · ');
     }
-    : {
-      icon: 'file-text',
-      head: '挂在文章上',
-      note: '读 RSS 时按 L 记的灵感 —— 点一篇展开它的灵感，展开区里可以回到那一篇。',
-      empty: '还没有挂在文章上的灵感。读 RSS 时按 L 记一条，它就会出现在这里。',
-      jump: '打开这篇文章',
-    };
+    if (originEntry === null) return '';
+    const bits = [];
+    if (originEntry.channelName) bits.push(originEntry.channelName);
+    if (originEntry.author) bits.push(originEntry.author);
+    const day = isoDay(originEntry.publishedAt);
+    if (day !== '') bits.push(`${stampLabel(day, '', today)}发布`);
+    return bits.join(' · ');
+  })();
+  const originCardSummary = originPop?.kind === 'article' ? (originEntry?.summary ?? '') : '';
+  /** 聚合视图的入口要的那个 id（老条目只有书名，没有 id 就点不进聚合）。 */
+  const originScopeId = originPop === null
+    ? ''
+    : (originPop.kind === 'book' ? originPop.bookId : originPop.articleKey);
 
   /**
    * 出处浮层里那颗「去现场」按钮该不该出现。
@@ -1851,12 +1828,17 @@ export function DiaryApp({
             </div>
           ) : moduleValue === 'inspiration' ? (
             /*
-             * 灵感侧栏 = 三块**检索器**，不是一份内容列表。
+             * 灵感侧栏 = 一条时间轴 + 一个标签云。
              *
-             * ★ 0.31.0 这里是一份「最近 30 天、每天每条的时间 + 正文前 160 字」。
-             *   那是把右边的正文抄了一遍：既没有提供「按标签检索」，也没有提供
-             *   「按时间轴检索」—— 它只提供了「按日期跳转」，却占满了整栏。
-             *   用户 2026-10-27 的原话是「实在是不符合常理」，说的就是这个。
+             * ★ 0.47 之前这里是「按时间 / 按书本 / 按文章」三档切换器。用户 2026-10-29
+             *   推翻了它：「不应该分三个选项卡……而应该只有按时间的时间轴，不管是在
+             *   RSS 文章阅读期间还是在读电子书期间按 L 创建的灵感还是在灵感专题页下记录
+             *   的灵感都显示在这条时间轴上」。那三档不是三个视图，是同一份数据的三种排法；
+             *   而「按书本」还换掉了一整套行结构 —— 同一个问题有两套排序、两套条目样式。
+             * ★ 聚合（这本书 / 这篇文章的全部灵感）现在是时间轴的**一次收窄**：入口在
+             *   出处卡片里，出口是这一栏顶上那条带 ✕ 的横条。换数据源，不换渲染。
+             * ★ 0.31.0 这里是一份「最近 30 天、每天每条的时间 + 正文前 160 字」，那是把
+             *   右边的正文抄了一遍 —— 用户 2026-10-27 的原话是「实在是不符合常理」。
              */
             <div className="npr-diary-panel">
               <section className="npr-diary-sect">
@@ -1896,31 +1878,36 @@ export function DiaryApp({
               </section>
 
               {/*
-               * ★ 切换器在标签**下面**（用户 2026-10-27：「这部分放到标签下面」）。
-               *   但它仍然必须**钉住**：面板是 `overflow: auto`，而「按书本」的列表会
-               *   一直变长 —— 往下翻几十行之后要切回「按时间」，还得滚回顶上去找它，
-               *   那就等于没有切换器。所以它在滚动区里 + `position: sticky`。
+               * 「只看一个来源」的横条（0.47）。**只在收窄时出现** —— 默认态这一栏
+               * 一个筛选控件都没有，用户 2026-10-29 要的正是这个：「不应该分三个
+               * 选项卡，而应该只有按时间的时间轴」。
+               * ★ 它承担两件事：告诉用户「现在不是全部」，以及给一条明确的退路。
+               *   少了前一件，用户会以为自己的灵感变少了（这正是选项卡时代的病）；
+               *   少了后一件，就变成了「进去了出不来」。
                */}
-              <div className="npr-diary-viewbar">
-                <div className="npr-diary-views" role="tablist" aria-label="灵感视图">
-                  {LINK_VIEWS.map((item) => (
-                    <button key={item.value} type="button" role="tab"
-                      aria-selected={linkView === item.value}
-                      className={`npr-diary-view${linkView === item.value ? ' is-on' : ''}`}
-                      title={`${item.label}浏览灵感`}
-                      onClick={() => { setLinkView(item.value); setOpenSrcKey(''); }}>
-                      <Icon name={item.icon} size={13} />
-                      <span>{item.label}</span>
-                    </button>
-                  ))}
+              {sourceScope !== null && (
+                <div className={`npr-diary-scope${sourceScope.kind === 'book' ? ' is-book' : ' is-article'}`}>
+                  <Icon name={originIcon(sourceScope)} size={12} />
+                  <span className="npr-diary-scope-title" title={sourceScope.title}>{sourceScope.title}</span>
+                  <span className="npr-diary-scope-count">
+                    {sourceDays.busy ? '正在数…' : `全部 ${sourceDays.total} 条`}
+                  </span>
+                  <button type="button" className="npr-diary-scope-close" aria-label="回到全部灵感"
+                    title="回到全部灵感" onClick={() => setSourceScope(null)}>
+                    <Icon name="x" size={12} />
+                  </button>
                 </div>
-              </div>
+              )}
 
-              <section className="npr-diary-sect" hidden={linkView !== 'time'}>
+              <section className="npr-diary-sect">
                 <h2 className="npr-diary-sect-head"><Icon name="clock" size={12} />时间轴</h2>
-                {timeline.busy && <p className="npr-diary-sect-note">正在读…</p>}
-                {!timeline.busy && recentDays.length === 0 && (
-                  <p className="npr-diary-sect-note">还没有灵感。右边写一句就行。</p>
+                {timelineBusy && <p className="npr-diary-sect-note">正在读…</p>}
+                {!timelineBusy && recentDays.length === 0 && (
+                  <p className="npr-diary-sect-note">
+                    {sourceScope === null
+                      ? '还没有灵感。右边写一句就行。'
+                      : sourceDays.error !== '' ? sourceDays.error : '这个来源下还没有灵感。'}
+                  </p>
                 )}
                 {/*
                  * ★ 点日期展开当天的时间轴。用户 2026-10-27：「侧边栏是不是要有时间轴啊，
@@ -1971,7 +1958,8 @@ export function DiaryApp({
                  * ★ 禁用态给的是「正在读…」而不是灰掉不动 —— 一次翻页要读 30 个文件，
                  *   在慢盘上能到几百毫秒，没有文字的话那一下像没点中。
                  */}
-                {timeline.truncated && (
+                {/* 收窄时不翻页：`bySource()` 已经是全部，「加载更早」在这里是假的。 */}
+                {sourceScope === null && timeline.truncated && (
                   <button type="button" className="npr-diary-dayload"
                     disabled={timeline.more || timeline.busy}
                     onClick={() => void loadMoreTimeline()}>
@@ -1982,118 +1970,6 @@ export function DiaryApp({
                 )}
               </section>
 
-              {/*
-                * 「按书本 / 按文章」——**同一套结构，两种数据**。
-                *
-                * ★ 为什么不再分成两个 section 纵向铺：用户 2026-10-27 的原话是
-                *   「随着书本和文章越读越多，这两部分也会无限向下延伸，挤占空间」。
-                *   它们的增长是**单调**的（读一本多一行，永不减少），而时间轴也在长 ——
-                *   三块抢一条纵向空间，最先被挤掉的就是书和文章，正是最想按它找的那个维度。
-                * ⇒ 改成和「按时间」平级的视图，一次只铺一档，谁也不挤谁。
-                *
-                * ★ 点一行 = **展开这一本的灵感**，不是直接跳走。
-                *   0.39 点一行是「回到那本书」，那是当时的正确解 —— 因为 0.38 点书得到的是
-                *   一页日记（用户：「挂在书上为什么还会有日记显示的内容」）。
-                *   但到了「按书本」这个视图里，用户的问题是「这本书我想过什么」，
-                *   直接跳走等于把这个问题又推回给阅读器。
-                * ★ 两种行为**不压在同一个点击目标上**：行是展开，「打开这本书」是展开区里的
-                *   第二个按钮。同一个按钮既是展开又是跳转，用户永远猜不准这一下会发生什么。
-                */}
-              {linkView !== 'time' && (
-                <section className="npr-diary-sect">
-                  <h2 className="npr-diary-sect-head">
-                    <Icon name={linkViewMeta.icon} size={12} />{linkViewMeta.head}
-                    {linkViewRows.length > 0 && (
-                      <span className="npr-diary-sect-badge">{linkViewRows.length}</span>
-                    )}
-                  </h2>
-                  <p className="npr-diary-sect-note">{linkViewMeta.note}</p>
-                  {linkViewRows.length === 0 && <p className="npr-diary-sect-note">{linkViewMeta.empty}</p>}
-                  {linkViewRows.map((item) => {
-                    const open = openSrcKey === item.key;
-                    // 有没有「现场」可回：书要 bookId、文章要 article 字段。
-                    // 0.30 之前的老条目只有书名 —— 那种就只能展开，不能跳（跳了也没地方去）。
-                    const canJump = item.kind === 'book' ? item.bookId !== '' : item.article !== '';
-                    const cover = sourceCover(item);
-                    return (
-                      <div key={item.key} className={`npr-diary-src${open ? ' is-open' : ''}`}>
-                        <button type="button" aria-expanded={open}
-                          className={`npr-diary-srcrow${linkKey === item.key ? ' npr-selected' : ''}`}
-                          /* 长书名仍要能看全：侧栏 268px 装不下
-                             「《译文名著文库》 076[法]雨果-九三年（叶尊译）」，两行之后
-                             还是省略号 —— 全文只在这里。 */
-                          title={`${item.key} · ${item.count} 条 · 最近一条在 ${item.last}`}
-                          onClick={() => setOpenSrcKey(open ? '' : item.key)}>
-                          {/*
-                            * 封面位（0.46.0）。用户 2026-10-29：「首先是这个书本的名称
-                            * 非常的不明显，建议可以放上书封面」——
-                            *   三十个字的书名在 268px 里怎么排版都认不出来，而一块封面
-                            *   是**认出来的**。书用真封面（`BookCover`：EPUB 封面 /
-                            *   PDF 首页 / 生成封面三选一），文章用同一套生成封面。
-                            */}
-                          <span className="npr-diary-srcrow-cover" aria-hidden="true">
-                            {cover !== null
-                              ? <BookCover book={cover} />
-                              : (
-                                <span className="npr-diary-srcrow-tile"
-                                  style={{ '--npr-cover-h': String(coverHue(item.title)) }}>
-                                  {coverGlyph(item.title)}
-                                </span>
-                              )}
-                          </span>
-                          <span className="npr-diary-srcrow-main">
-                            {/* 名称**两行**：一行省略等于把「这本是哪本」这个问题
-                                又推回给封面。两行 + 封面 = 认得出。 */}
-                            <span className="npr-diary-srcrow-title">{item.title}</span>
-                            <span className="npr-diary-srcrow-meta">
-                              {item.count} 条 · 最近 {stampLabel(item.last, '')}
-                            </span>
-                          </span>
-                          <Icon name={open ? 'chevron-up' : 'chevron-down'} size={13} />
-                        </button>
-                        {open && (
-                          <div className="npr-diary-srcbody">
-                            <ul className="npr-diary-idealist">
-                              {item.entries.map((entry) => (
-                                <li key={`${entry.date}-${entry.entryKey}`}>
-                                  {/*
-                                    * 展开区的条目（0.46.0 重排）。
-                                    * ★ 日期 + 时刻两行起步（`stampLabel`）：同一本书的
-                                    *   灵感到来自不同天，只写 `16:37` 回答不了「哪天」——
-                                    *   而这里**没有「天」这一层**（不像时间轴，日期在上一行）。
-                                    * ★ 第二行是正文，**换行而不是省略在一行里**：原来
-                                    *   `12px + 单行 ellipsis` 一条条挤成灰带，用户的原话是
-                                    *   「这个条目的显示也极其丑陋」。
-                                    */}
-                                  <button type="button"
-                                    className={`npr-diary-idea${entry.date === selected && focusKey === entry.entryKey ? ' is-focus' : ''}`}
-                                    title={`${entry.date} ${entry.time} ${entry.preview}`}
-                                    onClick={() => jump(entry.date, entry.entryKey)}>
-                                    <span className="npr-diary-idea-when">{stampLabel(entry.date, entry.time, today)}</span>
-                                    <span className="npr-diary-idea-text">{entry.preview}</span>
-                                  </button>
-                                </li>
-                              ))}
-                            </ul>
-                            {canJump ? (
-                              <button type="button" className="npr-diary-dayload"
-                                onClick={() => openSource(item)}>
-                                {linkViewMeta.jump} ›
-                              </button>
-                            ) : (
-                              <p className="npr-diary-sect-note">
-                                {item.kind === 'book'
-                                  ? '这本书已经不在书架上了，只能在这里看这些灵感。'
-                                  : '这篇已经不在订阅里了，只能在这里看这些灵感。'}
-                              </p>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </section>
-              )}
             </div>
           ) : moduleValue === 'private' ? (
             <div className="npr-diary-panel">
@@ -2608,23 +2484,12 @@ export function DiaryApp({
                         </small>
                       </section>
                     )}
-                    {/* 来源筛选条：回答「列表为什么只剩这几条」，并给出口。
-                        与标签筛选条共用一套样式 —— 两者是同一件事（收窄），
-                        长成两个样子会让人以为是两种模式。 */}
-                    {linkKey !== '' && (
-                      <div className="npr-diary-filterbar">
-                        <span className="npr-diary-filterbar-text">
-                          只显示挂在 <b>{linkKey}</b> 上的{loading ? '…' : ` · 这天 ${listEntries.length} 条`}
-                        </span>
-                        <button type="button" className="npr-diary-filterbar-clear" onClick={() => setLinkKey('')}>全部</button>
-                      </div>
-                    )}
                     {loading && <div className="npr-empty">正在读这一天…</div>}
                     {!loading && listEntries.length === 0 && (
                       linkKey !== '' ? (
                         <div className="npr-diary-blank">
-                          <p>这一天没有挂在 {linkKey} 上的灵感。</p>
-                          <p>侧栏那一行统计的是<strong>所有天</strong>；换到有记录的那一天，或者点上面的「全部」。</p>
+                          <p>这一天没有记自这个来源的灵感。</p>
+                          <p>侧栏那条横条统计的是<strong>所有天</strong>；换到有记录的那一天，或者点它右端的 ✕ 回到全部。</p>
                         </div>
                       ) : (
                         <div className="npr-diary-blank">
@@ -2653,7 +2518,7 @@ export function DiaryApp({
                       const privateSide = entry.scope === 'private';
                       const key = entryKey(entry);
                       /*
-                       * 这一条的**出处**（0.46.0）。
+                       * 这一条的**出处**（0.47：从一颗 13px 图标改成带字的 chip）。
                        * ★ 判据在 `entryOrigin()` 里，不散在这里写三元：它决定「有没有那颗
                        *   图标」，而错了在界面上看不出来（多一颗点了没内容的 / 少一颗该有的）。
                        * ★ 私密条目一律不给：私密那半边不进 `timeline()`，也不按来源组织，
@@ -2689,25 +2554,29 @@ export function DiaryApp({
                               <span className="npr-diary-mood" title="这一条记下的心情">{entryMood}</span>
                             )}
                             {privateSide && <span className="npr-diary-lock" title="私密：本地加密存储">私密</span>}
-                            {entry.source && <span className="npr-diary-source-tag" title={entry.source}>引自 {entry.source}</span>}
+                            {/*
+                              * 出处 chip（0.47）。
+                              *
+                              * ★ 0.46 是一个 13px 的图标按钮，藏在右侧动作列里 —— 用户的
+                              *   判词是「这个图标点击就可以弹出…」但没人知道那颗图标是什么，
+                              *   而且 13px 在 268px 的栏里不好点。现在它是**带字的**：
+                              *   图标 + 出处标题，一眼能看出「这条是在哪儿记的」。
+                              * ★ 没有出处（灵感页手记的那条）**整颗不渲染**。空格本身就是
+                              *   第三态，不需要再加一枚「手记」标记 —— 用户 2026-10-29：
+                              *   「如果我直接在灵感页记录下的灵感……就不应该有这个书籍按钮显示」。
+                              * ★ 底色与图标是**同一个信息**（书=琥珀 / 文章=蓝）：整行铺底色会
+                              *   和 `is-focus` 的高亮叠成第三种颜色，而来源是属性、不是状态。
+                              */}
+                            {origin !== null && (
+                              <button type="button"
+                                className={`npr-diary-origin${origin.kind === 'book' ? ' is-book' : ' is-article'}`}
+                                title={`${origin.source} · 点开看出处`}
+                                onClick={(event) => openOrigin(event, origin)}>
+                                <Icon name={originIcon(origin)} size={11} />
+                                <span className="npr-diary-origin-name">{origin.title}</span>
+                              </button>
+                            )}
                             <span className="npr-diary-entry-actions">
-                              {/*
-                                * 出处（0.46.0，取代原来的「挂到书上」）。
-                                * ★ 用户 2026-10-29：「如果是在 RSS 阅读期间按 L 添加的灵感，
-                                *   那这条点击书籍图标弹出的是什么时间、在哪篇文章下记录的
-                                *   这条灵感，并有一个直接跳转到这篇文章的按钮」；
-                                *   以及「直接在灵感页记录下的灵感……就不应该有这个书籍按钮显示」。
-                                *   ⇒ 图标 = 出处，没有出处就没有图标；点了给「何时 + 在哪儿的」
-                                *   和一条去现场的按钮。
-                                */}
-                              {origin !== null && (
-                                <button type="button" className="npr-diary-action"
-                                  title={`看这条灵感的出处：${origin.source}`}
-                                  aria-label="看这条灵感的出处"
-                                  onClick={(event) => openOrigin(event, origin)}>
-                                  <Icon name={originIcon(origin)} size={13} />
-                                </button>
-                              )}
                               {confirmKey === key ? (
                                 <button type="button" className="npr-diary-action is-danger" disabled={busyKey !== ''}
                                   onClick={() => void removeAt(entry)}>
@@ -2924,8 +2793,8 @@ export function DiaryApp({
         *   删掉别的一条都不会让它指错条目。
         */}
       {/*
-        * 「出处」浮层（0.46.0）。挂在 `.npr-diary-workarea` 上、`position: fixed`，
-        * 坐标在打开那一下算好（见 `openOrigin`）。
+        * 「出处」浮层（0.46 起，0.47 换成「封面 + 摘要」的卡片）。挂在
+        * `.npr-diary-workarea` 上、`position: fixed`，坐标在打开那一下算好（见 `openOrigin`）。
         * ★ 不是模态窗：它只说三件事（何时 / 出处 / 去现场），盖住整页就太重了 ——
         *   用户点开只是想确认「这条是我在哪篇里写的」。所以只有一层很淡的遮罩，
         *   点外面 / Esc / 滚动都关掉。
@@ -2933,24 +2802,79 @@ export function DiaryApp({
       {originPop && (
         <>
           <div className="npr-diary-pop-backdrop" onClick={() => setOriginPop(null)} />
-          <div className="npr-diary-pop" role="dialog" aria-label="这条灵感的出处"
+          <div className={`npr-diary-pop is-${originPop.kind}`} role="dialog"
+            aria-label={originPop.kind === 'book' ? '这条灵感记在哪本书里' : '这条灵感记在哪篇文章下'}
             style={{ left: originPop.left, top: originPop.top }}>
-            <p className="npr-diary-pop-head">
-              <Icon name="clock" size={11} />
-              <span className="npr-diary-pop-when">
-                {/* 完整年月日 + 时刻：这里问的就是「什么时候记的」，
-                    `stampLabel` 的今天/昨天缩写在这个问题下反而含糊。 */}
-                {originPop.date} {originPop.time}
+            {/*
+              * 封面 + 标题 + 元信息（0.47）。
+              * ★ 用户 2026-10-29：「文章的封面，文章的核心信息简介，什么时间在这篇文章下
+              *   创建，跳转到该文章等等内容」。三样都在这儿：封面（书取书架那一份，
+              *   文章取 `entry.image`）、标题两行、下面那段摘要。
+              * ★ 没有封面图**不留空框**：用同一套生成封面（首字 + 书名哈希的色相），
+              *   与书架上「没有封面的书」长得一样 —— 它们本来都是「只有名字的来源」。
+              */}
+            <div className="npr-diary-pop-top">
+              <span className="npr-diary-pop-cover" aria-hidden="true">
+                {originPop.kind === 'book'
+                  ? (originBook !== null
+                    ? <BookCover book={originBook} />
+                    : (
+                      <span className="npr-diary-pop-tile"
+                        style={{ '--npr-cover-h': String(coverHue(originPop.title)) }}>
+                        {coverGlyph(originPop.title)}
+                      </span>
+                    ))
+                  : (originEntry?.image
+                    ? <img className="npr-diary-pop-img" src={originEntry.image} alt="" />
+                    : (
+                      <span className="npr-diary-pop-tile"
+                        style={{ '--npr-cover-h': String(coverHue(originCardTitle)) }}>
+                        {coverGlyph(originCardTitle)}
+                      </span>
+                    ))}
               </span>
-            </p>
-            <p className="npr-diary-pop-src" title={originPop.source}>{originPop.source}</p>
-            {canOriginJump ? (
-              <button type="button" className="npr-diary-pop-jump" onClick={() => jumpOrigin(originPop)}>
-                {originJumpLabel(originPop)} ›
-              </button>
-            ) : (
-              <p className="npr-diary-pop-note">{originMissNote(originPop)}</p>
+              <span className="npr-diary-pop-text">
+                <span className="npr-diary-pop-title" title={originCardTitle}>{originCardTitle}</span>
+                {originCardMeta !== '' && <span className="npr-diary-pop-meta">{originCardMeta}</span>}
+                <span className="npr-diary-pop-when">
+                  <Icon name="clock" size={11} />
+                  {/* 完整年月日 + 时刻：这里问的就是「什么时候记的」，
+                      `stampLabel` 的今天/昨天缩写在这个问题下反而含糊。 */}
+                  记于 {originPop.date} {originPop.time}
+                </span>
+              </span>
+            </div>
+            {originPop.kind === 'article' && originMeta.busy && (
+              <p className="npr-diary-pop-note">正在读这篇文章的信息…</p>
             )}
+            {originCardSummary !== '' && (
+              <p className="npr-diary-pop-summary">{originCardSummary}</p>
+            )}
+            {originPop.kind === 'article' && !originMeta.busy && originEntry === null && (
+              <p className="npr-diary-pop-note">{originMeta.error !== ''
+                ? `这篇文章的信息没读出来：${originMeta.error}`
+                : '这篇文章已经不在订阅里了，只能看这条灵感的出处。'}</p>
+            )}
+            <div className="npr-diary-pop-foot">
+              {canOriginJump ? (
+                <button type="button" className="npr-diary-pop-jump" onClick={() => jumpOrigin(originPop)}>
+                  {originJumpLabel(originPop)} ›
+                </button>
+              ) : (
+                <p className="npr-diary-pop-note">{originMissNote(originPop)}</p>
+              )}
+              {/*
+                * 聚合视图的**唯一**入口（0.47）。侧栏不设「按书本 / 按文章」——
+                * 那三档是同一份数据的三种排法，把它们做成并列的选项卡，用户
+                * 就得先学会「我现在在哪一档」。这里点一下，时间轴原地收窄，
+                * 顶上出现一条可关的横条：入口与出口都在**你正站的地方**。
+                */}
+              {originScopeId !== '' && (
+                <button type="button" className="npr-diary-pop-more" onClick={openOriginScope}>
+                  {originPop.kind === 'book' ? '这本书的全部灵感' : '这篇文章的全部灵感'} ›
+                </button>
+              )}
+            </div>
           </div>
         </>
       )}

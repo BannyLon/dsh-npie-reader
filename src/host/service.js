@@ -438,6 +438,7 @@ export class RssService {
         tags: options => this.diary.tags(options),
         timeline: options => this.diary.timeline(options),
         byBook: bookId => this.diary.byBook(bookId),
+        bySource: options => this.diary.bySource(options),
         exportAll: options => this.diary.exportAll(options),
         stats: () => this.diary.stats(),
         secretStatus: () => this.diary.secret.status(),
@@ -1399,6 +1400,26 @@ export class RssService {
   // ------------------------------------------------------------------
   // Articles & versions
   // ------------------------------------------------------------------
+
+  /**
+   * 一条订阅条目的**本地元数据**（标题 / 摘要 / 封面 / 订阅源 / 发布时间）。
+   *
+   * ★ 不能拿 `getArticle` 顶替：它会 `ensureArticle` → `hydrateBody`，也就是
+   *   **为了显示一张「这条灵感是在哪篇文章下记的」小卡片去原文页抓全文**——
+   *   慢、可能失败，而用户只是想确认出处。这条只读内存与磁盘缓存，不发请求。
+   * ★ 找不到就返回 `{ entry: null }`，不抛：订阅源换过、文章被清理、0.30 的老条目
+   *   都可能指向一个不存在的 key，而那时界面该说的是「这篇已经不在订阅里了」，
+   *   不是让整张卡片报错。
+   */
+  async entryMeta(request) {
+    const { key } = request ?? {};
+    await this.ready;
+    const trimmed = typeof key === 'string' ? key.trim() : '';
+    if (trimmed === '') return { entry: null };
+    const entry = this.store.findFeedEntry(trimmed) ?? this.store.getArticle(trimmed) ?? null;
+    if (!entry) return { entry: null };
+    return { entry: this.entrySummary(entry) };
+  }
 
   async getArticle(request) {
     const { key } = request ?? {};
@@ -3073,7 +3094,7 @@ export class RssService {
 // Mark every public method above as Remote-exported.
 {
   const names = [
-    'listChannels', 'listEntries', 'searchArticles', 'getArticle', 'getVersionContent',
+    'listChannels', 'listEntries', 'searchArticles', 'getArticle', 'entryMeta', 'getVersionContent',
     'generateVersion', 'fetchFullText', 'refresh', 'listSubscriptions', 'addSubscription',
     'removeSubscription', 'updateSubscription', 'backfillSubscription', 'opmlPreview', 'opmlImport', 'opmlExport',
     'listCatalog', 'addCatalogSource', 'removeCatalogSource', 'setCatalogHidden',

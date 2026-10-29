@@ -115,16 +115,6 @@ const BLOCKS = {
     <button type="button" aria-pressed="false">私密日记</button>
     <button type="button" aria-pressed="false">读后感</button>
   </div>`,
-  /**
-   * ★ 灵感视图那一排按钮是「13px 图标 + 4px 间距 + 文字」（`DiaryApp.jsx` 的 JSX），
-   *   夹具里必须把图标换成等尺寸占位 —— 漏了它，量出来的内容宽是 39 而不是 56，
-   *   「78px 一段装不装得下」就成了一道假的空判据（0.44.4 吃过夹具与真结构不一致的亏）。
-   */
-  linkviews: `<div class="npr-diary-views" role="tablist" aria-label="灵感视图">
-    <button type="button" role="tab" aria-selected="true" class="npr-diary-view is-on"><span class="probe-icon"></span>按时间</button>
-    <button type="button" role="tab" aria-selected="false" class="npr-diary-view"><span class="probe-icon"></span>按书本</button>
-    <button type="button" role="tab" aria-selected="false" class="npr-diary-view"><span class="probe-icon"></span>按文章</button>
-  </div>`,
   settings: `<div class="npr-segmented" role="group" aria-label="版心宽度">
     <button type="button" aria-pressed="true">590</button>
     <button type="button" aria-pressed="false">720</button>
@@ -138,17 +128,17 @@ const BLOCKS = {
 };
 
 /** 全部八处。 */
-const ALL = ['primary', 'filters', 'shelf', 'libtabs', 'modes', 'linkviews', 'settings', 'viewswitch'];
+const ALL = ['primary', 'filters', 'shelf', 'libtabs', 'modes', 'settings', 'viewswitch'];
 /** 一级：有槽的几处（含 RSS 阅读页那条筛选、图标开关）。 */
-const TROUGH = ['primary', 'libtabs', 'modes', 'linkviews', 'settings', 'viewswitch'];
+const TROUGH = ['primary', 'libtabs', 'modes', 'settings', 'viewswitch'];
 /** 二级：无槽的两条筛选（书架阅读页、书架页）。结构上**不许**有底座，这是层级本身。 */
 const FLAT = ['filters', 'shelf'];
 /** 有文字的那几处才参与「字号 / 字体 / 字重」比较（图标开关没有文字）。 */
 const TEXT = ALL.filter((key) => key !== 'viewswitch');
 /** 占满一行的几处：等分宽度 / 左缘同一条竖线只在它们之间比。 */
-const ROWS = ['primary', 'filters', 'shelf', 'libtabs', 'modes', 'linkviews'];
+const ROWS = ['primary', 'filters', 'shelf', 'libtabs', 'modes'];
 /** 等分的那几处（一级、有文字；设置的分段器与二级筛选条按文案定宽）。 */
-const SPLIT = ['primary', 'libtabs', 'modes', 'linkviews'];
+const SPLIT = ['primary', 'libtabs', 'modes'];
 
 const PROBE = `
 <script>

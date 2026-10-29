@@ -134,6 +134,20 @@ export async function fetchDiaryTimeline({ limit, before } = {}) {
 }
 
 /**
+ * 「这个来源的全部灵感」（0.47）。
+ *
+ * ★ 与 `/timeline` 分开而不是给它加参数：时间轴只读最近 N 天，而聚合视图问的是
+ *   **全部** —— 拿分页接口凑一个「全部」出来，两者迟早会在某个数字上对不上。
+ * ★ 返回的 `days` 与 `/timeline` 同形，客户端直接替换数据源，不换渲染。
+ */
+export async function fetchDiarySource({ book = '', article = '' } = {}) {
+  const params = new URLSearchParams();
+  if (book) params.set('book', book);
+  if (article) params.set('article', article);
+  return await jsonRequest(`/source?${params.toString()}`);
+}
+
+/**
  * 密钥状态。**会触发取密钥**（首次会在登录钥匙串里建一条），所以只能由一次明确的
  * 用户动作调它 —— 不要放进轮询、也不要放进页脚的 `stats`。
  */
