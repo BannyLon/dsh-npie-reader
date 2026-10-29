@@ -1747,3 +1747,93 @@ describe('0.44.2：写作区的纸面与区块标签', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// 0.48：读后感侧栏的「已写 / 待写」、文艺一点的名单标题、以及**丢掉的封面**
+//
+// ★ 用户 2026-10-29 三句话，其实是三件互相独立的事：
+//   ① 「读完的」这个标题太 low —— 这是**文案层级**的问题（0.47.3 也踩过同一条：
+//      标题不明显，真因是层级倒挂，不是颜色）；
+//   ② 「混杂了写过读后感和没有写过读后感的」—— 需要一次**区分**，且这个区分必须
+//      来自宿主（不先问一遍，界面只能逐本点进去看有没有内容）；
+//   ③ 「书的封面为什么没有获取到，为什么在电子书阅读这里可以获取到」—— 这是
+//      **一条数据被中间层丢了**：`pdfCoverDataUrl()` 第一件事是判 `book.size > 0`。
+// ---------------------------------------------------------------------------
+describe('读后感侧栏：区分已写 / 待写，封面不再退化成方块', () => {
+  const css = read('refinements.css');
+
+  it('★ 名单标题是「读毕之书」，不是「读完的」', () => {
+    assert.match(diary, /读毕之书/, '标题还是「读完了 / 读完的」—— 用户嫌它太直白');
+    assert.doesNotMatch(diary, />读完的</, '旧标题还在渲染');
+    // 与 0.47.3 的「你的灵感时间线」同一档：主标题（is-lead）+ 图标块。
+    assert.match(diary, /npr-diary-sect-head is-lead[\s\S]{0,220}?读毕之书/,
+      '这份名单又退回普通小标题了 —— 它是这一页的主结构');
+    assert.match(diary, /npr-diary-sect-mark[\s\S]{0,80}?读毕之书/, '标题旁没有图标块');
+  });
+
+  it('★ 封面：`loadBooks` 必须把 `size` 带过来（PDF 首页渲染的唯一入口）', () => {
+    // `pdfCoverDataUrl()` 的守卫是 `Number(book?.size ?? 0)`，为 0 就直接抛。
+    // 0.47 这里只留了 `{ id, title, ext }` ⇒ 同一条书在阅读页有真封面、在这里是方块。
+    const load = /async function loadBooks\(\)[\s\S]*?\n  \}/.exec(diary)?.[0] ?? '';
+    assert.notEqual(load, '', '找不到 loadBooks —— 锚点失效，断言是假绿');
+    assert.match(load, /size: Number\(item\.size\) \|\| 0/, '书单里又没带 size —— 读后感侧栏的 PDF 封面会全部退化成首字方块');
+    // 反向对照：把它删掉，判据必须变红（否则这条断言只是在测「文件里有 size 这个词」）。
+    assert.doesNotMatch(load.replace(/size: Number\(item\.size\) \|\| 0,/, ''), /size: Number\(item\.size\)/,
+      '反向对照失败：替换没生效');
+  });
+
+  it('★ 封面：EPUB 走 id、PDF 走 size —— two 条来源都要在 book 对象上留得下', () => {
+    // 这条守的是「别把 book 收窄成 { id, title }」：EPUB 只认 id，PDF 只认 size，
+    // 收窄一次就有一半格式没封面，而界面上只是「不同书长得不一样」。
+    assert.match(diary, /ext: item\.ext,/, '书单里没有 ext —— BookCover 连「走哪条来源」都判不出来');
+    assert.match(diary, /filename: item\.filename,/, '书单里没有 filename（书名兜底与排查都靠它）');
+  });
+
+  it('★ 区分来自宿主的一次索引，不是逐本点开看', () => {
+    assert.match(diary, /fetchReflectionIndex/, '没有拉读后感索引 —— 只能靠点开每本书才知道写没写');
+    assert.match(diary, /const writtenBooks = readBooks\.filter\(\(item\) => \(shelfMeta\(item\)\?\.count \?\? 0\) > 0\)/,
+      '「写过」的判据不是 count > 0');
+    assert.match(diary, /const blankBooks = readBooks\.filter\(\(item\) => shelfMeta\(item\) === null\)/,
+      '「待写」的判据不是「索引里没有这本书」');
+  });
+
+  it('★ 索引取不到时**不标**，也不假装「你一篇都没写过」', () => {
+    // 三条都要在：筛选条只在 ready 时画、卡片标记只在 ready 时挂、取不到时不清空旧表。
+    assert.match(diary, /\{reflections\.ready && readBooks\.length > 0 && \(/, '筛选条没等索引就画出来了');
+    assert.match(diary, /\{reflections\.ready && \(written > 0/, '卡片上的已写 / 待写没等索引就挂了');
+    assert.match(diary, /if \(payload === null \|\| payload === undefined\) \{[\s\S]{0,320}?return;/,
+      '索引取不到时把表清空了 —— 写完一篇再刷新会闪掉所有「已写」标记');
+  });
+
+  it('★ 筛选是三档、只收窄不换结构（全部 / 写过 / 待写）', () => {
+    assert.match(diary, /\{ key: 'all', label: '全部', count: readBooks\.length \}/);
+    assert.match(diary, /\{ key: 'written', label: '写过', count: writtenBooks\.length \}/);
+    assert.match(diary, /\{ key: 'blank', label: '待写', count: blankBooks\.length \}/);
+    // 网格仍然只渲染一次（同一套卡片），筛选只换数据源 —— 换两套行结构就是 0.47 删掉的东西。
+    assert.match(diary, /\{shelfBooks\.map\(\(item\) => \{/, '书墙没跟着筛选走');
+  });
+
+  it('写完一篇要重算索引，不能停在打开这一页时的快照', () => {
+    const refresh = /async function refresh\(\)[\s\S]*?\n  \}/.exec(diary)?.[0] ?? '';
+    assert.notEqual(refresh, '', '找不到 refresh —— 锚点失效');
+    assert.match(refresh, /await reloadReflections\(\);/, '写完读后感后「已写」标记不会变');
+  });
+
+  it('★ 「已写」的文字色必须混 fg（品牌绿当文字只有 1.45:1）', () => {
+    const writtenMark = /\.npr-diary-shelfcard-mark\.is-written \{[^}]*\}/.exec(css)?.[0] ?? '';
+    assert.notEqual(writtenMark, '', '找不到已写标记的样式');
+    assert.match(writtenMark, /color: color-mix\(in srgb, var\(--npr-accent\) 45%, var\(--npr-fg\)\)/,
+      '已写标记用了纯品牌绿当文字色 —— 浅色主题下几乎读不出来');
+    assert.doesNotMatch(writtenMark, /color: var\(--npr-accent\);/, '又直接拿 accent 当文字色了');
+    const chip = /\.npr-root button\.npr-diary-shelfchip\.is-on \{[^}]*\}/.exec(css)?.[0] ?? '';
+    assert.match(chip, /color: color-mix\(in srgb, var\(--npr-accent\) 45%, var\(--npr-fg\)\)/,
+      '选中的筛选 chip 用了纯品牌绿当文字色');
+  });
+
+  it('两态长得不一样：写过是实底，待写只有一圈虚线', () => {
+    const blankMark = /\.npr-diary-shelfcard-mark\.is-blank \{[^}]*\}/.exec(css)?.[0] ?? '';
+    assert.notEqual(blankMark, '', '找不到待写标记的样式');
+    assert.match(blankMark, /border: 1px dashed/, '待写没有虚线 —— 两态都是实底胶囊，看不出哪个是还没做');
+    assert.doesNotMatch(blankMark, /background:/, '待写也上了底色 —— 它不该和「已写」一样重');
+  });
+});

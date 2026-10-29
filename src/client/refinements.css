@@ -2821,13 +2821,30 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-diary-cover-glyph { font-size: 22px; font-weight: 600; line-height: 1.1; letter-spacing: .02em; text-shadow: 0 1px 2px rgb(0 0 0 / 22%); }
 .npr-diary-cover-caption { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 9.5px; line-height: 1.45; text-align: center; opacity: .86; }
 .npr-diary-shelfcard-title { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 11.5px; line-height: 1.45; color: var(--npr-fg); }
-.npr-diary-shelfcard-meta { display: flex; align-items: center; gap: 4px; }
+.npr-diary-shelfcard-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 4px; }
 .npr-diary-shelfcard-ext { padding: 0 5px; border-radius: 4px; background: color-mix(in srgb, var(--npr-fg) 8%, transparent); color: var(--npr-faint); font-size: 9.5px; font-weight: 600; line-height: 15px; letter-spacing: .04em; }
 /* 「这本在读 / 已弃读了，但读后感还在」（0.44.3）。
    ★ 它必须和格式胶囊**长得不一样**：格式（EPUB / PDF）是书的身份，这枚是**状态**
      —— 用强调色描边而不是灰底，否则两枚灰胶囊并排，谁也看不出哪个是会变的那一个。
    ★ 只有「读完过、此刻不在读完」的卡片才有它，所以它出现就是信息。 */
 .npr-diary-shelfcard-flag { padding: 0 5px; border: 1px solid color-mix(in srgb, var(--npr-accent) 42%, transparent); border-radius: 4px; color: color-mix(in srgb, var(--npr-accent) 72%, var(--npr-fg)); font-size: 9.5px; font-weight: 600; line-height: 13px; letter-spacing: .04em; }
+/* 「写过几篇 / 还没写」（0.48）。
+   ★ 两态必须一眼分得开：写过是**实底**（这件事已经发生、有产出），待写只有一圈
+     虚线（还没发生、在等你）。不用两颗同形胶囊 —— 那又回到「哪个是哪个」。
+   ★ 文字色一律走 `color-mix(… , var(--npr-fg))`：品牌绿 `#7ddcae` 当文字只有
+     1.45:1，压在浅底上等于看不见（0.47.4 已经在出处 chip 上踩过一次）。 */
+.npr-diary-shelfcard-mark { flex: 0 0 auto; padding: 0 5px; border-radius: 4px; font-size: 9.5px; font-weight: 600; line-height: 15px; letter-spacing: .02em; }
+.npr-diary-shelfcard-mark.is-written { background: color-mix(in srgb, var(--npr-accent) 26%, transparent); color: color-mix(in srgb, var(--npr-accent) 45%, var(--npr-fg)); }
+.npr-diary-shelfcard-mark.is-blank { border: 1px dashed color-mix(in srgb, var(--npr-fg) 26%, transparent); line-height: 13px; color: var(--npr-faint); }
+/* 筛选条：一行三个 chip，数在括号后面。只用来**收窄**这份名单，
+   不换行结构 —— 和 0.47 删掉的那两组「换页式分段控件」不是一回事。
+   ★ 底色/描边必须**看得见**：第一版用 fg 12% 描边 + 透明底，渲出来的效果是
+     「三串灰字」，选中项与未选中项分不出（1200px 截图里一模一样）。 */
+.npr-diary-shelffilter { display: flex; align-items: center; gap: 6px; padding: 0 8px 8px; }
+.npr-root button.npr-diary-shelfchip { display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--npr-fg) 14%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--npr-fg) 4%, transparent); color: var(--npr-muted); font: inherit; font-size: 11px; line-height: 20px; cursor: pointer; transition: background .12s ease-out, color .12s ease-out, border-color .12s ease-out; }
+.npr-root button.npr-diary-shelfchip:hover { color: var(--npr-fg); border-color: color-mix(in srgb, var(--npr-fg) 26%, transparent); }
+.npr-root button.npr-diary-shelfchip.is-on { border-color: color-mix(in srgb, var(--npr-accent) 38%, transparent); background: color-mix(in srgb, var(--npr-accent) 26%, transparent); color: color-mix(in srgb, var(--npr-accent) 45%, var(--npr-fg)); font-weight: 600; }
+.npr-diary-shelfchip-n { font-size: 10px; font-variant-numeric: tabular-nums; opacity: .72; }
 .npr-root button.npr-diary-shelfcard:hover .npr-diary-cover { transform: translateY(-2px); box-shadow: 0 0 0 1px color-mix(in srgb, var(--npr-fg) 20%, transparent), 0 6px 14px rgb(0 0 0 / 18%); }
 .npr-root button.npr-diary-shelfcard:hover .npr-diary-shelfcard-title { color: var(--npr-fg); }
 .npr-root button.npr-diary-shelfcard.npr-selected .npr-diary-cover { box-shadow: 0 0 0 2px var(--npr-accent), 0 4px 10px rgb(0 0 0 / 16%); }

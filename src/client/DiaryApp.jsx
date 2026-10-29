@@ -61,6 +61,7 @@ import {
 import {
   appendDiaryEntry, downloadDiaryBundle, fetchDiaryBook, fetchDiaryDashboard, fetchDiaryDay, fetchDiaryExport,
   fetchDiaryGate, fetchDiaryMonth, fetchDiarySecret, fetchDiarySource, fetchDiaryStats, fetchDiaryTags, fetchDiaryTimeline,
+  fetchReflectionIndex,
   lockDiaryGate, removeDiaryEntry, revealDiaryFolder, searchDiary, setupDiaryGate, unlockDiaryGate,
 } from './diary-api.js';
 import { fetchAnnotations, fetchBooks, fetchStates } from './library-api.js';
@@ -425,6 +426,16 @@ export function DiaryApp({
   /** `{ [bookId]: { state, page, pages, at } }` —— 读后感门禁的判据就在这里面。 */
   const [bookStates, setBookStates] = useState({});
   const [bookQuery, setBookQuery] = useState('');
+  /**
+   * 哪几本书写过读后感：`{ [bookId]: { count, last } }`（0.48）。
+   *
+   * ★ 侧栏那份名单是「读完过」的书，写过读后感的只是其中一部分 —— 用户
+   *   2026-10-29 要的「区分」就是这件事。取不到时**整列不标**（`ready: false`），
+   *   而不是把每本都标成「待写」：那会把「宿主没接上」说成「你一篇都没写过」。
+   */
+  const [reflections, setReflections] = useState({ map: {}, ready: false, error: '' });
+  /** 名单上的筛选：`all` 全部 / `written` 写过 / `blank` 还没写过。 */
+  const [shelfFilter, setShelfFilter] = useState('all');
   const [book, setBook] = useState(null);
   const [bookEntries, setBookEntries] = useState({ items: [], busy: false });
   const [annotations, setAnnotations] = useState({ items: [], busy: false, error: '' });
@@ -725,22 +736,36 @@ export function DiaryApp({
   }
 
   /**
-   * 书单 + 阅读状态一起拉。
+   * 书单 + 阅读状态 + 读后感索引一起拉。
    *
    * ★ 必须一起：读后感只对**读完**的书开放，而「读完」这个判据在 `/state` 里、
    *   不在 `/books` 里。分两次拉就会出现「书单已到、状态还没到」的一帧 ——
    *   那一帧里所有书都按「未读完」画成禁用，用户看到的是「我的书全灰了」。
+   *
+   * ★ `size` **必须原样带过来**（0.48 修）。封面只有两条真来源：EPUB 走宿主解包
+   *   （只认 id），PDF 走客户端 pdf.js 渲染第一页 —— 而 `pdfCoverDataUrl()` 的
+   *   第一件事是 `Number(book.size) > 0`，没有体积就直接抛错、回落到生成式封面。
+   *   0.47 这里只留了 `{ id, title, ext }`，于是**同一条书在阅读页有真封面、
+   *   在读后感侧栏是首字方块**（用户 2026-10-29 的原话：「为什么在电子书阅读
+   *   这里可以获取到」）。阅读页把整条原始记录直接给了 `BookCover`，差别只在这。
    */
   async function loadBooks() {
     setBooks((current) => ({ ...current, busy: true, error: '' }));
     try {
-      const [payload, states] = await Promise.all([
+      const [payload, states, index] = await Promise.all([
         fetchBooks(),
         fetchStates().catch(() => ({})),
+        // 索引取不到不该让整份书单打不开：它只决定「标不标已写」。
+        fetchReflectionIndex().catch(() => null),
       ]);
       setBooks({
         items: (payload.books ?? []).map((item) => ({
-          id: item.id, title: item.title || item.filename || item.id, ext: item.ext,
+          id: item.id,
+          title: item.title || item.filename || item.id,
+          ext: item.ext,
+          // 封面的两条真来源都要它（PDF 渲染首屏 / 缓存键 `id::size`）。
+          size: Number(item.size) || 0,
+          filename: item.filename,
         })),
         total: payload.total ?? 0,
         truncated: payload.truncated === true,
@@ -748,8 +773,32 @@ export function DiaryApp({
         error: '',
       });
       setBookStates(states ?? {});
+      applyReflectionIndex(index);
     } catch (cause) {
       setBooks({ items: [], total: 0, truncated: false, busy: false, error: cause.message });
+    }
+  }
+
+  /** 把 `/reflections` 的回包包成 `bookId → { count, last }`；`null` = 这一轮没取到。 */
+  function applyReflectionIndex(payload) {
+    if (payload === null || payload === undefined) {
+      // 保留上一次的表：写完一篇再刷新时，宿主偶发失败不该把标好的「已写」擦掉。
+      setReflections((current) => ({ ...current, error: '读后感索引暂时取不到' }));
+      return;
+    }
+    const map = {};
+    for (const row of payload.books ?? []) {
+      if (typeof row?.id === 'string' && row.id !== '') map[row.id] = { count: Number(row.count) || 0, last: row.last ?? '' };
+    }
+    setReflections({ map, ready: true, error: '' });
+  }
+
+  /** 单独刷新读后感索引（写完 / 删完一篇时用，不重拉整份书单）。 */
+  async function reloadReflections() {
+    try {
+      applyReflectionIndex(await fetchReflectionIndex());
+    } catch (cause) {
+      setReflections((current) => ({ ...current, error: cause.message }));
     }
   }
 
@@ -976,6 +1025,8 @@ export function DiaryApp({
         const payload = await fetchDiaryBook(book.id);
         setBookEntries({ items: payload.entries ?? [], busy: false });
       } catch { /* 上面已经刷过当天，这里失败只影响这本书的列表 */ }
+      // 刚写完 / 删完一篇，「已写 / 待写」那枚标记（和筛选条上的数）就变了。
+      await reloadReflections();
     }
   }
 
@@ -1672,6 +1723,28 @@ export function DiaryApp({
   const readBooks = filteredBooks.filter((item) => finishedOf(item.id));
 
   /**
+   * 名单上的「已写 / 待写」（0.48）。
+   *
+   * ★ 判据只有一条：`reflections.map[id].count > 0`。**不**用「点开这本书有没有
+   *   条目」——那是 N 次读盘，而这里要给的是一个能一眼扫过去的标记。
+   * ★ `ready === false`（索引没取到）时不算「待写」：把「查不到」写成「你一篇都
+   *   没写过」是确定的假话。这时筛选条不出现，卡片也不挂标记。
+   */
+  const shelfMeta = (item) => {
+    const row = reflections.map[item.id];
+    return row === undefined ? null : row;
+  };
+  const writtenBooks = readBooks.filter((item) => (shelfMeta(item)?.count ?? 0) > 0);
+  const blankBooks = readBooks.filter((item) => shelfMeta(item) === null);
+  const shelfBooks = shelfFilter === 'written' ? writtenBooks
+    : (shelfFilter === 'blank' ? blankBooks : readBooks);
+  const shelfChips = [
+    { key: 'all', label: '全部', count: readBooks.length },
+    { key: 'written', label: '写过', count: writtenBooks.length },
+    { key: 'blank', label: '待写', count: blankBooks.length },
+  ];
+
+  /**
    * 书籍档案卡上的数。**全部来自已经在手的数据**，打开一本书不额外多读一次盘。
    * ★ 「摘录笔记」= 划线里**写过 note 的**那些：只有 quote 的是划线，加了 note 才是笔记。
    *   这两个数在界面上必须分开，否则「划线 12」会让人以为写了 12 条笔记。
@@ -2121,10 +2194,38 @@ export function DiaryApp({
                   {/* ★ 这个名单的取向是「**读完过**」，不是「此刻状态是读完」：点过
                       「重新阅读」的书仍然留在里面（用户 2026-10-28 的要求），
                       卡片上会挂一枚「在读」/「弃读」的小牌子把那件事说清楚 ——
-                      否则一份叫「读完的」名单里躺着一本在读的书，就是一句假话。 */}
-                  <h2 className="npr-diary-sect-head"><Icon name="book-open" size={12} />读完的<span className="npr-diary-sect-badge">{readBooks.length}</span></h2>
+                      否则一份叫「读完过」的名单里躺着一本在读的书，就是一句假话。 */}
+                  <h2 className="npr-diary-sect-head is-lead">
+                    <span className="npr-diary-sect-mark"><Icon name="book-open" size={13} /></span>
+                    读毕之书
+                    <span className="npr-diary-sect-badge">{readBooks.length}</span>
+                  </h2>
+                  {/* ★ 「已写 / 待写」不是一个装饰标签（0.48）。这份名单里本来就混着
+                      两件事：书读完了、以及读后感写了没有 —— 不分开看，用户只能一本
+                      一本点进去才知道哪些还欠着。筛选条只在索引取到时出现：取不到时
+                      三个数字都是假的，宁可不画。 */}
+                  {reflections.ready && readBooks.length > 0 && (
+                    <div className="npr-diary-shelffilter" role="group" aria-label="按读后感筛选">
+                      {shelfChips.map((chip) => (
+                        <button key={chip.key} type="button"
+                          className={`npr-diary-shelfchip${shelfFilter === chip.key ? ' is-on' : ''}`}
+                          aria-pressed={shelfFilter === chip.key}
+                          onClick={() => setShelfFilter(chip.key)}>
+                          {chip.label}
+                          <span className="npr-diary-shelfchip-n">{chip.count}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   {readBooks.length === 0 && (
                     <p className="npr-diary-sect-note">还没有读完的书。到「阅读 → 读完」点那本书右边的「写读后感」，或者在书里读完点「标记读完」，它就会出现在这里。</p>
+                  )}
+                  {readBooks.length > 0 && shelfBooks.length === 0 && (
+                    <p className="npr-diary-sect-note">
+                      {shelfFilter === 'written'
+                        ? '读过的书里，还没有一本留下读后感。挑一本打开，从右侧的模板开始写。'
+                        : '这一档里没有书。'}
+                    </p>
                   )}
                   {/*
                     * ★ 两列封面网格，不是单行列表：用户 2026-10-28 的原话是
@@ -2133,22 +2234,35 @@ export function DiaryApp({
                     * ★ 封面只有两条真来源（EPUB 内嵌 / PDF 第一页），其余**生成** ——
                     *   见 `book-cover.js` 顶部：书架索引里没有 cover 字段，
                     *   所以「没有封面图就画一个」不是偷懒，是唯一诚实的做法。
+                    *   0.48 修的是另一件事：那条 PDF 路径本来就能走通，是这里把
+                    *   `size` 弄丢了（见 `loadBooks`），于是有真封面的书也被画成了方块。
                     */}
                   <div className="npr-diary-shelf">
-                    {readBooks.map((item) => {
+                    {shelfBooks.map((item) => {
                       const name = stateNameOf(item.id);
                       const flag = name === 'read' ? '' : (BOOK_STATE_LABELS[name] ?? '');
+                      const written = shelfMeta(item)?.count ?? 0;
+                      /* 悬停说明把三件事串起来：书名 · 状态（如果已不是在读）· 写没写。
+                         卡片上放不下的那句「读后感还在」，就落在 title 里。 */
+                      const tip = [item.title];
+                      if (flag !== '') tip.push(`${flag} —— 读后感还在`);
+                      if (reflections.ready) tip.push(written > 0 ? `写过 ${written} 篇读后感` : '还没写过读后感');
                       return (
                         <button key={item.id} type="button"
                           className={`npr-diary-shelfcard${book?.id === item.id ? ' npr-selected' : ''}`}
                           aria-pressed={book?.id === item.id}
-                          title={flag === '' ? item.title : `${item.title}（${flag} —— 读后感还在）`}
+                          title={tip.join(' · ')}
                           onClick={() => void openBook(item)}>
                           <BookCover book={item} />
                           <span className="npr-diary-shelfcard-title">{item.title}</span>
                           <span className="npr-diary-shelfcard-meta">
                             <span className="npr-diary-shelfcard-ext">{formatExt(item.ext)}</span>
                             {flag !== '' && <span className="npr-diary-shelfcard-flag">{flag}</span>}
+                            {/* 已写 / 待写：一枚就够，别在卡片上排三个胶囊（两列网格
+                                每格约 110px，第三个一定会换行成孤儿）。 */}
+                            {reflections.ready && (written > 0
+                              ? <span className="npr-diary-shelfcard-mark is-written">{written} 篇</span>
+                              : <span className="npr-diary-shelfcard-mark is-blank">待写</span>)}
                           </span>
                         </button>
                       );

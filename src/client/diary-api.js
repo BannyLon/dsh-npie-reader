@@ -124,6 +124,18 @@ export async function fetchDiaryBook(bookId) {
   return await jsonRequest(`/book/${encodeURIComponent(bookId)}`);
 }
 
+/**
+ * 哪几本书写过读后感（0.48）。
+ *
+ * ★ 侧栏那份名单是「读完的书」，读后感只占其中一部分 —— 靠它标出「已写 / 待写」。
+ *   不这么做的话，界面只能逐本点进去才知道有没有内容，而那是 N 次读盘。
+ * ★ 返回里 `total` 是**书数**，`entries` 才是篇数：两者在界面上必须分开写，
+ *   混着算会得到一个对不上的数（「已写 3 本」却列出 7 篇）。
+ */
+export async function fetchReflectionIndex() {
+  return await jsonRequest('/reflections');
+}
+
 /** 时间轴：最近 N 天 + 每天几条预览。`before` 传日期就是「加载更早」。 */
 export async function fetchDiaryTimeline({ limit, before } = {}) {
   const params = new URLSearchParams();

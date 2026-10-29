@@ -624,6 +624,73 @@ describe('byBook', () => {
 });
 
 /**
+ * 读后感索引：侧栏要回答的不只是「哪些书读完了」，还有「哪些真写过」（0.48）。
+ *
+ * ★ 用户 2026-10-29：「这个列表里都是我已经读完的电子书，混杂了写过读后感和没有
+ *   写过读后感的。所以这里，如果写过和没写过读后感是不是要做个区分」。
+ *   不先问一遍宿主，界面只能靠「一本一本点进去看有没有内容」——那是 N 次读盘。
+ * ★ 这里和 `byBook()` 必须同一条判据：写歪一条，症状是「标着写过、点进去一篇都没有」。
+ */
+describe('reflectionIndex', () => {
+  const BOOK_A = 'lreflection000001';
+  const BOOK_B = 'lreflection000002';
+
+  before(async () => {
+    await store.append({ date: '2027-01-02', time: '09:00', kind: '读后感', body: 'A 第一篇', meta: { book: BOOK_A } });
+    await store.append({ date: '2027-03-05', time: '21:00', kind: '读后感', body: 'A 第二篇', meta: { book: BOOK_A } });
+    await store.append({ date: '2027-02-11', time: '10:00', kind: '读后感', body: 'B 唯一一篇', meta: { book: BOOK_B } });
+    // 下面三条都**不该**进索引：灵感挂了同一本书、没有书 id 的读后感、没关联任何书的条目。
+    await store.append({ date: '2027-03-06', time: '08:00', kind: '灵感', body: '书里按 L 记的灵感', meta: { book: BOOK_A } });
+    await store.append({ date: '2027-03-07', time: '08:30', kind: '读后感', body: '没挂书的一篇读后感' });
+    await store.append({ date: '2027-03-08', time: '09:00', body: '普通日记' });
+  });
+
+  it('一本书一行：篇数、最早与最晚的那天', async () => {
+    const result = await store.reflectionIndex();
+    const a = result.books.find((row) => row.id === BOOK_A);
+    assert.notEqual(a, undefined, '写过两篇的那本书不在索引里');
+    assert.equal(a.count, 2);
+    assert.equal(a.first, '2027-01-02');
+    assert.equal(a.last, '2027-03-05');
+  });
+
+  it('★ 只算读后感：同一本书上的「灵感流转」不能把篇数撑大', async () => {
+    const result = await store.reflectionIndex();
+    const a = result.books.find((row) => row.id === BOOK_A);
+    assert.equal(a.count, 2, '灵感被算进读后感了 —— 界面上会标「3 篇」，点进去只有 2 篇');
+  });
+
+  it('★ `total` 是**书数**，`entries` 才是篇数（两个数混着用，界面上就对不上）', async () => {
+    const result = await store.reflectionIndex();
+    // 这个文件的所有用例共用一个临时 `$DSH_HOME`，别的用例也写过读后感 ——
+    // 所以这里不写死数字，改钉「两个数各自是什么」。
+    assert.equal(result.total, result.books.length, '`total` 不是书数');
+    assert.equal(result.entries, result.books.reduce((sum, row) => sum + row.count, 0), '`entries` 不是篇数');
+    assert.ok(result.total >= 2);
+  });
+
+  it('最近写过的那本排在前面（不是按篇数）', async () => {
+    const result = await store.reflectionIndex();
+    const order = result.books.map((row) => row.id);
+    assert.ok(order.indexOf(BOOK_A) < order.indexOf(BOOK_B),
+      'A 最后一篇在 3 月 5 日、B 在 2 月 11 日，A 应该排在前面');
+  });
+
+  it('★ 反向对照：删掉最后一篇，这本书的标记跟着变（索引不是一次性快照）', async () => {
+    const before = await store.reflectionIndex();
+    assert.equal(before.books.find((row) => row.id === BOOK_A).count, 2);
+    const day = await store.read('2027-03-05');
+    const target = (day.entries ?? []).findIndex((entry) => entry.body === 'A 第二篇');
+    assert.notEqual(target, -1, '找不到要删的那一条，用例是假绿');
+    await store.removeEntry({ date: '2027-03-05', index: target, scope: 'public' });
+    const after = await store.reflectionIndex();
+    const a = after.books.find((row) => row.id === BOOK_A);
+    assert.equal(a.count, 1);
+    assert.equal(a.last, '2027-01-02', '最后一篇的日期没跟着回退');
+  });
+});
+
+/**
  * 侧栏那两块卡片的数据源：`dashboard()`。
  *
  * ★ 用 2031 年这种**没人会碰**的月份：本文件所有用例共用一个临时 `$DSH_HOME`，

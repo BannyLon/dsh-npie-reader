@@ -438,6 +438,7 @@ export class RssService {
         tags: options => this.diary.tags(options),
         timeline: options => this.diary.timeline(options),
         byBook: bookId => this.diary.byBook(bookId),
+        reflections: () => this.diary.reflectionIndex(),
         bySource: options => this.diary.bySource(options),
         exportAll: options => this.diary.exportAll(options),
         stats: () => this.diary.stats(),

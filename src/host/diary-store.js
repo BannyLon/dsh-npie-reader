@@ -786,6 +786,45 @@ export function createDiaryStore(options = {}) {
   }
 
   /**
+   * 哪些书**写过读后感**，各几篇、最后一篇是哪天（0.48）。
+   *
+   * ★ 要它是因为侧栏那份名单是「读完的书」，而读后感只写过其中一部分 ——
+   *   用户 2026-10-29：「这个列表里都是我已经读完的电子书，混杂了写过读后感和没有
+   *   写过读后感的。所以这里，如果写过和没写过读后感是不是要做个区分」。
+   *   不先问一遍宿主，界面只能靠「点进去看有没有内容」才知道，而那是逐本读盘。
+   * ★ 只扫公开那半边：读后感模块写的是明文，私密是另一个模块。
+   * ★ 与 `byBook()` 用同一条判据（`kind === '读后感'` + `meta.book`）：
+   *   「灵感流转」也挂 `meta.book`，混进来的话会出现「标着写过、点进去一篇都没有」。
+   * ★ 全量扫（`SOURCE_SCAN_LIMIT`），不借用搜索那 400 天：这个数要回答的是
+   *   「我一共写过几本书的读后感」，不是「最近一年多里写过几本」。
+   */
+  async function reflectionIndex() {
+    const index = new Map();
+    const scan = await scanDays(({ date, entry }) => {
+      if (entry.kind !== '读后感') return;
+      const id = typeof entry.meta?.book === 'string' ? entry.meta.book.trim() : '';
+      if (id === '') return;
+      const row = index.get(id) ?? { id, count: 0, first: date, last: date };
+      row.count += 1;
+      if (date > row.last) row.last = date;
+      if (date < row.first) row.first = date;
+      index.set(id, row);
+    }, { fileLimit: SOURCE_SCAN_LIMIT });
+    const books = [...index.values()]
+      .sort((left, right) => right.last.localeCompare(left.last) || right.count - left.count);
+    const result = {
+      books,
+      // 书数（不是篇数）：界面上「已写 N」比的是书，混着算会得到一个对不上的数。
+      total: books.length,
+      entries: books.reduce((sum, row) => sum + row.count, 0),
+      scanned: scan.scanned,
+      truncated: scan.truncated,
+    };
+    if (scan.privateError) result.privateError = scan.privateError;
+    return result;
+  }
+
+  /**
    * 跨天搜索。
    *
    * ★ 判据与 `rss_search_articles` / `book_search` **同一条**：trim + 小写 + 子串，不分词。
@@ -934,6 +973,7 @@ export function createDiaryStore(options = {}) {
     timeline,
     byBook,
     bySource,
+    reflectionIndex,
     exportAll,
     stats,
     secret,

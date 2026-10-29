@@ -17,6 +17,7 @@
  *   GET    /tags                      标签索引（带次数与最后使用日期）
  *   GET    /timeline?limit=&before=   时间轴（最近的 N 天 + 条目预览）
  *   GET    /book/:bookId              某一本书的全部读后感（跨天，按 `meta.book` 反查）
+ *   GET    /reflections               哪些书写过读后感（书数 + 每本的篇数与最后一篇日期）
  *   GET    /search?q=…&limit=…        跨天搜
  *   GET    /export?private=1          全部日记（一次性出口；默认**不含**私密）
  *   GET    /stats                     多少天、占多少字节、目录在哪、密钥在哪
@@ -162,6 +163,8 @@ function segment(value) {
  * @param handlers.tags - 可选，`async ({ includePrivate }) => { tags, scanned, truncated }`
  * @param handlers.timeline - 可选，`async ({ limit, before, includePrivate }) => { days, total, scanned, truncated }`
  * @param handlers.byBook - 可选，`async (bookId) => { bookId, entries, total }`（读后感工作台用）
+ * @param handlers.reflections - 可选，`async () => { books: [{ id, count, first, last }], total }`
+ *   （侧栏「哪些书写过读后感」——`total` 是**书数**，不是篇数）
  * @param handlers.bySource - 可选，`async ({ book, article }) => { days, total }`（「这本书 / 这篇文章的全部灵感」）
  *
  * ★ **`includePrivate: true` 只在这一层出现**（`/search` `/tags` `/timeline` 三条）。
@@ -180,6 +183,7 @@ function segment(value) {
 export function makeDiaryRoutes(handlers = {}) {
   const {
     read, readFull, append, updateEntry, removeEntry, listMonth, dashboard, search, tags, timeline, byBook, bySource,
+    reflections,
     exportAll, stats, secretStatus, reveal, gate,
     log = () => {},
   } = handlers;
@@ -477,6 +481,20 @@ export function makeDiaryRoutes(handlers = {}) {
         }
         try {
           return sendJson(res, 200, { ok: true, ...(await bySource({ book, article })) });
+        } catch (error) {
+          return fail(res, error);
+        }
+      }
+
+      // ---- GET /reflections ------------------------------------------------
+      //
+      // 侧栏那份「读完的书」名单要标出哪几本写过读后感。放在 `/:bookId` 之前
+      // 读起来更顺，但匹配上不冲突（这条一个路径段，那条两个），顺序无所谓。
+      if (parts.length === 1 && parts[0] === 'reflections') {
+        if (method !== 'GET') return methodNotAllowed(res);
+        if (typeof reflections !== 'function') return sendJson(res, 501, { ok: false, error: '读后感索引没有接上' });
+        try {
+          return sendJson(res, 200, { ok: true, ...(await reflections()) });
         } catch (error) {
           return fail(res, error);
         }

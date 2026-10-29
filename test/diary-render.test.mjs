@@ -92,7 +92,6 @@ describe('0.47.1：日记页首屏渲染冒烟', () => {
       DiaryApp = mod.DiaryApp;
     }
     assert.equal(typeof DiaryApp, 'function', 'DiaryApp 没导出');
-
     const React = require('react');
     // ★ 每个方法都返回 `async () => ({})`：首屏不该依赖任何一次请求就画得出来，
     //   而 `useEffect` 在 SSR 下根本不执行 —— 给个万能桩就够了。
@@ -115,5 +114,34 @@ describe('0.47.1：日记页首屏渲染冒烟', () => {
     for (const cls of ['npr-diary-panel', 'npr-diary-main', 'npr-diary-modes']) {
       assert.ok(html.includes(cls), `首屏缺了 ${cls} —— 这一页只剩半截`);
     }
+  });
+
+  /**
+   * 0.48：落到**读后感**那一块也真的渲染一次。
+   *
+   * ★ 「读毕之书」这一小块是这一版改动最密的地方：索引 → 写过 / 待写 → 筛选后的
+   *   数组 → 卡片标记，四层派生。任何一层写在它的依赖之前，`const` 的暂时性死区
+   *   会当场抛；而源码判据（`diary-ui.test.mjs`）看不出来 —— 0.47.0 的白屏就是
+   *   这么发出去的。
+   * ★ 顺带钉一条「别抢跑」：书单还没回来（`books.items` 是空的）时**不画**筛选条。
+   *   三个数都是 0 的筛选条比没有它更糟 —— 用户会以为自己的书全丢了。
+   */
+  it('★ 读后感模块也不白屏，标题是「读毕之书」', async () => {
+    if (DiaryApp === null) {
+      const mod = await import(pathToFileURL(outFile).href);
+      DiaryApp = mod.DiaryApp;
+    }
+    const React = require('react');
+    const api = new Proxy({}, { get: () => async () => ({}) });
+    const html = renderQuiet(React.createElement(DiaryApp, {
+      onExit() {},
+      notify() {},
+      api,
+      intent: { module: 'reflection' },
+      SessionProvider: ({ children }) => children ?? null,
+      renderSlot: () => null,
+    }));
+    assert.ok(html.includes('读毕之书'), '读后感侧栏没渲染出「读毕之书」');
+    assert.ok(!html.includes('npr-diary-shelffilter'), '书单还没回来就把筛选条画出来了');
   });
 });

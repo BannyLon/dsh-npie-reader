@@ -105,6 +105,8 @@ before(async () => {
     byBook: bookId => fullStore.byBook(bookId),
     // 0.47：「这本书 / 这篇文章的全部灵感」—— 时间轴的一次收窄，走的是同一个 store。
     bySource: options => fullStore.bySource(options),
+    // 0.48：侧栏「哪几本书写过读后感」。
+    reflections: () => fullStore.reflectionIndex(),
     exportAll: options => fullStore.exportAll(options),
     stats: () => fullStore.stats(),
     secretStatus: () => fullStore.secret.status(),
@@ -506,6 +508,36 @@ describe('GET /book/:bookId（读后感工作台）', () => {
 
   it('方法不对 ⇒ 405', async () => {
     assert.equal((await callFull('/book/l29fc96838f2d0e5d', { method: 'POST' })).status, 405);
+  });
+});
+
+/**
+ * 0.48：`GET /reflections` —— 侧栏那份名单上「哪几本写过读后感」。
+ *
+ * ★ 不能借 `/book/:id` 逐本问：那是 N 次全盘扫描，而这条只要一次。
+ */
+describe('GET /reflections（哪几本写过读后感）', () => {
+  it('没接上 ⇒ 501（不拖垮整个日记前缀）', async () => {
+    assert.equal((await call('/reflections')).status, 501);
+  });
+
+  it('接上了 ⇒ 200，一本书一行，带篇数', async () => {
+    await fullStore.append({ date: '2027-05-01', kind: '读后感', body: '一篇', meta: { book: 'lref_route_1' } });
+    await fullStore.append({ date: '2027-05-02', kind: '读后感', body: '两篇', meta: { book: 'lref_route_1' } });
+    await fullStore.append({ date: '2027-05-03', kind: '读后感', body: '另一本', meta: { book: 'lref_route_2' } });
+
+    const res = await callFull('/reflections');
+    assert.equal(res.status, 200);
+    const row = res.json.books.find((item) => item.id === 'lref_route_1');
+    assert.notEqual(row, undefined, '写过两篇的那本书不在索引里');
+    assert.equal(row.count, 2);
+    assert.equal(row.last, '2027-05-02');
+    // `total` 是书数：写成篇数时界面上会出现「已写 3 本」配 3 张卡片以外的数字。
+    assert.equal(res.json.total, res.json.books.length);
+  });
+
+  it('方法不对 ⇒ 405', async () => {
+    assert.equal((await callFull('/reflections', { method: 'POST' })).status, 405);
   });
 });
 
