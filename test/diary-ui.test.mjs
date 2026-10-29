@@ -477,11 +477,22 @@ describe('灵感模块：情绪 / 标签 / 时间轴 / 关联到书', () => {
     assert.match(diary, /const TIMELINE_PAGE = 30;/, '时间轴没有分页步长常量');
     assert.match(diary, /fetchDiaryTimeline\(\{ limit: TIMELINE_PAGE \}\)/, '首屏没按步长取');
     assert.match(diary, /fetchDiaryTags\(\)/);
-    for (const label of ['标签', '时间轴']) {
-      // 「标签」这块的标题带一个计数徽章，所以判据是「标题以这个字开头」，
-      // 它守的是「这一块存在且叫这个名字」。
-      assert.ok(diary.includes(`>${label}`), `侧栏少了「${label}」这一块的标题`);
-    }
+    // 「标签」这块的标题带一个计数徽章，所以判据是「标题以这个字开头」，
+    // 它守的是「这一块存在且叫这个名字」。
+    assert.ok(diary.includes('>标签'), '侧栏少了「标签」这一块的标题');
+    // ★ 0.47.3：时间轴那块改名并**抬成主标题**。用户 2026-10-29：
+    //   「这个时间轴明显一些，名称重新创意，比如你的灵感时间线之类的」。
+    //   病根是层级倒挂 —— 标题 12px，而它统辖的日期行 12.5px，标题比内容还小。
+    assert.match(diary, /npr-diary-sect-head is-lead[\s\S]{0,200}?你的灵感时间线/,
+      '时间轴没有用那个名字 / 没有抬成主标题');
+    assert.match(diary, /<span className="npr-diary-sect-mark"><Icon name="clock"/,
+      '主标题没有品牌色图标块 —— 又退成一行裸文字');
+    assert.match(diaryCss, /\.npr-diary-sect-head\.is-lead \{[^}]*font-size: 14px/,
+      '主标题字号没越过它统辖的日期行（12.5px）—— 这就是「不明显」的根因');
+    // ★ 0.47.4：时间轴默认展开**今天**。用户 2026-10-29：「时间轴上自动展开当天的」。
+    //   用初值而不是 effect：effect 会在每次 timeline 重载后把用户手动收起的今天又摊开。
+    assert.match(diary, /const \[openDay, setOpenDay\] = useState\(today\)/,
+      '时间轴没有默认展开今天 —— 打开灵感页还要再点一下');
     for (const gone of ['LINK_VIEWS', 'setLinkView', 'openSrcKey', 'linkViewMeta', 'linkedSources', 'npr-diary-views']) {
       // 反向对照就写在同一条里：留着任何一处，「三档」就还在，只是长成了另一个样子。
       assert.equal(diary.includes(gone), false, `三档视图的残留还在：${gone}`);
@@ -496,6 +507,16 @@ describe('灵感模块：情绪 / 标签 / 时间轴 / 关联到书', () => {
     assert.match(diary, /\{sourceScope !== null && \(\s*<div className=\{`npr-diary-scope/,
       '来源横条不是「只在收窄时出现」');
     assert.match(diary, /aria-label="回到全部灵感"/, '收窄态没有出口 —— 进去了出不来');
+    // ★ 0.47.4：条目正文分两层（首句当标题、余下当摘要），不再是一行灰字**截断**。
+    //   用户 2026-10-29 贴了一张 RSS 时间线，要的就是那种「加粗标题 + 淡色多行摘要」。
+    //   反向对照也写在这里：只要 `.npr-diary-dayitem-text`（`white-space: nowrap` +
+    //   ellipsis）还活着，两层就会被压回一行，而且看不出是哪里压的。
+    assert.match(diary, /const lines = entryLines\(entry\.preview\)/, '条目正文没有分层');
+    assert.match(diary, /npr-diary-dayitem-title">\{lines\.title\}/, '没有标题那一层');
+    assert.match(diary, /\{lines\.rest !== '' && \([\s\S]{0,140}?npr-diary-dayitem-rest/,
+      '没有摘要那一层 —— 长灵感只剩首句');
+    assert.equal(diaryCss.includes('npr-diary-dayitem-text'), false,
+      '旧的单行省略样式还在 —— 两层会被压回一行');
   });
 
   it('★ 时间轴：日期行可展开，折叠态不读正文', () => {

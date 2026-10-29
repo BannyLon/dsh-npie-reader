@@ -2767,6 +2767,22 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-diary-sect-head { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; padding: 0 14px 6px; border-bottom: 1px solid var(--npr-border); font-size: 12px; font-weight: 600; letter-spacing: .01em; color: var(--npr-fg); text-transform: none; }
 /* 图标比字小一号、再淡一档：它负责「一眼认出是哪一块」，不该比标题本身更响。 */
 .npr-diary-sect-head > svg { flex: 0 0 auto; color: var(--npr-faint); }
+/* ★ 0.47.3 主标题（「你的灵感时间线」）。用户 2026-10-29：「这个时间轴明显一些」。
+   病根是**层级倒挂**：标题 12px，而它统辖的日期行 12.5px —— 标题比内容还小，
+   再怎么看也不像标题。所以这里只做两件事：字号越过内容行、给一个品牌色图标块。
+   不加底色块：侧栏里日期条 / 标签条已经全是浅灰，再加一块会把层级搅乱。 */
+.npr-diary-sect-head.is-lead { margin-bottom: 6px; padding-bottom: 8px; font-size: 14px; font-weight: 650; letter-spacing: 0; }
+/* ★ 图标色必须**混 `--npr-fg`**，不能直接用 `--npr-accent`：品牌绿（#7ddcae）压在
+   浅底上对比度只有 1.6:1，做成 20px 方块里的图标就是「一块淡到看不见的绿」——
+   第一版正是这样，浅色截图里那个块整个消失了。混 50% 前景色之后，
+   浅色下是深青绿、深色下是浅薄荷，两边都读得清。 */
+.npr-diary-sect-mark { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  width: 20px; height: 20px; margin-right: -1px; border-radius: 6px;
+  background: color-mix(in srgb, var(--npr-accent) 20%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--npr-accent) 26%, transparent);
+  color: color-mix(in srgb, var(--npr-accent) 50%, var(--npr-fg)); }
+/* 块里的图标继承块的颜色（上面的 `> svg` 只够到直接子级，够不到这里）。 */
+.npr-diary-sect-mark > svg { color: inherit; }
 .npr-diary-sect-badge { padding: 0 5px; border-radius: 999px; background: color-mix(in srgb, var(--npr-fg) 8%, transparent); color: var(--npr-faint); font-size: 11px; font-weight: 500; letter-spacing: 0; font-variant-numeric: tabular-nums; }
 .npr-diary-sect-note { margin: 2px 0 6px; padding: 0 14px; font-size: 11.5px; line-height: 1.65; color: var(--npr-faint); }
 .npr-diary-sect-note.is-error { color: var(--dsw-alias-state-error-primary); }
@@ -2944,20 +2960,30 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
    ★ 展开出来的条目用「一道 2px 竖线 + 12px 缩进」表达从属关系，而不是再套一层框：
      侧栏只有 268px，多一层框就少 10px 文字宽度。竖线是 Logseq 那套
      「journal → blocks」的层级表达，一列就能读完。
-   ★ 时间与摘要分两列（`11px` 等宽数字 + 12px 单行省略）：同一天的条目时间对齐，
-     扫一眼就知道那天是集中写的还是散着写的。 */
+   ★ 时间与正文分两列（`11px` 等宽数字 + 正文）：同一天的条目时间对齐，
+     扫一眼就知道那天是集中写的还是散着写的。
+   ★ 0.47.4：正文从「单行省略」改成**两层**——首句当标题（实色 600、最多两行），
+     余下当摘要（淡一档、最多两行）。用户 2026-10-29 贴了一张 RSS 时间线要那个效果。
+     原来每一条都是一行灰字截断，长灵感只剩半句，整块扫过去分不出轻重。 */
 .npr-diary-days { display: flex; flex-direction: column; }
 .npr-diary-day { display: flex; flex-direction: column; }
 .npr-diary-daylist { margin: 0 6px 2px 16px; padding: 2px 0 2px 10px; border-left: 1px solid var(--npr-border); list-style: none; }
-.npr-root button.npr-diary-dayitem { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 4px 6px; border: 0; border-radius: 5px; background: transparent; color: var(--npr-muted); font: inherit; text-align: left; cursor: pointer; }
+.npr-root button.npr-diary-dayitem { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 5px 6px; border: 0; border-radius: 5px; background: transparent; color: var(--npr-muted); font: inherit; text-align: left; cursor: pointer; }
 .npr-root button.npr-diary-dayitem:hover { background: var(--npr-hover); color: var(--npr-fg); }
 /* 「刚点过的那一条」。右侧正文里同一条也在高亮（`.npr-diary-entry.is-focus`）——
    两处同时亮，用户才不用自己在一屏里找哪一个对应哪一个。 */
 .npr-root button.npr-diary-dayitem.is-focus { background: color-mix(in srgb, var(--npr-accent) 12%, transparent); color: var(--npr-fg); box-shadow: inset 2px 0 0 var(--npr-accent); }
 .npr-root button.npr-diary-dayitem.is-focus .npr-diary-dayitem-time { color: var(--npr-fg); }
-/* 时间轴上的时刻是功能性文本（用户靠它定位到那一条），11px 是下限。 */
-.npr-diary-dayitem-time { flex: 0 0 auto; font-size: 11px; color: var(--npr-faint); font-variant-numeric: tabular-nums; }
-.npr-diary-dayitem-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+/* 时间轴上的时刻是功能性文本（用户靠它定位到那一条），11px 是下限。
+   `margin-top: 1px` 把数字压到和标题首行同一条基线上：`align-items: flex-start`
+   之后两者各自的盒顶对齐，11px 的字看起来会比 12px 的标题高一点。 */
+.npr-diary-dayitem-time { flex: 0 0 auto; margin-top: 1px; font-size: 11px; color: var(--npr-faint); font-variant-numeric: tabular-nums; }
+.npr-diary-dayitem-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+/* 标题用实色而不是 `inherit`：按钮的默认色是 muted，整块会一起淡下去，
+   而这一层正是要「一眼抓住」的那一句。两行封顶，长句不会把当天列表撑开。 */
+.npr-diary-dayitem-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 12px; font-weight: 600; line-height: 1.45; color: var(--npr-fg); }
+.npr-diary-dayitem-rest { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 11.5px; line-height: 1.5; color: var(--npr-faint); }
+.npr-root button.npr-diary-dayitem:hover .npr-diary-dayitem-rest { color: var(--npr-muted); }
 
 /* 搜索结果 */
 .npr-root button.npr-diary-hit { display: block; width: 100%; padding: 9px 14px; border: 0; background: transparent; color: var(--npr-fg); font: inherit; text-align: left; cursor: pointer; }

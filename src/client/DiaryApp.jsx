@@ -67,6 +67,7 @@ import { fetchAnnotations, fetchBooks, fetchStates } from './library-api.js';
 import { BOOK_STATE_LABELS, hasFinished } from '../library.js';
 import { coverGlyph, coverHue } from './book-cover.js';
 import { entryOrigin, originIcon, originJumpLabel, originMissNote, originTarget } from './diary-origin.js';
+import { entryLines } from './diary-lines.js';
 import { placeRowMenu } from './row-menu.js';
 import { BookCover } from './BookCover.jsx';
 import { DiaryCalendar } from './DiaryCalendar.jsx';
@@ -522,8 +523,17 @@ export function DiaryApp({
    *   窗口不该成为绕过「逐条点开」的第二条路。上锁 / 超时会把窗口一起关掉。
    */
   const [expand, setExpand] = useState(null);
-  /** 侧栏时间轴里展开的那一天（同一次只展开一天）。 */
-  const [openDay, setOpenDay] = useState('');
+  /**
+   * 侧栏时间轴里展开的那一天（同一次只展开一天）。
+   *
+   * ★ 0.47.4 起默认就是**今天**：用户 2026-10-29「时间轴上自动展开当天的」。
+   *   原来初值是空串，打开灵感页先看到一排「今天／昨天／10-27」的日期条 ——
+   *   还得再点一下才能知道自己今早写了什么，而「今天」几乎总是用户第一眼要找的。
+   * ★ 用初值而不是 effect：effect 会在每次 `timeline` 重载后把用户**手动收起**的
+   *   今天又摊开，等于这个折叠按钮时灵时不灵。今天没有条目时它自然什么也不画
+   *   （`recentDays` 里没有这一项），不需要额外判断。
+   */
+  const [openDay, setOpenDay] = useState(today);
   /**
    * 「只看一个来源」（0.47）。`null` = 全部。
    *
@@ -1907,7 +1917,17 @@ export function DiaryApp({
               )}
 
               <section className="npr-diary-sect">
-                <h2 className="npr-diary-sect-head"><Icon name="clock" size={12} />时间轴</h2>
+                {/*
+                 * ★ 0.47.3：标题叫「你的灵感时间线」，并且用 `is-lead` 抬成这一栏的主标题。
+                 *   用户 2026-10-29：「这个时间轴明显一些，名称重新创意，比如你的灵感时间线
+                 *   之类的」。原来 12px/600 和它统辖的日期行（12.5px）几乎同号 ——
+                 *   标题比内容还小，当然不像标题。层级靠**字号 + 品牌色图标块**拉开，
+                 *   不靠再压一层底色：侧栏里已经全是灰条，再加块状会碎。
+                 */}
+                <h2 className="npr-diary-sect-head is-lead">
+                  <span className="npr-diary-sect-mark"><Icon name="clock" size={12} /></span>
+                  你的灵感时间线
+                </h2>
                 {timelineBusy && <p className="npr-diary-sect-note">正在读…</p>}
                 {!timelineBusy && recentDays.length === 0 && (
                   <p className="npr-diary-sect-note">
@@ -1937,20 +1957,35 @@ export function DiaryApp({
                         </button>
                         {open && (
                           <ul className="npr-diary-daylist">
-                            {item.entries.map((entry) => (
-                              <li key={entryKey(entry)}>
-                                {/* 这一项是不是「刚被点过的那一条」——右侧正文里同一条也在高亮，
-                                    两处同时亮才叫「对应」。只亮右边的话，用户得自己在一屏里找。 */}
-                                <button type="button"
-                                  className={`npr-diary-dayitem${focusKey === entryKey(entry) ? ' is-focus' : ''}`}
-                                  aria-current={focusKey === entryKey(entry) ? 'true' : undefined}
-                                  title={`${entry.time} ${entry.preview}`}
-                                  onClick={() => jump(item.date, entryKey(entry))}>
-                                  <span className="npr-diary-dayitem-time">{entry.time}</span>
-                                  <span className="npr-diary-dayitem-text">{entry.preview}</span>
-                                </button>
-                              </li>
-                            ))}
+                            {item.entries.map((entry) => {
+                              /*
+                               * ★ 0.47.4：一条灵感分两层显示（首句当标题、余下当摘要）。
+                               *   判断在 `entryLines()` 里 —— 它决定「这条有几行」，
+                               *   写进 JSX 的三元里就没法写判据了。
+                               *   `title` 属性仍留全文预览：两行摘要放不下的时候，
+                               *   鼠标停一下还能读到 160 字。
+                               */
+                              const lines = entryLines(entry.preview);
+                              return (
+                                <li key={entryKey(entry)}>
+                                  {/* 这一项是不是「刚被点过的那一条」——右侧正文里同一条也在高亮，
+                                      两处同时亮才叫「对应」。只亮右边的话，用户得自己在一屏里找。 */}
+                                  <button type="button"
+                                    className={`npr-diary-dayitem${focusKey === entryKey(entry) ? ' is-focus' : ''}`}
+                                    aria-current={focusKey === entryKey(entry) ? 'true' : undefined}
+                                    title={`${entry.time} ${entry.preview}`}
+                                    onClick={() => jump(item.date, entryKey(entry))}>
+                                    <span className="npr-diary-dayitem-time">{entry.time}</span>
+                                    <span className="npr-diary-dayitem-body">
+                                      <span className="npr-diary-dayitem-title">{lines.title}</span>
+                                      {lines.rest !== '' && (
+                                        <span className="npr-diary-dayitem-rest">{lines.rest}</span>
+                                      )}
+                                    </span>
+                                  </button>
+                                </li>
+                              );
+                            })}
                           </ul>
                         )}
                       </div>
