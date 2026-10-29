@@ -119,14 +119,14 @@ describe('0.47.1：日记页首屏渲染冒烟', () => {
   /**
    * 0.48：落到**读后感**那一块也真的渲染一次。
    *
-   * ★ 「读毕之书」这一小块是这一版改动最密的地方：索引 → 写过 / 待写 → 筛选后的
+   * ★ 「思想留白 · 拾遗」这一小块是这一版改动最密的地方：索引 → 写过 / 待写 → 筛选后的
    *   数组 → 卡片标记，四层派生。任何一层写在它的依赖之前，`const` 的暂时性死区
    *   会当场抛；而源码判据（`diary-ui.test.mjs`）看不出来 —— 0.47.0 的白屏就是
    *   这么发出去的。
    * ★ 顺带钉一条「别抢跑」：书单还没回来（`books.items` 是空的）时**不画**筛选条。
    *   三个数都是 0 的筛选条比没有它更糟 —— 用户会以为自己的书全丢了。
    */
-  it('★ 读后感模块也不白屏，标题是「读毕之书」', async () => {
+  it('★ 读后感模块也不白屏，标题是「思想留白 · 拾遗」', async () => {
     if (DiaryApp === null) {
       const mod = await import(pathToFileURL(outFile).href);
       DiaryApp = mod.DiaryApp;
@@ -141,7 +141,7 @@ describe('0.47.1：日记页首屏渲染冒烟', () => {
       SessionProvider: ({ children }) => children ?? null,
       renderSlot: () => null,
     }));
-    assert.ok(html.includes('读毕之书'), '读后感侧栏没渲染出「读毕之书」');
+    assert.ok(html.includes('思想留白 · 拾遗'), '读后感侧栏没渲染出「思想留白 · 拾遗」');
     assert.ok(!html.includes('npr-diary-shelffilter'), '书单还没回来就把筛选条画出来了');
   });
 });

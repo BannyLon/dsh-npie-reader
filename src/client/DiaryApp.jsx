@@ -2182,9 +2182,24 @@ export function DiaryApp({
             </div>
           ) : (
             <div className="npr-diary-panel">
-              <div className="npr-search-box npr-diary-search">
-                <input type="search" aria-label="找一本书" placeholder="只列出标记为读完的书…" value={bookQuery}
-                  onChange={(event) => setBookQuery(event.target.value)} />
+              {/* ★ 这是一个**输入框**，不是一条注记（用户 2026-10-29：「下面这个既是
+                  说明标签又是搜索框对吗？搜索框太不明显了」）。
+                  旧版本两处一起把人骗了：placeholder 写成「只列出标记为读完的书…」
+                  （那是说明语，不是「要我输入什么」），外形又只有一块 4% 淡底、
+                  没有描边也没有搜索图标。现在：placeholder 只剩搜索语，
+                  框本体长出描边 + 放大镜，有内容时右边给一个清空按钮。 */}
+              <div className="npr-search-box npr-diary-shelfsearch">
+                <div className="npr-diary-searchfield">
+                  <Icon name="search" size={13} className="npr-diary-searchicon" />
+                  <input type="search" aria-label="搜书名" placeholder="搜书名…" value={bookQuery}
+                    onChange={(event) => setBookQuery(event.target.value)} />
+                  {bookQuery !== '' && (
+                    <button type="button" className="npr-diary-searchclear" aria-label="清空搜索"
+                      title="清空" onClick={() => setBookQuery('')}>
+                      <Icon name="x" size={11} />
+                    </button>
+                  )}
+                </div>
               </div>
               {books.busy && <p className="npr-diary-sect-note">正在读书架…</p>}
               {!books.busy && books.error !== '' && <p className="npr-diary-sect-note is-error">{books.error}</p>}
@@ -2197,7 +2212,7 @@ export function DiaryApp({
                       否则一份叫「读完过」的名单里躺着一本在读的书，就是一句假话。 */}
                   <h2 className="npr-diary-sect-head is-lead">
                     <span className="npr-diary-sect-mark"><Icon name="book-open" size={13} /></span>
-                    读毕之书
+                    思想留白 · 拾遗
                     <span className="npr-diary-sect-badge">{readBooks.length}</span>
                   </h2>
                   {/* ★ 「已写 / 待写」不是一个装饰标签（0.48）。这份名单里本来就混着

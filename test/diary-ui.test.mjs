@@ -1762,13 +1762,13 @@ describe('0.44.2：写作区的纸面与区块标签', () => {
 describe('读后感侧栏：区分已写 / 待写，封面不再退化成方块', () => {
   const css = read('refinements.css');
 
-  it('★ 名单标题是「读毕之书」，不是「读完的」', () => {
-    assert.match(diary, /读毕之书/, '标题还是「读完了 / 读完的」—— 用户嫌它太直白');
+  it('★ 名单标题是「思想留白 · 拾遗」，不是「读完的」', () => {
+    assert.match(diary, /思想留白 · 拾遗/, '标题还是「读完了 / 读完的」—— 用户嫌它太直白');
     assert.doesNotMatch(diary, />读完的</, '旧标题还在渲染');
     // 与 0.47.3 的「你的灵感时间线」同一档：主标题（is-lead）+ 图标块。
-    assert.match(diary, /npr-diary-sect-head is-lead[\s\S]{0,220}?读毕之书/,
+    assert.match(diary, /npr-diary-sect-head is-lead[\s\S]{0,220}?思想留白 · 拾遗/,
       '这份名单又退回普通小标题了 —— 它是这一页的主结构');
-    assert.match(diary, /npr-diary-sect-mark[\s\S]{0,80}?读毕之书/, '标题旁没有图标块');
+    assert.match(diary, /npr-diary-sect-mark[\s\S]{0,80}?思想留白 · 拾遗/, '标题旁没有图标块');
   });
 
   it('★ 封面：`loadBooks` 必须把 `size` 带过来（PDF 首页渲染的唯一入口）', () => {
@@ -1835,5 +1835,61 @@ describe('读后感侧栏：区分已写 / 待写，封面不再退化成方块'
     assert.notEqual(blankMark, '', '找不到待写标记的样式');
     assert.match(blankMark, /border: 1px dashed/, '待写没有虚线 —— 两态都是实底胶囊，看不出哪个是还没做');
     assert.doesNotMatch(blankMark, /background:/, '待写也上了底色 —— 它不该和「已写」一样重');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.49：读后感侧栏那个搜索框「看不出来是搜索框」
+//
+// ★ 用户 2026-10-29 原话：「下面这个既是说明标签又是搜索框对吗？搜索框太不明显了」。
+//   两件事一起把人骗了，缺一不可：
+//   ① 文案 —— placeholder 写的是「只列出标记为读完的书…」，那是一句**说明**，
+//      回答的是「这份名单是什么」，而不是「要我输入什么」。输入框的提示语只能回答后者。
+//   ② 外形 —— 只有一块 4% 淡底、没有描边、没有放大镜。网格里每格都是圆角卡片，
+//      一块无边的浅灰在它们上面就只是一条注记。
+// ---------------------------------------------------------------------------
+describe('读后感侧栏：搜索框要像输入框', () => {
+  const css = read('refinements.css');
+
+  it('★ placeholder 只回答「搜什么」，不兼任名单说明', () => {
+    assert.match(diary, /<Icon name="search"[\s\S]{0,400}?placeholder="搜书名…"/,
+      '搜索框里没有放大镜，或者 placeholder 又不是搜索语');
+    assert.doesNotMatch(diary, /只列出标记为读完的书/,
+      '说明语还塞在 placeholder 里 —— 用户会把它当成标签而不是输入提示');
+  });
+
+  it('这份名单是什么，由标题和筛选条回答（说明语删掉不等于语义丢了）', () => {
+    assert.match(diary, /思想留白 · 拾遗/, '标题没了，说明语又删了，这块就没有任何文字说它是「读完的书」');
+    assert.match(diary, /\{ key: 'written', label: '写过'/, '已写 / 待写 的筛选条也没了');
+  });
+
+  it('★ 框本体要长出描边，不是一块淡底', () => {
+    const input = /\.npr-root \.npr-diary-searchfield input \{[^}]*\}/.exec(css)?.[0] ?? '';
+    assert.notEqual(input, '', '找不到搜索框样式 —— 锚点失效，下面的断言都是假绿');
+    assert.match(input, /border: 1px solid var\(--npr-border-strong\)/,
+      '搜索框没有 1px 实描边 —— 回到「只有一层淡底」那种注记样');
+    assert.doesNotMatch(input, /border: 1px solid transparent/,
+      '描边又写成 transparent 了（0.48 就是这么丢掉边框的）');
+    assert.match(input, /height: 32px/, '高度又回到 30px 以下 —— 和卡片比起来像一行小字');
+  });
+
+  it('聚焦时换成品牌色描边，而不是只把底色刷白', () => {
+    const focus = /\.npr-root \.npr-diary-searchfield input:focus-visible \{[^}]*\}/.exec(css)?.[0] ?? '';
+    assert.notEqual(focus, '', '找不到聚焦态');
+    assert.match(focus, /border-color: color-mix\(in srgb, var\(--npr-accent\) 55%, var\(--npr-fg\)\)/,
+      '聚焦态没有品牌色描边 —— 品牌亮色直接当前景只有 1.45:1，必须混 fg');
+    assert.match(focus, /box-shadow: 0 0 0 3px/);
+  });
+
+  it('有内容时才给清空钮，且原生 ✕ 要收掉（否则两个叉叠在一起）', () => {
+    assert.match(diary, /\{bookQuery !== '' && \([\s\S]{0,240}?npr-diary-searchclear/,
+      '清空钮不是「有内容才出现」');
+    assert.match(css, /::-webkit-search-cancel-button \{ appearance: none; \}/,
+      '原生 ✕ 没收掉 —— 它和自定义圆钮会叠在同一个位置');
+  });
+
+  it('★ 样式锚在自己的类名上，不锚容器（换容器就整块消失）', () => {
+    assert.doesNotMatch(css, /\.npr-sidebar \.npr-diary-shelfsearch/,
+      '又挂回 .npr-sidebar 了 —— 这个块只属于读后感模块，样式不该依赖它被放在哪');
   });
 });

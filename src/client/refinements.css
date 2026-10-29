@@ -2745,6 +2745,30 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-sidebar .npr-diary-search input { height: 30px; padding: 0 10px; border: 1px solid transparent; border-radius: 7px; background: color-mix(in srgb, var(--npr-fg) 4%, transparent); font-size: 12px; }
 .npr-sidebar .npr-diary-search input:focus-visible { border-color: var(--npr-border-strong); background: var(--npr-bg); outline: none; }
 
+/* 读后感侧栏的搜索框：**输入框**该有的样子。
+   ★ 0.48 之前这一格是「4% 淡底 + 无描边 + 无图标」，placeholder 又写着
+     「只列出标记为读完的书…」—— 文案像说明、外形像一条压灰的注记，两件事叠一起，
+     用户就问出了「既是说明标签又是搜索框对吗」（2026-10-29 原话）。
+   ★ 所以这里**不复用**上面那套无边框样式：那是给灵感检索器用的（上面紧挨分段控件、
+     下面紧挨结果行，多一圈描边会套成「表单里的表单」）。读后感这块下面是封面网格，
+     长出描边不会套娃，反而必须长 —— 网格里每一格也是圆角卡片，光靠淡底认不出来。
+   ★ 底色用 `--npr-bg` 而不是 `--npr-bg-2`：侧栏本身就是 `--npr-bg-2`，同色等于没有底。 */
+/* ★ 锚 `.npr-root` 而不是 `.npr-sidebar`：这块框只属于读后感模块，靠模块自己的类名
+   定位就够了；挂到容器类名上，一旦这个模块被搬到别处（或预览壳不同构）样式就整块消失，
+   而画面上只是「长得不对」，看不出是选择器没命中。 */
+.npr-root .npr-diary-shelfsearch { padding: 10px 12px 8px; }
+.npr-diary-searchfield { position: relative; display: flex; align-items: center; }
+.npr-diary-searchicon { position: absolute; left: 9px; color: var(--npr-faint); pointer-events: none; }
+.npr-root .npr-diary-searchfield input { width: 100%; height: 32px; padding: 0 30px 0 28px; border: 1px solid var(--npr-border-strong); border-radius: 8px; background: var(--npr-bg); color: var(--npr-fg); font: inherit; font-size: 12px; transition: border-color .12s ease-out, background .12s ease-out, box-shadow .12s ease-out; }
+.npr-root .npr-diary-searchfield input::placeholder { color: var(--npr-faint); }
+.npr-root .npr-diary-searchfield input:hover { border-color: color-mix(in srgb, var(--npr-fg) 30%, transparent); }
+.npr-root .npr-diary-searchfield input:focus-visible { border-color: color-mix(in srgb, var(--npr-accent) 55%, var(--npr-fg)); background: var(--npr-bg); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--npr-accent) 15%, transparent); }
+/* webkit 自带的那个 ✕ 在 12px 字号下只有 6px，且颜色跟着 `color` 走（浅灰看不见），
+   换成一个能点的圆钮；`appearance:none` 把原生的收掉，免得两个叉叠在一起。 */
+.npr-root .npr-diary-searchfield input::-webkit-search-cancel-button { appearance: none; }
+.npr-diary-searchclear { position: absolute; right: 6px; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: color-mix(in srgb, var(--npr-fg) 9%, transparent); color: var(--npr-muted); cursor: pointer; transition: background .12s ease-out, color .12s ease-out; }
+.npr-diary-searchclear:hover { background: color-mix(in srgb, var(--npr-fg) 18%, transparent); color: var(--npr-fg); }
+
 /* 筛选条（点标签之后）：回答「列表为什么变了」，并给出唯一的出口「全部」。
    ★ 不用填充色块、不用品牌色 —— 它和标签云、时间轴同属检索器，不是一个按钮。
    ★ `padding` 与 `.npr-diary-search` 保持一致：搜索态 ↔ 筛选态切换时侧栏不跳。 */
