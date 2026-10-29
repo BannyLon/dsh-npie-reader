@@ -80,6 +80,7 @@ import { formatExt } from './book-cover.js';
 import { ensureStyles } from './ReaderPage.jsx';
 import { ViewSwitch } from './ViewSwitch.jsx';
 import { Icon } from './icons.jsx';
+import { BRAND_TITLE } from './brand.js';
 
 /** 一条正文渲染成 HTML。与译文同一条路（markdown → sanitize），不自造渲染器。 */
 function renderBody(body) {
@@ -2633,7 +2634,7 @@ export function DiaryApp({
                      *   也没有落点，看起来像一条系统提示，而不是「一页还没开始的稿纸」。
                      */
                     <div className="npr-welcome">
-                      <div className="npr-welcome-brand">NPIE REFLECTION</div>
+                      <div className="npr-welcome-brand">{BRAND_TITLE}</div>
                       <h2>读完的书，值得留一句</h2>
                       <p className="npr-welcome-intro">
                         左边只列<strong>读完过</strong>的书。没读完的不在里面 ——

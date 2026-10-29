@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { BRAND_TITLE } from './brand.js';
 
 export function MediaDock({ episode }) {
   const audio = useRef();
@@ -7,7 +8,7 @@ export function MediaDock({ episode }) {
     setError('');
     if (!episode || !navigator.mediaSession) return;
     const session = navigator.mediaSession;
-    if (typeof MediaMetadata !== 'undefined') session.metadata = new MediaMetadata({ title: episode.titleZh || episode.title, artist: episode.author || episode.channelName || 'NPIE 阅读器' });
+    if (typeof MediaMetadata !== 'undefined') session.metadata = new MediaMetadata({ title: episode.titleZh || episode.title, artist: episode.author || episode.channelName || BRAND_TITLE });
     const handlers = {
       play: () => { void audio.current?.play().catch(() => setError('播放失败，请重试或打开原文')); },
       pause: () => audio.current?.pause(),

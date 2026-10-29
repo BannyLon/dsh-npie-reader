@@ -5,6 +5,7 @@
  */
 import { NativeConversation } from './NativeConversation.jsx';
 import { nativeChatBridge } from './native-chat.js';
+import { BRAND_TITLE } from './brand.js';
 import { ReaderIcon } from './ReaderPage.jsx';
 import { ReaderPanel } from './ReaderBoundary.jsx';
 
@@ -144,6 +145,9 @@ function registerReader(ctx) {
     name: 'sidebar.panellist',
     id: PANEL_ID,
     order: 15,
-    label: '阅读器',
+    // 侧栏那一行写**中英名**：宿主给面板标题留了省略号（`.panelTitle` 是
+    // `text-overflow: ellipsis`），260px 宽的侧栏放得下「澄境 | Limina」。
+    // 不写成「阅读器」——「阅读器」是这一屏的功能，不是这个插件的名字。
+    label: BRAND_TITLE,
   }, ReaderIcon));
 }

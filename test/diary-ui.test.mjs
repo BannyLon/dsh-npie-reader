@@ -1087,9 +1087,11 @@ describe('0.35：标签扩展性 / 私密逐条查看 / 读后感空状态', () 
 
   it('★ 读后感空状态与「阅读」那一页同一套版式（不是三行说明文字）', () => {
     assert.match(diary, /<div className="npr-welcome">/, '空状态没用 welcome 版式');
-    assert.match(diary, /NPIE REFLECTION/);
+    // 品牌行写 `{BRAND_TITLE}`：名字只存一份（`src/client/brand.js`），这里钉的是
+    // 「空状态挂了品牌行」这件事，不是某一句字面量。
+    assert.match(diary, /npr-welcome-brand">\{BRAND_TITLE\}/, '空状态没挂品牌行');
     // 版式必须**在读后感模块里**，不能顺手加到别的模块的空状态上。
-    const block = /moduleValue === 'reflection'[\s\S]{0,4000}?NPIE REFLECTION/.test(diary);
+    const block = /moduleValue === 'reflection'[\s\S]{0,4000}?npr-welcome-brand">\{BRAND_TITLE\}/.test(diary);
     assert.ok(block, 'welcome 版式不在读后感模块里');
     // 只判**空状态那一段**：`先在左边选一本书` 作为保存时的报错文案还在（那是另一处，合理）。
     assert.equal(diary.includes('<p>先在左边选一本书。</p>'), false, '旧的三行说明还在');

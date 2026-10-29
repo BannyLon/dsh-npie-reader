@@ -635,6 +635,13 @@
 .npr-settings-about-brand { display: flex; gap: 14px; align-items: center; }
 .npr-settings-about-brand > span { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; background: var(--npr-fg); color: var(--npr-bg); font-size: 21px; font-family: Georgia,serif; }
 .npr-settings-about-brand p, .npr-settings-about-card > p { margin: 4px 0 0; font-size: 12px; color: var(--npr-muted); }
+/* slogan 是「关于」卡片的抬头句，不是正文：中文一行、英文一行，比下面那段说明更淡更松。
+   特异性要比上一行 `.npr-settings-about-card > p` 高，否则 slogan 会被压成 12px 灰色说明文字。
+   跟一段 12px 正文只差 1px 字号是看不出来的，所以中英两行自己撑起一段：中文 13.5px 深色、
+   英文 11px 副标，下面再接正文时留 12px —— 不留就是三行等重的说明，slogan 白写。 */
+.npr-settings-about-card > p.npr-settings-about-slogan { margin: 18px 0 0; font-size: 13.5px; line-height: 1.55; letter-spacing: .02em; color: var(--npr-fg); }
+.npr-settings-about-slogan span { display: block; margin-top: 2px; font-size: 11px; letter-spacing: .05em; color: var(--npr-muted); }
+.npr-settings-about-card > p.npr-settings-about-slogan + p { margin-top: 12px; }
 .npr-settings-links { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
 .npr-settings-links a { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 11px; border: 1px solid var(--npr-border); border-radius: 8px; color: var(--npr-fg); font-size: 12px; text-decoration: none; }
 .npr-settings-links a:hover { background: var(--npr-hover); text-decoration: none; }

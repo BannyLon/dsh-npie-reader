@@ -29,6 +29,7 @@ import {
   isEbookExtension, libraryStats, normalizeState, parseScope, scopeValue, sourceLabelOf, sourceTotals, stateOf,
 } from '../library.js';
 import { Icon } from './icons.jsx';
+import { BRAND_TITLE } from './brand.js';
 import { BookCover } from './BookCover.jsx';
 import { BookReader } from './BookReader.jsx';
 import { BookEbook } from './BookEbook.jsx';
@@ -1113,7 +1114,7 @@ export function LibraryApp({
               onFinished={() => void persist(selected.id, { state: 'read' })} />          )
         ) : (
           <div className="npr-welcome">
-            <div className="npr-welcome-brand">NPIE BOOKSHELF</div>
+            <div className="npr-welcome-brand">{BRAND_TITLE}</div>
             {/*
               ★ 这里是**入口说明**，不是功能清单：一段只说一件事，三段讲完
                 「两页各放什么 → 怎么开始读 → 打开后能干什么」。

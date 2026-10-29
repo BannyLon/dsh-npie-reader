@@ -13,6 +13,7 @@ import { markdownToHtml } from '../host/markdown.js';
 import { READING_DEFAULTS, fontStack } from '../reading-settings.js';
 import { effectiveModelLabel } from '../ai-model.js';
 import { Icon } from './icons.jsx';
+import { BRAND_TITLE, SLOGAN_EN, SLOGAN_ZH } from './brand.js';
 import { ChannelPicker, ChannelMark } from './ChannelPicker.jsx';
 import { ReadingAppearance } from './ReadingAppearance.jsx';
 import { SettingsPage } from './SettingsPage.jsx';
@@ -256,8 +257,15 @@ const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--
 .npr-translation-partial{display:flex;align-items:flex-start;gap:8px;margin-top:14px;padding:9px 12px;border:.5px solid color-mix(in srgb, var(--npr-accent) 45%, var(--npr-border));border-radius:9px;background:color-mix(in srgb, var(--npr-accent) 8%, var(--npr-bg));color:var(--npr-fg);font-size:12px;line-height:1.6}
 .npr-translation-partial svg{flex:none;margin-top:2px;color:var(--npr-accent-strong)}
 .npr-welcome{width:min(100%,440px);margin:clamp(48px,14vh,160px) auto 48px;padding:0 28px;text-align:left}
-.npr-welcome-brand{font-size:10px;font-weight:600;letter-spacing:.2em;color:var(--npr-faint);margin-bottom:28px}
+/* 品牌行现在写的是「澄境 | Limina」——**中英混排**。原来那套 10px / letter-spacing:.2em
+   是给纯大写英文（NPIE READER）调的：同样的字距套到两个汉字上，会把「澄境」拉成
+   「澄 境」，像两处打字错误。11px + .1em 让中文两字仍是一个词，英文也不糊在一起。 */
+.npr-welcome-brand{font-size:11px;font-weight:600;letter-spacing:.1em;color:var(--npr-faint);margin-bottom:28px}
 .npr-welcome h2{font-family:var(--npr-font-family);font-size:clamp(25px,3vw,34px);font-weight:400;letter-spacing:.02em;line-height:1.5;margin:0 0 12px;color:var(--npr-fg)}
+/* 英文 slogan 贴着 h2（-4px 抵掉一部分标题下边距，净距 8px），但离正文远（22px）：
+   它属于**标题**那一组，不属于下面三段说明。
+   颜色用 --npr-muted 而不是 --npr-faint：11.5px 的拉丁小字在 faint 档只有约 3.9:1。 */
+.npr-welcome-slogan-en{margin:-4px 0 22px;font-size:11.5px;letter-spacing:.06em;line-height:1.6;color:var(--npr-muted)}
 .npr-welcome-intro{font-size:13px;line-height:1.8;color:var(--npr-muted);margin:0}
 /* 说明文字分成三段（书架 / 怎么开始 / 能干什么）：段间留 12px，比行距 23px 的一半多一点，
    读起来是「三块」而不是「一大段被切开」—— 断句靠间距，不靠标点。 */
@@ -2127,8 +2135,12 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                   未选中两种状态下，面板顶部都是同一条 44px 的线。 */}
               <div className="npr-book-toolbar" data-window-drag />
               <div className="npr-welcome">
-                <div className="npr-welcome-brand">NPIE READER</div>
-                <h2>只读你选的，读懂每一篇</h2>
+                <div className="npr-welcome-brand">{BRAND_TITLE}</div>
+                <h2>{SLOGAN_ZH}</h2>
+                {/* 英文 slogan 是**副标**：字号与行距都往下压一档，颜色用 --npr-faint。
+                    与 h2 同级而不是塞进 h2 的 span —— 中英混排在同一行会在中文句号后
+                    留下一个空档，读起来像排版事故。 */}
+                <p className="npr-welcome-slogan-en">{SLOGAN_EN}</p>
                 {/* 两段按「怎么读」/「怎么读懂」分：第一段只讲这一屏能看到的操作，
                     第二段讲模型补什么。合成一段会有五个分句、三处转折，读起来像说明书。 */}
                 <p className="npr-welcome-intro">

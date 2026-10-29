@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Icon } from './icons.jsx';
+import { BRAND_TITLE, SLOGAN_EN, SLOGAN_ZH } from './brand.js';
 import { ReadingControls } from './ReadingAppearance.jsx';
 import { OpmlImport } from './OpmlImport.jsx';
 import { SubscriptionManager } from './SubscriptionManager.jsx';
@@ -220,9 +221,9 @@ export function SettingsPage({ api, onClose, notify, onSubscriptionsChanged, ini
     } catch (error) { setMessage(`导出失败：${error?.message ?? String(error)}`); }
   };
   return <div className="npr-settings-backdrop" onClick={onClose}>
-    <section className="npr-settings-page" role="dialog" aria-modal="true" aria-label="NPIE 阅读器设置" onClick={event => event.stopPropagation()}>
+    <section className="npr-settings-page" role="dialog" aria-modal="true" aria-label={`${BRAND_TITLE} 设置`} onClick={event => event.stopPropagation()}>
       <header className="npr-settings-head">
-        <div><span>NPIE READER</span><strong>插件设置</strong></div>
+        <div><span>{BRAND_TITLE}</span><strong>插件设置</strong></div>
         <button type="button" className="npr-icon" title="关闭设置" aria-label="关闭设置" onClick={onClose}><Icon name="x" /></button>
       </header>
       <div className="npr-settings-body">
@@ -394,10 +395,11 @@ export function SettingsPage({ api, onClose, notify, onSubscriptionsChanged, ini
             <div className="npr-settings-card"><PromptManager notify={setMessage} startAdding={startAddingPrompt} scope="article" /></div>
             <div className="npr-settings-card"><PromptManager notify={setMessage} scope="book" /></div>
           </section>}
-          {tab === 'about' && <section aria-label="关于 NPIE 阅读器">
-            <div className="npr-settings-intro"><h2>关于 NPIE 阅读器</h2><p>为 DeepSeek Harness 打造的安静阅读空间。</p></div>
+          {tab === 'about' && <section aria-label={`关于 ${BRAND_TITLE}`}>
+            <div className="npr-settings-intro"><h2>关于 {BRAND_TITLE}</h2><p>为 DeepSeek Harness 打造的安静阅读空间。</p></div>
             <div className="npr-settings-card npr-settings-about-card">
-              <div className="npr-settings-about-brand"><span>读</span><div><h3>NPIE 阅读器</h3><p>版本 {VERSION} · GPL-3.0-only</p></div></div>
+              <div className="npr-settings-about-brand"><span>澄</span><div><h3>{BRAND_TITLE}</h3><p>版本 {VERSION} · GPL-3.0-only</p></div></div>
+              <p className="npr-settings-about-slogan">{SLOGAN_ZH}<span>{SLOGAN_EN}</span></p>
               <p>订阅作者、读原文或中文版本、带着文章向 AI 追问。订阅、阅读数据与译文/改写都保存在本机 Harness 目录，不经过任何远程服务。</p>
             </div>
             <div className="npr-settings-card">
