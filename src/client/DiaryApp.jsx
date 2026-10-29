@@ -69,6 +69,7 @@ import { BOOK_STATE_LABELS, hasFinished } from '../library.js';
 import { coverGlyph, coverHue } from './book-cover.js';
 import { entryOrigin, originIcon, originJumpLabel, originMissNote, originTarget } from './diary-origin.js';
 import { entryLines } from './diary-lines.js';
+import { agoLabel } from './diary-ago.js';
 import { placeRowMenu } from './row-menu.js';
 import { BookCover } from './BookCover.jsx';
 import { DiaryCalendar } from './DiaryCalendar.jsx';
@@ -354,7 +355,7 @@ export function DiaryApp({
    */
   const [dash, setDash] = useState({
     busy: true, locked: false, days: 0, chars: null, streak: 0,
-    moods: [], moodEntries: {}, onThisDay: [], error: '',
+    moods: [], moodEntries: {}, onThisDay: [], lastEntry: null, error: '',
   });
   /**
    * 点中的那一档情绪（1..5，`null` = 没筛）。
@@ -650,6 +651,7 @@ export function DiaryApp({
         moods: Array.isArray(payload.moods) ? payload.moods : [],
         moodEntries: payload.moodEntries ?? {},
         onThisDay: Array.isArray(payload.onThisDay) ? payload.onThisDay : [],
+        lastEntry: payload.lastEntry ?? null,
         error: '',
       });
     } catch (cause) {
@@ -1585,9 +1587,6 @@ export function DiaryApp({
 
   /** ★ 只数**私密**那一边。用合计会让私密日历上的点跟着灵感一起亮（用户报的就是这个）。 */
   const privateDays = marks.privateDays ?? {};
-  const writtenDays = Object.entries(privateDays)
-    .filter(([, count]) => count > 0)
-    .sort((left, right) => right[0].localeCompare(left[0]));
 
   /** `date → 1..5`，给日历上那粒点上色。没记过心情的日期没有键。 */
   const privateTones = useMemo(() => {
@@ -2091,23 +2090,15 @@ export function DiaryApp({
               <DiaryCalendar year={month.year} month0={month.month0} marks={privateDays} tones={privateTones}
                 selected={selected} today={today}
                 onPick={pick} onShift={(delta) => setMonth(shiftMonth(month.year, month.month0, delta))} onToday={() => pick(today)} />
-              <section className="npr-diary-sect">
-                <h2 className="npr-diary-sect-head"><Icon name="calendar" size={12} />这个月</h2>
-                {writtenDays.length === 0 && <p className="npr-diary-sect-note">这个月还没有私密日记。</p>}
-                {writtenDays.map(([date, count]) => {
-                  const tone = marks.moods?.[date]?.private;
-                  return (
-                    <button key={date} type="button" className={`npr-diary-dayrow${date === selected ? ' npr-selected' : ''}`}
-                      aria-pressed={date === selected} onClick={() => pick(date)}>
-                      <span className="npr-diary-dayrow-date">{dayLabel(date, today)}</span>
-                      {tone > 0 && (
-                        <span className="npr-diary-dayrow-mood" aria-hidden="true">{MOODS.find((item) => item.tone === tone)?.emoji}</span>
-                      )}
-                      <span className="npr-diary-dayrow-count">{count} 条</span>
-                    </button>
-                  );
-                })}
-              </section>
+              {/*
+                * ★ 日历下面那份「这个月」列表已经删掉（用户 2026-10-29）：
+                *   「日历上标注了，『·』就代表有内容，点击日历就可以查看，所以这个列表
+                *    没必要了。重复。」
+                *   它确实是同一份数据的第二种排法 —— 日历给「哪天有」，列表再把这些天
+                *   按日期列一遍，连点一下跳同一天都是同一个 `pick()`。而这多出来的一屏
+                *   把「本月情绪」和「那年今日」挤到了要滚动才看得见的位置。
+                *   空态说明也不需要留：日历下方本来就有「这个月写了 N 天」。
+                */}
 
               {/* ---- 本月情绪与足迹 ------------------------------------------
                   日历下面这块原本一直空着（268px 宽、半屏高）。放两块卡片：
@@ -2156,14 +2147,35 @@ export function DiaryApp({
                 {dash.error !== '' && <p className="npr-diary-card-note is-error">刚才没读上来：{dash.error}</p>}
               </section>
 
-              {/* ---- 那年今日 ------------------------------------------------
+              {/* ---- 那年今日 / 上次提笔 --------------------------------------
                   ★ 只列**更早年份**的同月同日，最多 5 条：今天写的日记不是「那年今日」。
-                  ★ 摘要由宿主给（60 字）。侧栏放不下正文，点一行才回到那一天。 */}
-              <section className="npr-diary-card" aria-label="那年今日">
-                <h2 className="npr-diary-card-head"><Icon name="clock" size={12} />那年今日</h2>
+                  ★ 摘要由宿主给（60 字）。侧栏放不下正文，点一行才回到那一天。
+                  ★ 「那年今日」的条件太苛刻 —— 要求**往年**同月同日写过。第一年它整年
+                    都是空的，第二年起也只有真的在那一天写过才有内容（用户 2026-10-29：
+                    「感觉要用一年之后才会有那年今日，那么第一年这里怎么办？这是个逻辑
+                     bug」）。所以没有往年同日时退回「上次提笔」：同样回答「我以前留下过
+                    什么」，只是把「去年的今天」放宽成「上一次」。
+                  ★ 标题跟着换。「上次提笔」的卡片顶着「那年今日」四个字就是假话。 */}
+              <section className="npr-diary-card" aria-label={dash.onThisDay.length === 0 && dash.lastEntry !== null ? '上次提笔' : '那年今日'}>
+                <h2 className="npr-diary-card-head">
+                  <Icon name="clock" size={12} />
+                  {dash.onThisDay.length === 0 && dash.lastEntry !== null ? '上次提笔' : '那年今日'}
+                </h2>
                 {dash.busy && <p className="npr-diary-card-note">正在翻旧账…</p>}
-                {!dash.busy && dash.onThisDay.length === 0 && (
+                {!dash.busy && dash.onThisDay.length === 0 && dash.lastEntry === null && (
                   <p className="npr-diary-card-note">这一天，时光悄悄走过，还没有留下痕迹 ✨</p>
+                )}
+                {!dash.busy && dash.onThisDay.length === 0 && dash.lastEntry !== null && (
+                  <button
+                    type="button"
+                    className={`npr-diary-echo${dash.lastEntry.locked ? ' is-locked' : ''}`}
+                    title={dash.lastEntry.locked ? '解锁后方可穿越时空' : `回到 ${dash.lastEntry.date}${dash.lastEntry.time ? ` ${dash.lastEntry.time}` : ''}`}
+                    onClick={() => (dash.lastEntry.locked ? askUnlock() : pick(dash.lastEntry.date))}>
+                    <span className="npr-diary-echo-when">📅 {agoLabel(dash.lastEntry, today)}</span>
+                    <span className="npr-diary-echo-text">
+                      {dash.lastEntry.locked ? '解锁后方可穿越时空' : (dash.lastEntry.preview || '（那天没有留下正文）')}
+                    </span>
+                  </button>
                 )}
                 {!dash.busy && dash.onThisDay.map((cell) => (
                   <button

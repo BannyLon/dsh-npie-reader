@@ -547,6 +547,43 @@ export function createDiaryStore(options = {}) {
       }
       onThisDay.push(cell);
     }
+    /*
+     * 「上次提笔」：选中这一天**之前**的最近一篇。
+     *
+     * ★ 为什么要有它：`onThisDay` 只认「更早年份的同一个日子」。第一年用这个插件，
+     *   那块永远是空的 —— 而且不只是第一年：**一年里的 364 天**，只要往年没在同月
+     *   同日写过，也都是空的。空着不是「今天没有可看的」，是这块地方在整段时间里
+     *   没有任何用途（用户 2026-10-29：「感觉要用一年之后才会有那年今日，那么第一年
+     *   这里怎么办？这是个逻辑bug」）。
+     * ★ 所以没有往年同日时，退回「上一次写日记是哪天、写了什么」。它回答的是同一个
+     *   问题（「我以前留下过什么」），只是把「去年的今天」放宽成了「上一次」。
+     * ★ 只往前找，不找选中这天之后：这一块的语义是回望，不是预览。
+     */
+    const toUTC = (key) => {
+      const [year_, month_, day_] = key.split('-').map(Number);
+      return Date.UTC(year_, month_ - 1, day_);
+    };
+    let lastEntry = null;
+    for (let index = keys.length - 1; index >= 0; index -= 1) {
+      const key = keys[index];
+      if (key >= date) continue;
+      lastEntry = {
+        date: key,
+        daysAgo: Math.round((toUTC(date) - toUTC(key)) / 86400000),
+        time: '',
+        preview: '',
+      };
+      try {
+        const first = parseDay(await readPrivate(key)).entries[0];
+        if (first) {
+          lastEntry.time = first.time;
+          lastEntry.preview = previewOf(first.body);
+        }
+      } catch {
+        lastEntry.locked = true;
+      }
+      break;
+    }
     const moods = [...counts.entries()]
       .map(([score, count]) => ({ score, count }))
       .sort((left, right) => right.count - left.count || right.score - left.score);
@@ -567,6 +604,8 @@ export function createDiaryStore(options = {}) {
       // 点某一档情绪 → 右侧列出本月这一档的全部条目（只有摘要，点一行才回那一天）。
       moodEntries: Object.fromEntries([...byMood.entries()].map(([score, rows]) => [String(score), rows])),
       onThisDay,
+      // 没有「往年同日」时这一块的退路：上一次写日记是哪天、写了什么（见上面的注释）。
+      lastEntry,
     };
   }
 

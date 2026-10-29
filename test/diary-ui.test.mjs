@@ -905,12 +905,14 @@ describe('读后感门禁：只对读完（过）的书开放', () => {
 // ---------------------------------------------------------------------------
 
 describe('私密侧栏：只数私密，不混灵感的条数', () => {
-  it('★ 日历与「这个月」都吃 privateDays，不吃合计的 days', () => {
+  it('★ 日历只吃 privateDays，不吃合计的 days', () => {
     assert.match(diary, /const privateDays = marks\.privateDays \?\? \{\}/, '没有单独取私密的计数');
     assert.match(diary, /marks=\{privateDays\}/,
       '日历还在吃合计的 days —— 灵感会让私密日历上的点亮起来');
-    assert.match(diary, /Object\.entries\(privateDays\)/, '「这个月」那一列还在吃合计');
     assert.doesNotMatch(diary, /marks=\{marks\.days\}/, '合计的 days 又被塞回日历了');
+    // 0.50：日历下面那份「这个月」列表删掉了（它和日历是同一份数据的两种排法）。
+    // 所以这里不再检查 `Object.entries(privateDays)` —— 那个派生本身已经不存在。
+    assert.doesNotMatch(diary, />这个月<\/h2>/, '「这个月」列表又回来了 —— 它和日历重复');
   });
 
   it('★ 情绪点来自 marks.moods 的 private 那一半', () => {
@@ -1482,20 +1484,25 @@ describe('0.47：一条时间轴 + 出处 chip + 收窄', () => {
  * 0.43：私密侧栏日历下面那两块（本月情绪 / 那年今日）。
  *
  * 用户 2026-10-27 的原话：日历下面那一整块是空的，想放「情绪罗盘与微型统计」和
- * 「那年今日」，让侧栏「告别空旷、充满生命力」。这里守四件事：
- *   ① 两块卡片**排在「这个月」之后**（不是插到日历上面去）；
+ * 「那年今日」，让侧栏「告别空旷、充满生命力」。这里守五件事：
+ *   ① 两块卡片**紧接日历**（中间那份「这个月」列表 0.50 已删 —— 和日历重复）；
  *   ② 占比的分母是「记过心情的条数」，且只取前三档；
  *   ③ 锁着时**不编数**：字数给「—」而不是 0，「那年今日」点一下把人带到解锁卡；
- *   ④ 点情绪 → 右侧**替换**成整月列表，而不是叠在当天条目上。
+ *   ④ 点情绪 → 右侧**替换**成整月列表，而不是叠在当天条目上；
+ *   ⑤ 没有往年同日时退回「上次提笔」（第一年不至于整年空着）。
  */
 describe('0.43：私密侧栏的「本月情绪」与「那年今日」', () => {
-  it('★ 两块卡片排在「这个月」之后（日历 → 这个月 → 本月情绪 → 那年今日）', () => {
-    const atSect = diary.indexOf('>这个月</h2>');
+  it('★ 两块卡片紧接日历（日历 → 本月情绪 → 那年今日），中间没有「这个月」列表', () => {
+    const atCal = diary.indexOf('tones={privateTones}');
     const atMood = diary.indexOf('>本月情绪</h2>');
-    const atEcho = diary.indexOf('>那年今日</h2>');
-    assert.ok(atSect > 0, '锚点失效：「这个月」那块找不到了');
-    assert.ok(atMood > atSect, '「本月情绪」没有排在「这个月」后面 —— 它该占日历下面那块空地');
-    assert.ok(atEcho > atMood, '「那年今日」该在本月情绪下面（先看这个月，再往回看）');
+    // 0.50 起「那年今日」的标题是动态的（没有往年同日时叫「上次提笔」），
+    // 所以锚不再锚标题文字，锚那一行只有它才会出现的表达式。
+    const atEcho = diary.indexOf('agoLabel(dash.lastEntry');
+    assert.ok(atCal > 0, '锚点失效：日历找不到了');
+    assert.ok(atMood > atCal, '「本月情绪」没有排在日历后面 —— 它该占日历下面那块空地');
+    assert.ok(atEcho > atMood, '「那年今日 / 上次提笔」该在本月情绪下面（先看这个月，再往回看）');
+    assert.doesNotMatch(diary, />这个月<\/h2>/,
+      '「这个月」列表又回来了 —— 它和日历是同一份数据的两种排法（用户 2026-10-29 要求删）');
     // 两块都是卡片容器（边框 + 淡底），不是又一串列表行
     assert.equal((diary.match(/className="npr-diary-card"/g) ?? []).length, 2,
       '两块卡片应该都用 .npr-diary-card 包着，否则它们看起来像「这个月」列表的续行');
@@ -1891,5 +1898,47 @@ describe('读后感侧栏：搜索框要像输入框', () => {
   it('★ 样式锚在自己的类名上，不锚容器（换容器就整块消失）', () => {
     assert.doesNotMatch(css, /\.npr-sidebar \.npr-diary-shelfsearch/,
       '又挂回 .npr-sidebar 了 —— 这个块只属于读后感模块，样式不该依赖它被放在哪');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.50：私密侧栏的两处「逻辑不对」
+//
+// ★ 用户 2026-10-29 两条：
+//   ① 「日历下面这个列表就不要了吧……日历上标注了，『·』就代表有内容，点击日历就可以
+//      查看，所以这个列表没必要了。重复。」—— 同一份数据的第二种排法，还多占一屏。
+//   ② 「那年今日，我才开始，感觉要用一年之后才会有那年今日，那么第一年这里怎么办？
+//      这是个逻辑 bug。」—— 它要求**往年**同月同日写过，第一年整年不可能满足。
+// ---------------------------------------------------------------------------
+describe('私密侧栏：删掉重复列表、给「那年今日」一条退路', () => {
+  const css = read('refinements.css');
+
+  it('★ 「这个月」列表整块删掉（含它专用的心情小图标样式）', () => {
+    assert.doesNotMatch(diary, />这个月<\/h2>/, '「这个月」列表又回来了 —— 和日历重复');
+    assert.doesNotMatch(css, /\.npr-diary-dayrow-mood/,
+      '那份列表专用的心情图标样式还留着 —— 它不会再被任何地方用到');
+    // 反向对照：`npr-diary-dayrow` 本身要留着，灵感页的日期行还在用。
+    assert.match(css, /\.npr-root button\.npr-diary-dayrow \{/, '日期行样式被连坐删掉了（灵感页还在用）');
+  });
+
+  it('★ 没有往年同日时，标题换成「上次提笔」——不能顶着「那年今日」说假话', () => {
+    assert.match(diary, /dash\.onThisDay\.length === 0 && dash\.lastEntry !== null \? '上次提笔' : '那年今日'/,
+      '标题没有跟着内容换：一张「上次」的卡片顶着「那年今日」');
+    assert.match(diary, /aria-label=\{[^}]*'上次提笔'[^}]*\}/, '卡片区的无障碍标签没跟着换');
+  });
+
+  it('★ 空态只在「往年无同日 **且** 一篇都没有」时出现', () => {
+    assert.match(diary, /dash\.onThisDay\.length === 0 && dash\.lastEntry === null/,
+      '空态条件没算上 lastEntry —— 第一年明明有旧日记，却还在说「还没有留下痕迹」');
+  });
+
+  it('时间说法走 `agoLabel()`，不在 JSX 里手拼「N 天前」', () => {
+    assert.match(diary, /agoLabel\(dash\.lastEntry, today\)/, '没用 agoLabel —— 跨年会不显示年份');
+    assert.doesNotMatch(diary, /天前 · /, 'JSX 里手拼了「天前·日期」—— 这套规则该留在纯函数里');
+  });
+
+  it('点「上次提笔」要能回到那一天（锁着时走解锁入口）', () => {
+    assert.match(diary, /dash\.lastEntry\.locked \? askUnlock\(\) : pick\(dash\.lastEntry\.date\)/,
+      '点了没反应，或者锁着时弹了第二个口令框');
   });
 });

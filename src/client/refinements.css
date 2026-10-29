@@ -2825,7 +2825,6 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 }
 .npr-diary-dayrow-date { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .npr-diary-dayrow-count { flex: 0 0 auto; font-size: 11px; color: var(--npr-faint); font-variant-numeric: tabular-nums; }
-.npr-diary-dayrow-mood { flex: 0 0 auto; font-size: 12px; line-height: 1; }
 
 /* ── 读后感侧栏：两列封面书墙 ────────────────────────────────────────────
    ★ 两列用 `minmax(0, 1fr)` 而不是 `1fr`：本机的书名动辄四十多个字

@@ -779,6 +779,42 @@ describe('dashboard：本月情绪 + 那年今日', () => {
     assert.equal(board.onThisDay.every((cell) => cell.preview === ''), true, '锁着还漏了摘要');
   });
 
+  /*
+   * 0.50：没有往年同日时，这块要有退路。
+   *
+   * ★ 用户 2026-10-29：「那年今日，我才开始，感觉要用一年之后才会有那年今日，
+   *   那么第一年这里怎么办？这是个逻辑bug」。`onThisDay` 的条件是「**往年**同月同日
+   *   写过」—— 第一年整年不可能满足；第二年起也只有真在那天写过才有内容。
+   */
+  it('★ 没有往年同日时给「上次提笔」：选中日之前最近的一篇', async () => {
+    // 2031-03-05 没有任何往年同日（夹具里只有 03-02）。
+    const board = await secure.dashboard({ date: '2031-03-05', today: '2031-03-05', month: '2031-03' });
+    assert.deepEqual(board.onThisDay, [], '这天不该有「那年今日」（夹具里没有往年的 03-05）');
+    assert.notEqual(board.lastEntry, null, '没有往年同日时也没有退路 —— 第一年这块整年是空的');
+    assert.equal(board.lastEntry.date, '2031-03-02');
+    assert.equal(board.lastEntry.daysAgo, 3, '天数差算错（跨月 / 时区都容易错）');
+    assert.equal(board.lastEntry.preview, '很好一', '摘要没给');
+    assert.equal(board.lastEntry.time, '08:00');
+  });
+
+  it('★ 「上次提笔」只往前找，不取选中日之后的记录', async () => {
+    // 站在 03-01：库里更晚的 03-02 绝不能出现（这一块的语义是回望，不是预览）。
+    const board = await secure.dashboard({ date: '2031-03-01', today: '2031-03-01', month: '2031-03' });
+    assert.equal(board.lastEntry.date, '2031-02-28', '取到了选中日之后的记录 —— 那不是「上次」');
+    assert.equal(board.lastEntry.daysAgo, 1);
+  });
+
+  it('★ 解不开时「上次提笔」也要锁着，且不漏摘要', async () => {
+    const blind = createDiaryStore({
+      log: () => {},
+      secret: createDiarySecret({ key: Buffer.alloc(32, 9), keyPath: join(home, 'wrong2.key') }),
+    });
+    const board = await blind.dashboard({ date: '2031-03-05', today: '2031-03-05', month: '2031-03' });
+    assert.equal(board.lastEntry.locked, true);
+    assert.equal(board.lastEntry.preview, '');
+    assert.equal(board.lastEntry.date, '2031-03-02', '只靠文件名也要找得到是哪一天');
+  });
+
   it('日期/月份非法抛 BAD_DATE / BAD_MONTH', async () => {
     await assert.rejects(() => secure.dashboard({ date: '2031-13-01', today: '2031-03-02', month: MOOD_MONTH }),
       (error) => error.code === 'BAD_DATE');
