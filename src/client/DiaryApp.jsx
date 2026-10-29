@@ -2614,7 +2614,7 @@ export function DiaryApp({
                                 className={`npr-diary-origin${origin.kind === 'book' ? ' is-book' : ' is-article'}`}
                                 title={`${origin.source} · 点开看出处`}
                                 onClick={(event) => openOrigin(event, origin)}>
-                                <Icon name={originIcon(origin)} size={11} />
+                                <Icon name={originIcon(origin)} size={12} />
                                 <span className="npr-diary-origin-name">{origin.title}</span>
                               </button>
                             )}

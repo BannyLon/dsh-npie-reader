@@ -2937,22 +2937,37 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
    ★ 手记的灵感没有 chip，那个空位本身就是第三态（不用再加一枚「手记」标记）。
  */
 .npr-root .npr-diary-origin {
-  display: inline-flex; align-items: center; gap: 4px;
+  display: inline-flex; align-items: center; gap: 5px;
   /* ★ 46% 太窄：文章标题一进来就只剩「第 294 期 · AI 网…」六个字，而这条 chip 的
-     全部意义就是「这条是在哪一篇里记的」。62% 是同一行里 time + 删按钮 都还在的
+     全部意义就是「这条是在哪一篇里记的」。70% 是同一行里 time + 删按钮 都还在的
      上限（再宽就让 `flex-wrap` 把它整条挤到第二行）。完整出处仍在 `title` 里。 */
-  max-width: 62%; min-width: 0; height: 18px; padding: 0 5px;
-  border: 0; border-radius: 4px; background: transparent;
-  font: inherit; font-size: 11px; cursor: pointer;
+  max-width: 70%; min-width: 0;
+  /* ★ 21px / 12px：正文区有一千多像素宽，而这条 chip 原来跟侧栏一样是 11px ——
+     同一块屏幕上，侧栏的 11px 是「栏窄、只能这么小」，正文区的 11px 只是没改。
+     用户 2026-10-29：「这个看不大清楚」。 */
+  height: 21px; padding: 0 7px;
+  border: 0; border-radius: 5px; background: transparent;
+  font: inherit; font-size: 12px; cursor: pointer;
 }
 .npr-root .npr-diary-origin:hover { filter: brightness(.96); }
 .npr-root .npr-diary-origin.is-book {
   background: color-mix(in srgb, #b4762a 14%, transparent);
+  /* 一道内描边：这条 chip 落在**绿色高亮**的条目上时（`.is-focus`），一层淡淡的
+     同色底几乎和背景融成一片 —— 描边是唯一能让它「看得出是个可点的东西」的边界。 */
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #b4762a 26%, transparent);
   color: color-mix(in srgb, #b4762a 55%, var(--npr-fg));
 }
+/* ★ 文章这一支原来直接把 `--npr-accent` 当文字色 —— 那是**品牌绿 #7ddcae**，
+   压在 13% 的浅绿底上对比度只有 **1.45:1**（WCAG 的下限是 4.5:1，等于看不见），
+   书那一支早就混了 `var(--npr-fg)`，只有这里漏了。用户 2026-10-29：「这个看不大清楚」。
+   45% 是算出来的：浅色主题下 #48725f on #e3f3ea = **4.75:1**（50% 只有 4.16，不够）；
+   深色主题下 8.4:1。两边都过 AA，而仍然看得出是绿色。
+   ★ 这也解释了为什么它「看着有颜色、读起来费劲」：纯品牌绿是**亮**的，亮色压亮底，
+     饱和度够、明度不够。 */
 .npr-root .npr-diary-origin.is-article {
-  background: color-mix(in srgb, var(--npr-accent) 13%, transparent);
-  color: var(--npr-accent);
+  background: color-mix(in srgb, var(--npr-accent) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--npr-accent) 30%, transparent);
+  color: color-mix(in srgb, var(--npr-accent) 45%, var(--npr-fg));
 }
 .npr-diary-origin-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

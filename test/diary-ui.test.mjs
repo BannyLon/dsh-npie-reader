@@ -1382,14 +1382,24 @@ describe('0.47：一条时间轴 + 出处 chip + 收窄', () => {
     // ★ 0.46 是一颗 13px 裸图标，用户看不出那是什么。现在是图标 + 出处名。
     assert.match(diary, /<span className="npr-diary-origin-name">\{origin\.title\}<\/span>/,
       'chip 没把出处名写出来 —— 那颗图标仍然是哑的');
-    assert.match(diary, /<Icon name=\{originIcon\(origin\)\} size=\{11\} \/>/,
+    assert.match(diary, /<Icon name=\{originIcon\(origin\)\} size=\{12\} \/>/,
       'chip 的图标名散在 JSX 里（三元里的字面量会被图标判据当成图标名）');
     assert.match(diary, /onClick=\{\(event\) => openOrigin\(event, origin\)\}/, 'chip 点了不开卡片');
     // 底色按来源分（书=暖褐 / 文章=品牌色）。
     assert.match(diaryCss, /\.npr-diary-origin\.is-book \{[^}]*background: color-mix\(in srgb, #b4762a 14%, transparent\)/,
       '书的 chip 没有自己的底色');
-    assert.match(diaryCss, /\.npr-diary-origin\.is-article \{[^}]*background: color-mix\(in srgb, var\(--npr-accent\) 13%, transparent\)/,
+    assert.match(diaryCss, /\.npr-diary-origin\.is-article \{[^}]*background: color-mix\(in srgb, var\(--npr-accent\) 16%, transparent\)/,
       '文章和书长得一样 —— 用户分不出这条是在哪类来源里记的');
+    // ★ 0.47.4：文章 chip 的文字色**必须**混前景色。用户 2026-10-29：「这个看不大清楚」。
+    //   原来 `color: var(--npr-accent)` 是品牌绿 #7ddcae，压在同色系的浅绿底上对比度
+    //   只有 **1.45:1**（WCAG 下限 4.5）—— 书那一支早就混了 `var(--npr-fg)`，只有文章漏了。
+    //   45% 是算出来的：浅色 #48725f on #e3f3ea = 4.75:1（50% 只有 4.16，不够）。
+    //   纯 accent 在源码里看着「有颜色」，在屏幕上是一团淡绿。
+    assert.match(diaryCss, /\.npr-diary-origin\.is-article \{[^}]*color: color-mix\(in srgb, var\(--npr-accent\) 45%, var\(--npr-fg\)\)/,
+      '文章 chip 又用纯品牌绿当文字色了 —— 浅色主题下只有 1.45:1');
+    // 12px：正文区上千像素宽，11px 是照抄侧栏的尺寸，不是这里的尺寸。
+    assert.match(diaryCss, /\.npr-diary-origin \{[^}]*font-size: 12px/,
+      'chip 字号还停在侧栏那档（11px）');
     // ★ 但**不铺整行**：整行底色会和 `.is-focus` 的高亮叠成第三种颜色 ——
     //   来源是属性、高亮是状态，只有状态配铺满一行。
     assert.equal(/npr-diary-entry\.is-(book|article)/.test(diaryCss), false,
