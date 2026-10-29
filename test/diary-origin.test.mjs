@@ -44,6 +44,30 @@ const ARTICLE_ENTRY = {
 /** 直接在灵感页手记的那一条。 */
 const PLAIN_ENTRY = { time: '09:12', source: '', book: null, chapter: null, page: null, article: null };
 
+/**
+ * ★ 右侧正文区拿到的**真实形状**：`day()` 原样返回，元数据在 `entry.meta` 下，
+ *   顶层没有 `book` / `page`（`timeline()` 才会摊平）。
+ *
+ * 0.47 只认顶层 ⇒ 正文区每一条的 `bookId` 都是空，卡片弹「这本书已经不在书架上
+ * 了」——用户 2026-10-29 就是在书还开着的时候看到这句的。
+ */
+const DAY_BOOK_ENTRY = {
+  time: '16:37',
+  kind: '灵感',
+  source: '《[20世纪世界诗歌译丛]德瑞克·沃尔科特诗选》',
+  meta: { book: 'p2cd920c1a321019b', page: 13 },
+  body: '时光爬过忍耐已久的忍耐者',
+};
+
+/** `day()` 里的文章条目。 */
+const DAY_ARTICLE_ENTRY = {
+  time: '17:08',
+  kind: '灵感',
+  source: '第 503 期 · 数学中的 AI 危机',
+  meta: { article: 'feed:5bdce512c55ec9966a093b87e361c74c' },
+  body: '三个人，三种表情',
+};
+
 describe('0.46：出处 —— 有没有、是哪一种', () => {
   it('★ 书：书名带《》，带上书 id / 章 / 页', () => {
     const origin = entryOrigin(BOOK_ENTRY, '2026-10-27');
@@ -100,14 +124,41 @@ describe('0.46：出处 —— 有没有、是哪一种', () => {
     assert.equal(originTarget(null), null);
   });
 
+  it('★ 两种条目形状结果必须一致：`day()` 的 meta 嵌套 / `timeline()` 的摊平', () => {
+    // ★ 这是 0.47.1 修的那个 bug 的判据。同一条灵感在两侧拿到的是**不同形状**：
+    //   侧栏时间轴（`timeline()`）已摊平，右侧正文区（`day()`）原样带 `meta`。
+    //   只认一种 ⇒ 一种视图能跳、另一种不能，而界面上没有任何地方看得出为什么。
+    const nested = entryOrigin(DAY_BOOK_ENTRY, '2026-10-29');
+    const flat = entryOrigin({ ...DAY_BOOK_ENTRY, ...DAY_BOOK_ENTRY.meta, meta: undefined }, '2026-10-29');
+    assert.deepEqual(nested, flat, '两种形状认出来的出处不一样 —— 有一侧会「跳不了」');
+    assert.equal(nested.bookId, 'p2cd920c1a321019b', '正文区的书 id 没取出来（卡片会诬告「不在书架上」）');
+    assert.equal(nested.page, 13);
+    assert.equal(nested.chapter, null, '没有章却编了一个');
+    // 取出来了才算「能去现场」—— 没有这一颗，用户就只能看不能回。
+    assert.deepEqual(originTarget(nested), {
+      kind: 'book', bookId: 'p2cd920c1a321019b', title: '[20世纪世界诗歌译丛]德瑞克·沃尔科特诗选', page: 13, chapter: null,
+    });
+
+    const nestedArticle = entryOrigin(DAY_ARTICLE_ENTRY, '2026-10-29');
+    assert.equal(nestedArticle.articleKey, 'feed:5bdce512c55ec9966a093b87e361c74c');
+    assert.equal(originTarget(nestedArticle).kind, 'article', '正文区的文章没取到 key —— 卡片既没有摘要也没有跳转');
+  });
+
   it('★ 按钮与解释按去处说话（书 / 文章各一句）', () => {
     const book = entryOrigin(BOOK_ENTRY, '2026-10-27');
     const article = entryOrigin(ARTICLE_ENTRY, '2026-10-29');
     assert.equal(originJumpLabel(book), '打开这本书');
     assert.equal(originJumpLabel(article), '跳到这篇文章');
     // 跳不了时说清楚为什么 —— 不能静静少一个按钮，用户会以为功能坏了。
-    assert.match(originMissNote(book), /不在书架上/);
-    assert.match(originMissNote(article), /不在订阅里/);
+    // ★ 而且**不能诬告**：0.47 一律说「这本书已经不在书架上了」，用户在书还开着的
+    //   时候看到这句，直接判成 bug。现在的文案只说事实：这条里没记下 id。
+    assert.match(originMissNote(book), /没有记下是哪一本书/);
+    assert.match(originMissNote(article), /没有记下是哪一篇文章/);
+    assert.doesNotMatch(originMissNote(book), /不在书架上/, '还在诬告「书不在书架上」');
+    assert.doesNotMatch(originMissNote(article), /不在订阅里/, '还在诬告「文章不在订阅里」');
+    // 宿主没接上跳转是**另一件事**，要说另一句话：书在不在一回事，这里能不能开是另一回事。
+    assert.match(originMissNote(book, 'no-host'), /当前界面没有接上/);
+    assert.notEqual(originMissNote(book, 'no-host'), originMissNote(book), '两种原因给了同一句话');
     assert.equal(originJumpLabel(null), '');
     assert.equal(originMissNote(null), '');
   });

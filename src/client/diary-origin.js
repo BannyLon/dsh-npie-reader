@@ -29,6 +29,22 @@ export function entryOrigin(entry, date = '') {
   const parsed = parseSource(source);
   if (parsed === null) return null;
   const kind = parsed.isBook ? 'book' : 'article';
+  /**
+   * ★ 同一条灵感有**两种形状**，两边都得认（0.47.1 的 bug 就出在这儿）：
+   *   · `timeline()` / `bySource()` 的条目 —— `meta` 已被摊平，`book / chapter /
+   *     page / article` 在**顶层**（侧栏时间轴用的是这一种）；
+   *   · `day()` 的条目 —— 原样，元数据在 **`entry.meta`** 里（右侧正文区用的是
+   *     这一种）。
+   *   0.47 只读了顶层，于是正文区每一条的 `bookId` 都是空 ⇒ 卡片永远没有「打开这本
+   *   书」，还弹一句「这本书已经不在书架上了」—— 用户 2026-10-29 当场指出：
+   *   「书在阅读栏啊」。书在，是这里没认出来。
+   *   取 `meta` 优先（那是文件里真正写下的那一份），顶层兜底。
+   */
+  const field = (name) => (entry?.meta?.[name] ?? entry?.[name]);
+  const book = field('book');
+  const chapter = field('chapter');
+  const page = field('page');
+  const article = field('article');
   return {
     kind,
     title: parsed.title,
@@ -40,10 +56,10 @@ export function entryOrigin(entry, date = '') {
     time: typeof entry?.time === 'string' ? entry.time : '',
     // ★ 只信与 kind 同侧的 id：`source` 说是书、`meta.book` 却是空（老条目或手改过），
     //   那就没有「去哪里」可跳，不能拿另一个字段凑一个出来。
-    bookId: kind === 'book' && typeof entry?.book === 'string' ? entry.book : '',
-    chapter: kind === 'book' && Number.isInteger(entry?.chapter) ? entry.chapter : null,
-    page: kind === 'book' && Number.isInteger(entry?.page) ? entry.page : null,
-    articleKey: kind === 'article' && typeof entry?.article === 'string' ? entry.article : '',
+    bookId: kind === 'book' && typeof book === 'string' ? book : '',
+    chapter: kind === 'book' && Number.isInteger(chapter) ? chapter : null,
+    page: kind === 'book' && Number.isInteger(page) ? page : null,
+    articleKey: kind === 'article' && typeof article === 'string' ? article : '',
   };
 }
 
@@ -90,10 +106,21 @@ export function originIcon(origin) {
   return origin.kind === 'book' ? 'book-open' : 'file-text';
 }
 
-/** 跳不了时那句解释（说清楚「为什么没有按钮」，而不是静静少一个按钮）。 */
-export function originMissNote(origin) {
+/**
+ * 跳不了时那句解释（说清楚「为什么没有按钮」，而不是静静少一个按钮）。
+ *
+ * ★ 0.47 只有一句「这本书已经不在书架上了」。它把**三种**不同的原因说成了同一种，
+ *   而最常见的那种根本不是那回事 —— 用户 2026-10-29 就是在书还开着的时候看到
+ *   这句话的（真因是 `entryOrigin()` 没认出 `day()` 形状的条目，见上）。
+ *   文案诬告一次，后面再说什么都不被信了。
+ *
+ * @param {object} origin `entryOrigin()` 的返回
+ * @param {'missing-id'|'no-host'} reason 缺 id（老条目）/ 宿主没接上跳转
+ */
+export function originMissNote(origin, reason = 'missing-id') {
   if (origin === null || typeof origin !== 'object') return '';
+  if (reason === 'no-host') return '这里打不开它 —— 当前界面没有接上「打开书 / 打开文章」。';
   return origin.kind === 'book'
-    ? '这本书已经不在书架上了，只能在这里看这条灵感的出处。'
-    : '这篇文章已经不在订阅里了，只能在这里看这条灵感的出处。';
+    ? '这条灵感里没有记下是哪一本书，只能在这里看出处。'
+    : '这条灵感里没有记下是哪一篇文章，只能在这里看出处。';
 }

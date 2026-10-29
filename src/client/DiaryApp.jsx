@@ -1648,6 +1648,13 @@ export function DiaryApp({
     && (originJump.kind === 'book'
       ? typeof onOpenBook === 'function'
       : typeof onOpenArticle === 'function');
+  /**
+   * 跳不了时到底是哪一种：**没记下 id**，还是**宿主没接上**。
+   *
+   * ★ 0.47 把两者都写成「这本书已经不在书架上了」—— 用户 2026-10-29 在书还开着
+   *   的时候看到这句，直接判成 bug。文案必须按真实原因说。
+   */
+  const originMissReason = originJump === null ? 'missing-id' : 'no-host';
 
   const filteredBooks = books.items.filter((item) => (
     bookQuery.trim() === '' || item.title.toLowerCase().includes(bookQuery.trim().toLowerCase())
@@ -2861,7 +2868,7 @@ export function DiaryApp({
                   {originJumpLabel(originPop)} ›
                 </button>
               ) : (
-                <p className="npr-diary-pop-note">{originMissNote(originPop)}</p>
+                <p className="npr-diary-pop-note">{originMissNote(originPop, originMissReason)}</p>
               )}
               {/*
                 * 聚合视图的**唯一**入口（0.47）。侧栏不设「按书本 / 按文章」——
