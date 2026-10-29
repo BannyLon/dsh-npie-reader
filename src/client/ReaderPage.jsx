@@ -128,8 +128,13 @@ const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--
 .npr-root .npr-filters button[aria-pressed=true]{background:var(--npr-tab-track,color-mix(in srgb,var(--npr-fg) 8%,var(--npr-bg)));color:var(--npr-fg);font-weight:600}
 /* 一级筛选（RSS 阅读页的 全部/未读/收藏）：与分页、日记三模块同一套 —— 有底座、等分。
    这一页没有页面切换器，它自己就是顶层；书架页那条二级筛选仍然无底座、按文案定宽。 */
-.npr-root .npr-filters.npr-filters-primary{gap:var(--npr-tab-pad,2px);padding:var(--npr-tab-pad,2px);border:1px solid transparent;border-radius:8px;background:var(--npr-tab-track,color-mix(in srgb,var(--npr-fg) 8%,var(--npr-bg)))}
-.npr-root .npr-filters.npr-filters-primary button{flex:1 1 0;min-width:0}
+.npr-root .npr-filters.npr-filters-primary{gap:var(--npr-tab-pad,2px);padding:var(--npr-tab-pad,2px);border:1px solid transparent;border-radius:8px;background:var(--npr-tab-track,color-mix(in srgb,var(--npr-fg) 8%,var(--npr-bg)));flex-wrap:wrap}
+/* ★ min-width:max-content 加 flex-wrap（0.45.1）：四颗 chip 是**等分**的（flex:1 1 0），
+   但等分到装不下时，原来的 min-width:0 会让文字被裁 —— 用户截图里「已隐藏 1」的数字
+   只露出半个。改成「最小就是内容宽」，装不下时**换行**（wrap），一个字都不裁。
+   宽侧边栏下这一对属性完全不起作用（放得下就不换行、内容宽本来就小于等分宽）。
+   ★ 这段在模板串里，注释里一个反引号都不能写。 */
+.npr-root .npr-filters.npr-filters-primary button{flex:1 1 0;min-width:max-content}
 .npr-root .npr-filters.npr-filters-primary button:hover{background:var(--npr-hover,color-mix(in srgb,var(--npr-fg) 6%,var(--npr-bg)))}
 .npr-root .npr-filters.npr-filters-primary button[aria-pressed=true]{background:var(--npr-tab-thumb,var(--npr-bg));box-shadow:0 1px 2px rgba(0,0,0,.06)}
 /* ★ 设置齿轮在**工具栏**里（2026-10-23 用户定），不在筛选 chip 行里：
@@ -387,7 +392,21 @@ const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--
 .npr-discover-restore:disabled{opacity:.45;cursor:default}
 @media (max-width:600px){.npr-dialog.npr-discover{height:calc(100vh - 30px)}.npr-discover-head{padding:18px 18px 13px}.npr-discover-filters{padding:0 18px 6px}.npr-discover-results{padding:0 18px}.npr-discover-foot{padding:10px 18px}.npr-discover-avatar{width:32px;height:32px}.npr-discover-row{gap:9px}}
 .npr-root{position:relative}.npr-root[data-titlebar=true]{padding-top:40px}.npr-root[data-titlebar=true]::before{content:"";position:absolute;top:0;left:0;right:0;height:38px;-webkit-app-region:drag}.npr-reading-settings{flex-shrink:0}.npr-reading-setting select{color:var(--dsw-alias-label-primary);padding-right:22px}.npr-reading-setting input[type=range]{width:100%;height:20px}.npr-reader-toolbar{height:auto;min-height:44px;flex-wrap:wrap}.npr-reader-nav{margin-left:0}.npr-mode-select{flex-shrink:0}
-@container (max-width:700px){.npr-layout{grid-template-columns:min(240px,42cqw) 1px minmax(0,1fr)}.npr-article{padding:20px 18px 70px}.npr-actions{margin-left:0}.npr-reading-settings{position:fixed;right:12px;top:70px}.npr-entry-thumb{width:44px;height:44px}.npr-root button.npr-entry{padding:10px 10px 10px 18px}.npr-reader-toolbar{gap:2px;padding:4px}.npr-root .npr-icon{width:28px;height:28px;padding:5px}}
+@container (max-width:700px){.npr-layout{grid-template-columns:clamp(232px,42cqw,240px) 1px minmax(0,1fr)}.npr-article{padding:20px 18px 70px}.npr-actions{margin-left:0}.npr-reading-settings{position:fixed;right:12px;top:70px}.npr-entry-thumb{width:44px;height:44px}.npr-root button.npr-entry{padding:10px 10px 10px 18px}.npr-reader-toolbar{gap:2px;padding:4px}.npr-root .npr-icon{width:28px;height:28px;padding:5px}
+/* ★ 侧边栏在窄面板里要**自己收**（0.45.1）。原来这条是 min(240px,42cqw) —— 没有下限：
+   面板 500px 时 42cqw = 210px，而工具栏那一行的固定项就要 238px（三档视图开关 88 +
+   频道按钮 46 + 四颗图标 112 + 间距 10 + 内边距 20），于是最右那颗设置齿轮被裁掉半个、
+   筛选条「已隐藏 1」的数字也被切 —— 用户 2026-10-28 的截图就是这个。
+   现在三件事一起做：① 给列宽一个 232px 的下限（clamp），② 工具栏在窄面板里收紧
+   （图标 28→24、间距 2→0、右内边距 8→4），③ 筛选 chip 的内边距 10→8。
+   232 + 收紧后刚好放得下「频道图标 + 四颗图标」，再窄就交给筛选条的 flex-wrap 换行。
+   ★ 不用 @container 量侧边栏自己：.npr-sidebar 一旦设 container-type，它内部**所有**
+     无名的 @container (max-width:700px) 规则会改按侧边栏宽度求值 —— 那些规则本来是
+     量面板的，会集体误触发（本项目 10+ 条断点全靠无名查询）。
+   ★ 这段在模板串里，注释里一个反引号都不能写。 */
+.npr-root .npr-sidebar-toolbar{gap:0;padding:5px 4px 5px 10px}
+.npr-root .npr-sidebar-toolbar .npr-icon{width:24px;height:24px;padding:4px}
+.npr-root .npr-filters.npr-filters-primary button{padding:0 8px}}
 @container (max-width:460px){.npr-layout{grid-template-columns:minmax(0,1fr)}.npr-reader{display:none}.npr-root.npr-focus .npr-reader{display:block}.npr-resize{display:none}}
 @media (prefers-reduced-motion: reduce){.npr-root *,.npr-root *::before,.npr-root *::after{animation-duration:.001ms !important;animation-iteration-count:1 !important;transition-duration:.001ms !important;scroll-behavior:auto !important}}
 
