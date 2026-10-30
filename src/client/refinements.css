@@ -2677,6 +2677,23 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
   padding: 9px max(var(--npr-diary-pad), calc((100% - var(--npr-diary-sheet-w)) / 2)) 9px;
   border-bottom: 1px solid var(--npr-border);
 }
+/*
+ * 封面态（开场页「寸心拾遗 · 思想原点」）：这条拖动区退回**书架欢迎页那一条**。
+ *
+ * ★ 上面那条 `border-bottom` 是「日期栏 / 正文」的分界，前提是栏里有字。
+ *   封面态这一栏里一个字都没有，线就成了一条没来由的横线 —— 用户 2026-10-30：
+ *   「红色线的地方明显有个分割线，为什么，其它的是没有的」。
+ *   而书架欢迎页顶上只有那条**无边框、44px** 的空拖动行（`LibraryApp` 里
+ *   `{!selected && <div className="npr-book-toolbar" …/>}`），同一种「开场」两种样子。
+ *
+ * ★ 高度也必须回到 44 / min-height 归零：`.npr-welcome` 的
+ *   `margin-top: clamp(48px,14vh,160px)` 是两边共用的，多出来的 12px
+ *   （56 - 44）会让灵感开场页的大标题比书架那页低一截 —— 用户要的是
+ *   「完全统一」，不是「各差一点点」。
+ */
+.npr-diary-reader[data-cover] > .npr-book-toolbar {
+  height: 44px; min-height: 0; padding: 0; border-bottom: 0;
+}
 .npr-diary-head { flex: 1; min-width: 0; }
 .npr-diary-h1 { margin: 0; font-size: clamp(19px, 1.9vw, 24px); font-weight: 600; line-height: 1.25; letter-spacing: -.01em; color: var(--npr-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .npr-diary-sub { margin: 3px 0 0; font-size: 11.5px; line-height: 1.4; color: var(--npr-faint); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -3643,6 +3660,41 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
    ★ 必须是**两个并排的独立面板**，不是一张卡切两半 —— 划线侧栏有自己的标题与
      滚动位置，和正文不同源（memory §〇 第 29 条：外框套两张完整的卡）。 */
 .npr-diary-main { flex: 1; min-height: 0; display: flex; }
+/*
+ * 灵感模块的开场页（0.53.0）：「寸心拾遗 · 思想原点」。
+ *
+ * ★★ 类名原本叫 `.npr-diary-cover`，**与书封面缩略图同名**（`BookCover.jsx` 也用那一个，
+ *   见本文件 2846 行的 `aspect-ratio: 3 / 4` + `background: color-mix(fg 6%, bg)`）。
+ *   于是这个开场页既拿到自己的 `flex: 1`，也继承了书封面的**灰罩底色、4px 圆角、
+ *   一圈 1px 描边和 3:4 宽高比** —— 用户看到的就是「一块灰底卡片，和周围不是同一个
+ *   颜色」（2026-10-29：「为什么背景颜色不统一」）。反过来，这里的 `flex: 1`
+ *   与 `overflow: auto` 也在污染书架里那 36×54 的封面。
+ *   两个不相干的东西共用一个类，谁后写谁赢一半，谁都没干净。现在各用各的：
+ *   书封面 `.npr-diary-cover`，开场页 `.npr-diary-startpage`。
+ *
+ * ★ 底色**不设**：开场页就是正文列本身，应当透明地露出 `.npr-root` 的 `--npr-bg`。
+ *   显式写一个 background 只会再造一次「和别的面板差一档」。
+ * ★ 占满右侧正文列：`.npr-diary-main` 是 flex 行，`flex: 1` 就是「整块让给它」。
+ * ★ 退场只动 `opacity` + `transform`，不动 `height` / `display` —— 后者会让底下的
+ *   编辑器在最后一帧突然接管版面，看起来像闪了一下。260ms 与 `COVER_EXIT_MS` 同源，
+ *   改一处必须改两处。
+ * ★ 只写在 `.is-leaving` 上：进场不需要过渡（它本来就在那儿，多一条 transition
+ *   会让首屏绘制多等一帧）。
+ */
+.npr-diary-startpage { flex: 1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; cursor: pointer; background: transparent; }
+.npr-diary-startpage.is-leaving { opacity: 0; transform: translateY(-10px) scale(.994); pointer-events: none; transition: opacity 260ms var(--ds-ease-in-out), transform 260ms var(--ds-ease-in-out); }
+@media (prefers-reduced-motion: reduce) {
+  .npr-diary-startpage.is-leaving { transition: none; }
+}
+/* 开场页里的行内代码与键位：`.npr-welcome-keys kbd` 只管底行那一排小字，
+   正文段落里的 `⌘` / `Ctrl + Enter` / `diary/` 在这里是第一次出现。 */
+.npr-diary-startpage .npr-welcome-intro kbd { padding: 1px 5px; border: 1px solid var(--npr-border); border-radius: 4px; background: var(--npr-bg-2); font: inherit; font-size: 11.5px; }
+.npr-diary-startpage .npr-welcome-intro code { padding: 1px 5px; border-radius: 4px; background: var(--npr-bg-2); font-family: var(--npr-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 11.5px; }
+/* 「点一下开始」：它是一条**操作提示**，得比上面那行统计更清楚一点 ——
+   统计是旁注（faint），提示是指路（muted）。两行都用 faint 时，深色下它们会一起
+   糊进背景，而这一行恰恰是唯一告诉用户「这块能点」的地方。
+   margin 拉到 28px：20px 时两行看着像同一句被折断了。 */
+.npr-diary-startpage-hint { margin: 28px 0 0; font-size: 11.5px; letter-spacing: .04em; color: var(--npr-muted); }
 /* `.npr-diary-main` 是行方向（正文 + 划线侧栏并排），而失败横幅要压在正文**上方**，
    所以正文这一侧再包一层纵向容器。少了它，横幅会被当成第三个列项。 */
 /* `position: relative` 是给标签浮层（`.npr-tagsheet`）的锚：那一层盖住整个滚动区，
