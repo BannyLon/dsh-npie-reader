@@ -14,7 +14,9 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
-import { pickVoice, speechChunks, SPEECH_RATES } from '../src/client/article-speech.js';
+import {
+  pickVoice, speechChunks, SPEECH_RATES, chineseVoices, voiceRegion, SPEECH_SAMPLE,
+} from '../src/client/article-speech.js';
 import { stripComments } from '../scripts/strip-comments.mjs';
 
 const clientDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'client');
@@ -139,5 +141,135 @@ describe('0.44：朗读 —— 组件接线（纯函数表达不了的部分）'
   it('用纯函数挑声音与切块，不把策略写在组件里', () => {
     assert.match(readerSource, /pickVoice\(/);
     assert.match(readerSource, /speechChunks\(/);
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════════════
+ * 0.54.0：能选音色
+ *
+ * 用户 2026-10-30：「现在的朗读效果非常差，非常机械声。有没有可能自定义朗读的模型。」
+ * 查下来：用的是系统语音（没有「模型」可换），而代码只做「自动挑一个」——
+ * `npr.speechVoice` **只被读过、全项目没有一处写它**，因为界面上没有入口能写。
+ * 这一节守两件事：候选清单摊得对、界面真的把选择写下去了。
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/** 真机上的形态：中文语音一大堆，婷婷同名两条（紧凑版 + 高音质版）。 */
+const VOICES = [
+  voice('Tingting', 'zh-CN'),
+  voice('Tingting', 'zh-CN'),
+  voice('Sandy', 'zh-CN'),
+  voice('Meijia', 'zh-TW'),
+  voice('Sinji', 'zh-HK'),
+  voice('Xiaoxiao', 'zh-CN', false),
+  voice('Daniel', 'en-GB'),
+  voice('Kyoko', 'ja-JP'),
+];
+
+describe('0.54：音色清单 —— voiceRegion', () => {
+  it('大陆 / 台湾 / 香港 / 新加坡 各自认得出', () => {
+    assert.equal(voiceRegion('zh-CN'), '大陆');
+    assert.equal(voiceRegion('zh_TW'), '台湾');
+    assert.equal(voiceRegion('zh-HK'), '香港');
+    assert.equal(voiceRegion('zh-SG'), '新加坡');
+  });
+
+  it('只写 zh 的落「中文」，不认识的落「其他」', () => {
+    assert.equal(voiceRegion('zh'), '中文');
+    assert.equal(voiceRegion('en-US'), '其他');
+    assert.equal(voiceRegion(''), '其他');
+    assert.equal(voiceRegion(undefined), '其他');
+  });
+});
+
+describe('0.54：音色清单 —— chineseVoices', () => {
+  it('只留中文语音', () => {
+    const names = chineseVoices(VOICES).map((item) => item.name);
+    assert.ok(!names.includes('Daniel'), '英语语音混进了中文清单');
+    assert.ok(!names.includes('Kyoko'), '日语语音混进了中文清单');
+  });
+
+  /* ★ 真机上「婷婷」有两条同名同语言记录（紧凑版 + 高音质版）。不去重的话下拉里
+     是两个一模一样的选项，用户点了另一个也听不出区别 —— 他不知道自己在切音质档。 */
+  it('★ 同名同语言的两条合并成一条', () => {
+    const ting = chineseVoices(VOICES).filter((item) => item.name === 'Tingting');
+    assert.equal(ting.length, 1, `婷婷出现 ${ting.length} 次，应为 1 次`);
+  });
+
+  it('不同地区的同名音色不合并', () => {
+    const rows = chineseVoices([voice('Tingting', 'zh-CN'), voice('Tingting', 'zh-TW')]);
+    assert.equal(rows.length, 2);
+  });
+
+  it('按地区排：大陆 → 台湾 → 香港（默认选中项排第一）', () => {
+    const regions = chineseVoices(VOICES).map((item) => item.region);
+    const order = ['大陆', '台湾', '香港'];
+    const seen = regions.map((r) => order.indexOf(r)).filter((i) => i >= 0);
+    assert.deepEqual(seen, [...seen].sort((a, b) => a - b), `地区顺序乱了：${regions.join(' / ')}`);
+  });
+
+  it('★ 同区内本机语音排在在线语音前面', () => {
+    const cn = chineseVoices(VOICES).filter((item) => item.region === '大陆');
+    const firstOnline = cn.findIndex((item) => !item.localService);
+    const lastLocal = cn.map((item) => item.localService).lastIndexOf(true);
+    assert.ok(firstOnline === -1 || firstOnline > lastLocal, '在线语音排到了本机语音前面');
+  });
+
+  it('★ 在线语音在标签上写明「在线」（按量计费、断网没声）', () => {
+    const online = chineseVoices(VOICES).find((item) => item.name === 'Xiaoxiao');
+    assert.match(online.label, /在线/);
+    const local = chineseVoices(VOICES).find((item) => item.name === 'Sandy');
+    assert.doesNotMatch(local.label, /在线/);
+  });
+
+  it('空输入不炸', () => {
+    assert.deepEqual(chineseVoices([]), []);
+    assert.deepEqual(chineseVoices(null), []);
+    assert.deepEqual(chineseVoices(undefined), []);
+  });
+});
+
+describe('0.54：试听文本', () => {
+  it('有标点、有数字，才听得出一段话的节奏', () => {
+    assert.ok(SPEECH_SAMPLE.length >= 12);
+    assert.match(SPEECH_SAMPLE, /[，。？！]/);
+    assert.match(SPEECH_SAMPLE, /[0-9]/);
+  });
+});
+
+describe('0.54：组件接线 —— 能选、能记住、换完立刻生效', () => {
+  it('菜单里有朗读声音那一行，且用 chineseVoices 铺选项', () => {
+    assert.match(readerSource, /aria-label="朗读声音"/, '菜单里没有朗读声音那一行');
+    assert.match(readerSource, /className="npr-menu-select"/, '没有下拉');
+    assert.match(readerSource, /chineseVoices\(voices\)/, '下拉没有用 chineseVoices 铺选项');
+  });
+
+  /* ★ 核心：这个 key 以前只读不写。断言必须落在 setItem 上 ——
+     只断言「读了 npr.speechVoice」在 bug 版本里同样成立（那正是 bug 本身）。 */
+  it('★ 选中后真的写进 localStorage', () => {
+    assert.match(
+      readerSource,
+      /localStorage\.setItem\('npr\.speechVoice'/,
+      '没有任何地方写 npr.speechVoice —— 偏好是死的，用户选了等于没选',
+    );
+  });
+
+  it('★ 朗读时读的是 ref，不是 localStorage（换完立刻生效）', () => {
+    assert.match(readerSource, /pickVoice\(synth\.getVoices\(\), speechVoiceRef\.current\)/);
+    assert.doesNotMatch(
+      readerSource,
+      /pickVoice\(synth\.getVoices\(\), localStorage\.getItem\('npr\.speechVoice'\)/,
+      '还在从 localStorage 现读 —— 同一会话里换音色要重开面板才生效',
+    );
+  });
+
+  it('有试听入口，且试听不改「正在朗读」状态', () => {
+    assert.match(readerSource, /className="npr-menu-test"[^>]*onClick=\{previewVoice\}/, '没有试听按钮');
+    const preview = /const previewVoice = \(\) => \{([\s\S]*?)\n  \};/.exec(readerSource)?.[1] ?? '';
+    assert.ok(preview.length > 0, '没找到 previewVoice 的实现（改名了？这条断言会静默失效）');
+    assert.doesNotMatch(preview, /setSpeaking\(true\)/, '试听把工具条那颗三角点亮了 —— 用户会以为文章在念');
+  });
+
+  it('没有中文语音时给的是说明，不是一个点不动的灰下拉', () => {
+    assert.match(readerSource, /npr-menu-hint/, '缺「去系统设置下载」的说明');
   });
 });

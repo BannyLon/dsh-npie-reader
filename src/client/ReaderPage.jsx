@@ -19,7 +19,7 @@ import { ReadingAppearance } from './ReadingAppearance.jsx';
 import { SettingsPage } from './SettingsPage.jsx';
 import { resolveReadingVersion, shouldAutoTranslate } from './reading-version.js';
 import { activeIndex, outlineOf, scrollTarget } from './article-outline.js';
-import { pickVoice, speechChunks, SPEECH_RATES } from './article-speech.js';
+import { pickVoice, speechChunks, SPEECH_RATES, chineseVoices, SPEECH_SAMPLE } from './article-speech.js';
 import { readPosition, savePosition, scrollFromRatio, scrollRatio } from './read-position.js';
 import { articleToMarkdown, downloadText, markdownFileName } from './article-markdown.js';
 import { Discover } from './Discover.jsx';
@@ -302,6 +302,20 @@ const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--
 .npr-menu .npr-menu-seg{display:flex;gap:2px;padding:2px;border-radius:6px;background:var(--npr-hover)}
 .npr-menu .npr-menu-seg button{padding:2px 7px;font-size:11.5px;border-radius:4px;color:var(--npr-muted);background:transparent}
 .npr-menu .npr-menu-seg button.is-on{background:var(--npr-bg);color:var(--npr-fg);font-weight:600}
+/* 朗读声音那一行（0.54.0）。与「朗读语速」**同一种形态**（标签左、控件右）：
+   同一个菜单里两行控件，一行上下叠、一行左右排，会被读成「两种东西」。
+   ★ 标签不许被压：下拉的固有宽度由最长那个 option 决定，标签若参与压缩，
+     「朗读声音」会被折成两行。
+   ★ 试听按钮要压住 .npr-menu button 那条基础样式（flex + 7px 内边距），
+     所以选择器带 .npr-menu 前缀（特异度 0,2,0 > 0,1,1）。
+   ★ 这段在模板串里，注释里不能出现反引号。 */
+.npr-menu-label{flex:0 0 auto;white-space:nowrap}
+.npr-menu-pick{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex:1 1 auto;min-width:0}
+.npr-menu .npr-menu-select{flex:1 1 auto;min-width:0;height:26px;padding:0 6px;font:inherit;font-size:11.5px;color:var(--npr-fg);background:var(--npr-bg);border:.5px solid var(--npr-border-strong);border-radius:6px}
+.npr-menu .npr-menu-test{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;height:26px;padding:0 9px;font:inherit;font-size:11.5px;color:var(--npr-fg);background:var(--npr-hover);border:0;border-radius:6px;cursor:pointer}
+.npr-menu .npr-menu-test:hover:not(:disabled){background:var(--npr-border)}
+.npr-menu .npr-menu-test:disabled{opacity:.45;cursor:default}
+.npr-menu-hint{font-size:11px;line-height:1.5;color:var(--npr-faint)}
 .npr-modal-backdrop{position:fixed;inset:0;background:var(--npr-scrim);display:flex;align-items:center;justify-content:center;z-index:55}
 .npr-modal{width:min(480px,92vw);max-height:86vh;display:flex;flex-direction:column;gap:10px;padding:18px;background:var(--npr-surface);border:.5px solid var(--npr-border-strong);border-radius:14px;color:var(--dsw-alias-label-primary);overflow:auto}
 .npr-modal.is-wide{width:min(620px,94vw)}
@@ -1792,6 +1806,77 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   const speechRateRef = useRef(speechRate);
   useEffect(() => { speechRateRef.current = speechRate; }, [speechRate]);
 
+  /**
+   * 可用的语音列表（0.54.0）。
+   *
+   * ★ `getVoices()` 在 Chromium 里**首次调用常常返回空数组**，要等 `voiceschanged`
+   *   才填好。所以这里既读一次、也订阅一次 —— 只读不订阅的话，先打开面板再点朗读，
+   *   下拉里永远是「这台机器没有中文语音」，而实际上只是还没加载完。
+   * ★ 卸载时解绑：`speechSynthesis` 是全局对象，监听器不摘会累积（每次进出阅读页
+   *   多一个，且都指向已卸载组件的 setState）。
+   */
+  const [voices, setVoices] = useState(() => globalThis.speechSynthesis?.getVoices?.() ?? []);
+  useEffect(() => {
+    const synth = globalThis.speechSynthesis;
+    if (!synth) return undefined;
+    const sync = () => setVoices(synth.getVoices());
+    sync();
+    synth.addEventListener('voiceschanged', sync);
+    return () => synth.removeEventListener('voiceschanged', sync);
+  }, []);
+
+  /** 用户选的音色（`voice.name`）。空串 = 没选过，按 `pickVoice` 自动挑。 */
+  const [speechVoice, setSpeechVoice] = useState(() => localStorage.getItem('npr.speechVoice') ?? '');
+  // 与语速同理：toggleSpeech 里那个闭包捕获的是点击那一刻的值，用 ref 才能即时生效
+  const speechVoiceRef = useRef(speechVoice);
+  useEffect(() => { speechVoiceRef.current = speechVoice; }, [speechVoice]);
+
+  /** 中文语音清单（已去重、按地区排好）。 */
+  const voiceOptions = useMemo(() => chineseVoices(voices), [voices]);
+  /**
+   * 下拉里要显示的那一项。
+   * ★ 用户没选过时显示 `pickVoice` 自动挑中的那个，而不是空 —— 否则下拉是空值，
+   *   用户以为「没选就没在用」，而实际上朗读一直在用某个音色。
+   */
+  const activeVoiceName = useMemo(
+    () => pickVoice(voices, speechVoice)?.name ?? '',
+    [voices, speechVoice],
+  );
+
+  /**
+   * 试听：用当前选中的音色念一小段。
+   * ★ 先 `cancel()`：不取消的话连点两下试听会排队，第二段在第一段之后才响，
+   *   用户以为按钮没反应。
+   * ★ 试听**不改** `speaking` 状态：它不是「朗读这篇」，把工具条那颗三角点亮
+   *   会让用户以为文章在念。
+   */
+  const previewVoice = () => {
+    const synth = globalThis.speechSynthesis;
+    if (!synth || typeof globalThis.SpeechSynthesisUtterance !== 'function') {
+      notify('这个环境不支持朗读（没有语音合成能力）', true);
+      return;
+    }
+    const picked = pickVoice(synth.getVoices(), speechVoiceRef.current);
+    if (!picked) { notify('这台机器没有中文语音，中文文章读不了', true); return; }
+    synth.cancel();
+    const utter = new globalThis.SpeechSynthesisUtterance(SPEECH_SAMPLE);
+    utter.lang = picked.lang;
+    utter.rate = speechRateRef.current;
+    const voice = synth.getVoices().find((item) => item.name === picked.name);
+    if (voice) utter.voice = voice;
+    synth.speak(utter);
+  };
+
+  /** 换音色。正在朗读时先停 —— 声音中途换掉会让人以为出了故障。 */
+  const chooseVoice = (name) => {
+    setSpeechVoice(name);
+    localStorage.setItem('npr.speechVoice', name);
+    if (globalThis.speechSynthesis?.speaking) {
+      stopSpeech();
+      notify('已换音色，重新点朗读开始');
+    }
+  };
+
   const stopSpeech = () => {
     if (speechRun.current) speechRun.current.cancelled = true;
     speechRun.current = null;
@@ -1810,7 +1895,8 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     if (synth.paused) { synth.resume(); setSpeaking(true); return; }
     const chunks = speechChunks(proseRef.current?.innerText ?? '');
     if (chunks.length === 0) { notify('这篇没有可朗读的正文'); return; }
-    const picked = pickVoice(synth.getVoices(), localStorage.getItem('npr.speechVoice') ?? '');
+    // ★ 读 ref 而不是 localStorage：换音色后同一会话内立刻生效，不用重开面板
+    const picked = pickVoice(synth.getVoices(), speechVoiceRef.current);
     // 没有中文语音就明说，不退回英语：那会把中文念成噪音，比不念更糟
     if (!picked) { notify('这台机器没有中文语音，中文文章读不了', true); return; }
     const run = { cancelled: false };
@@ -2242,6 +2328,32 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                         </button>
                       )}
                       <hr />
+                      {/* 朗读声音（0.54.0）。在此之前界面上**没有任何选择入口**：
+                          pickVoice 取「第一个 zh-CN 本地语音」，用户既不知道自己在听谁、
+                          也换不掉 —— 而 npr.speechVoice 只被读过、全项目没有一处写它。
+                          用户 2026-10-30：「现在的朗读效果非常差，非常机械声」。
+                          ★ 放在语速上面：音色对「像不像人」的影响远大于语速。
+                          ★ 没有中文语音时**不禁用一个空下拉**：换成一行说明，告诉他
+                            去系统设置里下载 —— 否则用户只会看到点不动的灰块。 */}
+                      <div className="npr-menu-row" role="group" aria-label="朗读声音">
+                        {voiceOptions.length > 0 ? (
+                          <>
+                            <span className="npr-menu-label">朗读声音</span>
+                            <div className="npr-menu-pick">
+                              <select className="npr-menu-select" aria-label="朗读声音"
+                                value={activeVoiceName}
+                                onChange={(event) => chooseVoice(event.target.value)}>
+                                {voiceOptions.map((item) => (
+                                  <option key={`${item.lang}:${item.name}`} value={item.name}>{item.label}</option>
+                                ))}
+                              </select>
+                              <button type="button" className="npr-menu-test" onClick={previewVoice}>试听</button>
+                            </div>
+                          </>
+                        ) : (
+                          <span className="npr-menu-hint">这台机器没有中文语音。系统设置 → 辅助功能 → 朗读内容 → 系统声音 → 管理声音，下载一个中文声音后重开这个面板。</span>
+                        )}
+                      </div>
                       {/* 语速放在「更多」里而不是工具条上：它是一周改一次的东西，
                           而工具条上每一颗按钮都在抢宽度（窄窗口下会先把文字砍掉）。 */}
                       <div className="npr-menu-row" role="group" aria-label="朗读语速">

@@ -53,6 +53,77 @@ const normalizeVoice = (voice) => ({
 });
 
 /**
+ * 语言标签：把 BCP-47 的 `zh-*` 翻成人话。
+ *
+ * ★ 为什么不直接显示 `zh_CN`：下拉里全是 `zh_CN` / `zh_TW` / `zh_HK` 时，用户要
+ *   先知道哪个代码是哪个地区才选得动。而这是**唯一**能让他分辨同名音色的线索
+ *   （婷婷在台湾版与大陆版里都有）。
+ */
+const REGION_LABELS = [
+  ['zh-cn', '大陆'], ['zh-hans', '大陆'], ['zh-sg', '新加坡'],
+  ['zh-tw', '台湾'], ['zh-hk', '香港'], ['zh-mo', '澳门'], ['zh', '中文'],
+];
+
+export function voiceRegion(lang) {
+  const key = String(lang ?? '').toLowerCase().replace('_', '-');
+  for (const [prefix, label] of REGION_LABELS) {
+    if (key === prefix || key.startsWith(`${prefix}-`)) return label;
+  }
+  return '其他';
+}
+
+/**
+ * 给用户挑的那份中文语音清单（0.54.0）。
+ *
+ * @param {Array<{name?: string, lang?: string, localService?: boolean}>} voices
+ * @returns {Array<{name: string, lang: string, region: string, localService: boolean, label: string}>}
+ *
+ * ★ 为什么需要它：`pickVoice` 只负责「自动挑一个能用的」，而用户说「非常机械声」
+ *   时真正缺的是**换一个**。挑的前提是先把候选摊开 —— 这台机器上有 20 条中文语音，
+ *   而在此之前界面上一条都看不见。
+ * ★ **按 语言+名字 去重**：macOS 的「婷婷」会同时以紧凑版与高音质版出现，两条
+ *   `name` 与 `lang` 完全一样 —— 不去重的话下拉里是两个一模一样的选项，用户点了
+ *   另一个也听不出区别（他不知道自己其实在切音质档）。
+ * ★ 排序不是装饰：默认选中项来自 `pickVoice`，它按 zh-CN → zh-TW → zh-HK 的优先级
+ *   找。清单也照这个顺序排，用户打开下拉时**第一项就是他正在听的那个**，不用先找。
+ */
+export function chineseVoices(voices) {
+  const list = Array.isArray(voices) ? voices : [];
+  const seen = new Set();
+  const rows = [];
+  for (const voice of list) {
+    const lang = String(voice?.lang ?? '');
+    const name = String(voice?.name ?? '');
+    if (name === '' || !/^zh($|[-_])/i.test(lang)) continue;
+    const key = `${lang.toLowerCase().replace('_', '-')}|${name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const region = voiceRegion(lang);
+    const localService = voice?.localService === true;
+    rows.push({
+      name, lang, region, localService,
+      // 在线语音要标出来：它按量计费、断网就没声，用户得知道自己选了什么
+      label: `${name}（${region}）${localService ? '' : ' · 在线'}`,
+    });
+  }
+  const rank = (row) => {
+    const at = ZH_PREFIXES.findIndex((prefix) => row.lang.toLowerCase().replace('_', '-').startsWith(prefix.toLowerCase()));
+    return at === -1 ? ZH_PREFIXES.length : at;
+  };
+  return rows.sort((a, b) => rank(a) - rank(b)
+    || Number(b.localService) - Number(a.localService)
+    || a.name.localeCompare(b.name));
+}
+
+/**
+ * 试听用的那句话。
+ *
+ * ★ 必须是**中文 + 有停顿 + 有数字与英文**的一小段：只听「你好」判断不出朗读
+ *   效果，真实文章里既有逗号句号也有数字和专有名词，那才是机械感暴露的地方。
+ */
+export const SPEECH_SAMPLE = '这是一段试听：2026 年的秋天，AI 让阅读变快了吗？听完再决定。';
+
+/**
  * 把正文切成能念的块。
  *
  * @param {string} text 正文纯文本
