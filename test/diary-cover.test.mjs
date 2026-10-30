@@ -165,27 +165,33 @@ describe('接线：判据真的被用上，且封面与正文是二选一', () =
     assert.match(block, /已记 \{days\} 天/);
   });
 
-  it('★ 整页按一下就跳过封面 —— 判定面不能小于可点面积', () => {
-    // 用户 2026-10-30 的原话：「说明页只有点击说明页本身以及点击灵感时间线的灵感条
-    // 会消失，点击其它不会消失，日记也是，只有点击说明页本身以及日历会消失」。
-    // 那个手感对应的是「钩子只绑在某几个子区域上」：点到的算，没点到的就是「点了没反应」。
-    // 所以判定面必须与用户看到的可点面积一样大 —— 挂在整页那一层，谁都不用猜哪儿能点。
+  it('★ 点日历 / 时间线的一天就撤说明页，点标签和搜索不撤', () => {
+    // 用户 2026-10-30 定的判据是**按动作性质**分，不是按面积：
+    //   点日历某天 / 点时间线上的一天 —— 「我要看这一天」⇒ 撤；
+    //   点标签、开搜索、点空白处        —— 只是浏览和调筛选 ⇒ 说明页留着。
+    // 前一类的全部入口都收敛在 `pick()` 上，所以撤的判据只能写在那里。
     // ★ 用剥过注释的源码：注释里写过的同一串字会让本判据假绿。
     const code = stripComments(diary);
-    const from = code.indexOf('npr-workarea npr-diary-workarea');
-    const to = code.indexOf('npr-layout npr-diary-layout', from + 1);
-    assert.ok(from > 0 && to > from, '找不到整页根节点');
-    const head = code.slice(from, to);
-    assert.match(head, /onPointerDownCapture=\{showCover \? skipCover : undefined\}/,
-      '整页那一层没有撤封面的钩子 —— 点标签、点工具条、点空白处，右边都还停在说明页');
-    assert.match(head, /onKeyDownCapture=\{showCover \? skipCover : undefined\}/,
-      '键盘按下去不会撤 —— Enter 不触发 pointerdown');
-    // 反向：钩子不能缩回左栏。缩回去就等于「只有日历和时间线能撤」那个老毛病。
+    const from = code.indexOf('const pick = (date) => {');
+    const to = code.indexOf('const jump = ', from + 1);
+    assert.ok(from > 0 && to > from, '找不到 pick()');
+    assert.match(code.slice(from, to), /if \(showCover\) enterCover\(\)/,
+      'pick() 里没有撤说明页 —— 点了日历那一天，右边还是说明页');
+
+    // 反向：不能再有「铺到整页 / 左栏」的捕获钩子。0.56.5 那样做过一次，
+    // 结果是点标签、开搜索都会把它吃掉（用户原话：「还是一样啊，会消失」）。
+    assert.doesNotMatch(code, /onPointerDownCapture|onKeyDownCapture/,
+      '又挂了一张「铺开」的捕获钩子 —— 它会连标签、搜索、空白处一起算成"开始写"');
+    assert.doesNotMatch(code, /skipCover/,
+      'skipCover 是 0.56.5 那条整页钩子的产物，应当已经删掉');
+
+    // 左栏（标签、搜索、时间线外壳）里不许出现撤说明页的调用：
+    // 这一栏里除了日期行，其余都是浏览动作。
     const asideAt = code.indexOf('<aside className="npr-sidebar npr-diary-nav"');
     assert.ok(asideAt > 0, '找不到左栏');
     const asideTag = code.slice(asideAt, code.indexOf('>', asideAt) + 1);
-    assert.doesNotMatch(asideTag, /skipCover/,
-      '钩子被缩回左栏了 —— 判定面又小于可点面积');
+    assert.doesNotMatch(asideTag, /enterCover|skipCover/,
+      '左栏标签上挂了撤说明页的钩子 —— 点标签、开搜索也会把它吃掉');
   });
 
   it('★ CSS 的退场时长与 COVER_EXIT_MS 是同一个数', () => {

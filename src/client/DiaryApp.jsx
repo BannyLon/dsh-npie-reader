@@ -421,26 +421,6 @@ export function DiaryApp({
       setCoverLeaving((current) => ({ ...current, [module]: false }));
     }, COVER_EXIT_MS);
   };
-  /**
-   * 「整页任何一下」= 别拦我，直接进去。
-   *
-   * ★ 封面只盖住右边那一列，左边的时间线、标签、搜索框都还在（用户截图里就是这样）。
-   *   可它们一旦被点，右边却还是封面 —— 那一天明明选中了、标签明明筛选了，
-   *   屏幕上什么都没有变。这是「点了没反应」，比不给封面更糟。
-   * ★ 所以**整页**任何一次按下/按键都直接把封面撤掉，而且**不做退场动画**：
-   *   用户已经在点别的地方了，再等 260ms 才响应才是真的迟钝。
-   * ★ 0.56.5 之前这条钩子挂在左栏 `<aside>` 上，实测手感是「只有日历和时间线会撤」——
-   *   判定面比用户看到的可点面积小，就必然漏点。现在挂在整页那一层（见根节点）。
-   * ★ 唯一的例外是窗口拖动条（`[data-window-drag]` 的顶栏空白段）：Electron 把
-   *   `-webkit-app-region: drag` 当标题栏命中，鼠标事件根本不到页面 —— 那一段按不动
-   *   是系统的，不是这条判据能修的。条上的按钮是 `no-drag`，照样能撤。
-   */
-  const skipCover = () => {
-    if (!showCover) return;
-    markCoverEntered(moduleValue);
-    setCoverLeaving((current) => ({ ...current, [moduleValue]: false }));
-  };
-
   const [selected, setSelected] = useState(today);
   const [month, setMonth] = useState(() => {
     const parsed = parseMonthKey(today.slice(0, 7));
@@ -1146,6 +1126,20 @@ export function DiaryApp({
    *   「点击时间轴的条目就回不去了」）。
    */
   const pick = (date) => {
+    /*
+     * ★ 选了一天 = 进编辑器（0.56.6）。
+     *
+     * 判据按**动作的性质**分，不按面积（用户 2026-10-30 定的）：
+     *   点日历某天 / 点时间线上的一天 —— 这是「我要看这一天」⇒ 撤说明页；
+     *   点标签、开搜索、点空白处        —— 那只是浏览和调筛选 ⇒ 说明页留着。
+     * 前一类**全部**收敛在这里：日历（`onPick` / 回到今天）、灵感时间线的日期行、
+     * 情绪行「回到那天」、搜索结果，走的都是 `pick()`；后一类根本不经过它。
+     * 所以不需要在别处挂「够宽」的钩子 —— 0.56.5 挂到整页上，结果是点标签、
+     * 点搜索也会把说明页吃掉，用户原话：「还是一样啊，会消失」。
+     * 用带 260ms 退场的 `enterCover`（与点说明页同一条路），不是瞬间切换：
+     * 同一个动作该有同一种过渡。
+     */
+    if (showCover) enterCover();
     setSelected(date);
     setConfirmKey('');
     /* 换一天时把「刚才定位到哪一条」和「展开了更早的」都收回：
@@ -1989,15 +1983,11 @@ export function DiaryApp({
       /* `--npr-list-width` 也提到这一层：AI 面板的宽度上限要在**这里**算
          （「正文至少留 340px」得先扣掉导航那 268px），而它原来只写在 `.npr-layout`
          的 inline style 上 —— 那是兄弟节点，面板读不到。 */
-      style={{ '--npr-companion-width': `${companionWidth}%`, '--npr-list-width': `${listWidth}px` }}
-      /*
-       * ★ 撤开场页的钩子挂在**整页**（这一层），不是左栏某几个子区域（0.56.5）。
-       *   用户 2026-10-30：「说明页只有点击说明页本身以及点击灵感时间线的灵感条会消失，
-       *   点击其它不会消失」—— 那个手感正是「钩子只绑在日历 / 时间线两块上」。
-       *   判定面必须与用户看到的可点面积一样大：**整页任何一次按下都算**。
-       */
-      onPointerDownCapture={showCover ? skipCover : undefined}
-      onKeyDownCapture={showCover ? skipCover : undefined}>
+      style={{ '--npr-companion-width': `${companionWidth}%`, '--npr-list-width': `${listWidth}px` }}>
+      {/* ★ 撤说明页**不再**挂在这一层（0.56.6）。0.56.5 用 `onPointerDownCapture`
+          把判定面铺到整页，结果点标签、开搜索、点空白都会把说明页吃掉 ——
+          那不是「够宽就好」，是把浏览动作也算成了「开始写」。
+          触发点现在只有两处：说明页自己的按下，和 `pick()`（见它的注释）。 */}
       {/* ★ `npr-diary-layout` / `npr-diary-nav` 两个类只用来把「AI 面板打开时收起
           导航」这条规则**限定在日记页**（见 refinements.css）。阅读页的行为不变。 */}
       <div className="npr-layout npr-diary-layout" style={{ '--npr-list-width': `${listWidth}px` }}>
