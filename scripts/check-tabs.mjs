@@ -255,8 +255,26 @@ function crossFailures(d) {
    *     只剩 2px 余量 —— 现状的 4px 是留给自己变长的余地。
    *   这条判据要守的是「文字到块边的那点距离」，那三处（筛选条 / 分页 / 日记模块）
    *   加上设置里的分段器，都是纯文字。
+   *
+   * ★★ 但 `primary`（RSS 一级筛选条）在**窄档**是 8px，其余是 10px —— 这是 0.45.2
+   *   定下的压缩，不是漏改：这一行要挤下四颗 chip，最长那颗是「已隐藏 12」，
+   *   10px 下在 256px 侧栏里排不开会换行，而换行被用户明确否掉（2026-10-29
+   *   「换行显得非常的业余」）。另外几行没有这个压力（2~3 颗、字数固定），
+   *   跟着收只会无端改掉它们的外观。
+   *   ⇒ 所以**不能**把它算进「全局同一个数」，否则这条断言会长期红着 ——
+   *     0.45.2 之后它确实一直红，只是 `tabs` 属于 `--all` 的重型门禁，平时没人跑。
+   *   ⇒ 改成两条**分别有牙**的断言：其余几处同一个数；primary 必须正好 8px。
+   *     后者不是「放行」—— 把它改回 10 或改成 6 都会红。
+   *   ★ 本文件只在 320 / 268 两个**窄档**渲染（见文件末尾的宽度循环），所以这里
+   *     写死 8px 是对的；将来若加宽档，这条要按宽度分档写。
    */
-  same(buttonsOf(['primary', 'filters', 'shelf', 'libtabs', 'modes', 'settings'], 'padL'), '按钮左内边距');
+  same(buttonsOf(['filters', 'shelf', 'libtabs', 'modes', 'settings'], 'padL'), '按钮左内边距');
+  {
+    const narrowPad = uniq(buttonsOf(['primary'], 'padL').map(([, v]) => v));
+    if (narrowPad.length !== 1 || Number(narrowPad[0]) !== 8) {
+      fails.push(`RSS 一级筛选条的窄档内边距应为 8px（四颗 chip 才排得成一行），实际 ${narrowPad.join('/')}`);
+    }
+  }
   same(firstOf(TEXT, 'fontSize'), '字号');
   same(firstOf(TEXT, 'fontFamily'), '字体族');
 
@@ -465,6 +483,22 @@ for (const width of [320, 268]) {
   const hit = hf.some((f) => f.includes('画了底色'));
   check(hit, `★ 反向对照失败：把二级筛选条 hover 的底色加回去，判据没认出来（实际：${hf.join(' | ') || '无'}）`);
   if (hit) console.log('  ok   ★ 反向对照：二级筛选条 hover 加回底色 → 撞脸那条立刻变红');
+}
+
+/**
+ * 反向对照六：把 RSS 一级筛选条的窄档内边距**放回 10px**。
+ * ★ 这一条守的是上面那条「primary 必须正好 8px」—— 那条如果只是「不算进全局比较」，
+ *   这里会全绿；它必须能因为「改回 10px」而红，才算真的在守 0.45.2 的那个压缩。
+ * ★ 选择器与 PANEL_CSS 里那条窄档规则**同特异度**（0,3,1），靠 extraCss 在 head 里
+ *   更靠后取胜 —— 少写一个 `.npr-filters` 就会被原规则盖掉，变异体成了空操作，
+ *   于是「仍然绿」会被误读成「判据没牙」。
+ */
+{
+  const d = run(render(320, '.npr-root .npr-filters.npr-filters-primary button { padding: 0 10px; }'));
+  const fails = crossFailures(d);
+  const hit = fails.some((f) => f.includes('窄档内边距应为 8px'));
+  check(hit, `★ 反向对照失败：把 primary 的窄档内边距改回 10px 后判据仍是绿的（实际：${fails.join(' | ') || '无'}）`);
+  if (hit) console.log('  ok   ★ 反向对照：primary 窄档内边距改回 10px → 8px 那条立刻变红');
 }
 
 console.log(bad === 0 ? '\nALL OK' : `\n${bad} 条不合格`);

@@ -93,6 +93,7 @@ const GATES = [
 const HEAVY = [
   { name: 'layout', script: 'scripts/check-library-sidebar-layout.mjs', timeout: 6 * 60_000, why: '书架侧栏版式' },
   { name: 'tabs', script: 'scripts/check-tabs.mjs', timeout: 4 * 60_000, why: '切换控件两档同源（六处 × 两种侧栏宽度 + 反向对照）' },
+  { name: 'tab-gap', script: 'scripts/check-tab-gap.mjs', timeout: 4 * 60_000, why: '工具栏 → 切换控件的纵向间距（三处 × 三个宽度 + 五条反向对照）' },
   { name: 'marks-collapse', script: 'scripts/check-diary-marks-collapse.mjs', timeout: 4 * 60_000, why: '读后感划线栏可收起 + 正文自适应（四态 + 反向对照）' },
   { name: 'bookrow-cover', script: 'scripts/check-bookrow-cover.mjs', timeout: 4 * 60_000, why: '书籍行封面位 + 状态角标（两种侧栏宽度 + 反向对照）' },
   { name: 'book-layout', script: 'scripts/check-book-panel-layout.mjs', timeout: 6 * 60_000, why: '书页面板版式' },

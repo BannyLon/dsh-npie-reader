@@ -125,6 +125,17 @@
   --npr-tab-font: 13px;
   --npr-tab-pad: 2px;
   --npr-tab-inset: 12px;
+  /* 切换控件**上方的留白**。口径统一按「工具栏**内容区**下沿 → 轨道上沿」量：
+     工具栏高 44px、上下内边距各 5px ⇒ 内容区下沿在 39px；这里 3px ⇒ 轨道上沿 47px
+     ⇒ 上 8px。与下方那条 margin-bottom 8px 相等，切换控件在它上下各 8px。
+     ★ 不要用「工具栏盒底」当基准：盒底含 5px 内边距，量出来会少 5px，看着像
+       上 3 / 下 8 —— 那正是 0.53.2 之前三处各写各的留下的错觉（筛选条 0、分页 0、
+       日记三模块 6 ⇒ 上 5 / 5 / 11）。用户 2026-10-30 一眼看出不齐。
+     ★ 「日记三模块要与工具栏断开」这个意图不靠多给 6px 实现：上下等距 8px 已经把
+       它和图标行分开了，多给的那 6px 只是让三个位置互不相同。
+     ★ 判据在 `.build/preview/measure-tab-gap.mjs`，量**画出来的边**，不读 margin ——
+       将来改工具栏内边距，三处会一起漂，判据能抓住。 */
+  --npr-tab-gap-top: 3px;
   --npr-tab-track: color-mix(in srgb, var(--npr-fg) 8%, var(--npr-bg));
   --npr-tab-thumb: var(--npr-bg);
 }
@@ -150,7 +161,7 @@
 }
 /* 一级筛选条自带留白：不靠 PANEL_CSS 给 `.npr-filters` 的那条 margin —— 一旦那边改了值，
    这条一级筛选条会静默贴边（左缘判据在 check-tabs 里）。 */
-.npr-root .npr-filters-primary { margin: 0 var(--npr-tab-inset) 8px; }
+.npr-root .npr-filters-primary { margin: var(--npr-tab-gap-top) var(--npr-tab-inset) 8px; }
 .npr-root .npr-libtabs > button,
 .npr-root .npr-filters-primary > button,
 .npr-root .npr-diary-modes > button,
@@ -909,7 +920,7 @@
    ★ 0.44.5 之前这里还有一套自己的 28px / 7px / 选中描边 —— 那是三套数字里的第二套。
    ★ 等分（flex: 1 1 0）也不在这里了：六处的等分写在同一个选择器组里，
      免得「三条规则各写一份、改一处漏两处」。 */
-.npr-root .npr-libtabs { margin: 0 var(--npr-tab-inset) 8px; }
+.npr-root .npr-libtabs { margin: var(--npr-tab-gap-top) var(--npr-tab-inset) 8px; }
 
 /* 一行两个按钮：主按钮（打开这本书）＋右缘的「阅读 / 已在阅读」切换。
    行本身是 div 而不是 button —— `<button>` 里套 `<button>` 是非法 HTML，
@@ -3447,9 +3458,11 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
      写入口、侧栏区块与门禁提示，这些都不变；切换器回到「我在哪一页」这一件事上。
      如果将来又觉得「像同一份数据的三个视图」太含糊，该改的是页面里的分节说明，
      不是再把这三个做成第三种控件。
-   ★ 版式：两侧 12px（与工具栏同一条内边距），上方 6px 与工具栏断开、下方 8px 与
-     列表分开 —— 这样它不再和右侧那排图标挤在同一条视觉带里。 */
-.npr-root .npr-diary-modes { margin: 6px var(--npr-tab-inset) 8px; }
+   ★ 版式：两侧 12px（与工具栏同一条内边距），上下**都是 8px**（画出来的边）。
+     0.44.5 这里原本单独写 6px 想「与工具栏断开」，但另外两处（RSS 筛选条、书架分页）
+     是 0 —— 同一个侧栏里三个位置、两种上边距，用户 2026-10-30 直接指出「上下间距
+     没有统一」。现在三处共用 `--npr-tab-gap-top`，与下方 8px 一起构成等距留白。 */
+.npr-root .npr-diary-modes { margin: var(--npr-tab-gap-top) var(--npr-tab-inset) 8px; }
 
 /* 私密的说明文字：不能省。`mode: 'file'` 与钥匙串是**两种不同的安全等级**，
    不写出来就等于让用户以为两者一样。
