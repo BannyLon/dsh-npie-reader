@@ -93,6 +93,18 @@ export const READING_DEFAULTS = {
    * ★ 与 `bookTint` 一样只作用于**位图**（`filter`），HTML 正文有它自己的 `readingTheme`。
    */
   bookBrightness: 1,
+  /**
+   * 朗读用的**硅基流动 API Key**（0.55.0）。
+   *
+   * ★ 它落在设置文件里，而不是 localStorage：localStorage 是渲染进程的存储，写进去
+   *   就等于把计费凭证交给了页面。放在宿主设置里，密钥只活在宿主进程内。
+   * ★ 但 `getSettings()` **会把它剔掉**（见 `service.js` 里那段），所以这个字段
+   *   对界面是「只写不读」的 —— 设置页要显示的是 `maskApiKey()` 之后的形态，
+   *   那来自 `GET /speech/config`。完整值不出宿主进程。
+   * ★ 它同时登记在 `settings-patch.js` 的 `LIVE_WRITTEN_SETTINGS` 里：写者是
+   *   `POST /speech/config`，设置弹窗那份旧快照没有资格覆盖它。
+   */
+  speechApiKey: '',
 };
 
 /**
@@ -242,6 +254,19 @@ export function validateSettings(patch = {}) {
       if (!['original', 'translation', 'rewrite'].includes(value)) throw new Error('无效默认版本');
     } else if (key === 'customFont') {
       if (typeof value !== 'string' || value.length > 100) throw new Error('自选字体名最长 100 字符');
+    } else if (key === 'speechApiKey') {
+      /**
+       * 朗读用的 API Key。
+       *
+       * ★ 只允许**可见 ASCII**：从控制台复制时常带换行，手打时又容易混进全角字符，
+       *   两者都会让 `Authorization: Bearer …` 变成服务端眼里的坏凭证，而回的是
+       *   401 —— 用户会认为「这个 Key 是坏的」，而问题出在一个看不见的字符上。
+       *   这里不替用户 `trim()`（那是写入路由的职责，它要做的是「保存前清洗」），
+       *   校验只负责拒绝明显不是 Key 的东西。
+       */
+      if (typeof value !== 'string') throw new Error('API Key 必须是字符串');
+      if (value.length > 200) throw new Error('API Key 最长 200 字符');
+      if (value !== '' && !/^[\x21-\x7e]+$/.test(value)) throw new Error('API Key 里有非法字符');
     } else if (key === 'aiModel' || key === 'digestModel') {
       // ★ 判据与 `parseAiModel` 同源（都走 `isValidAiModel`）。两处各写一遍的话，
       //   会出现「设置页存下来了、宿主解析成 null」⇒ 静默回退到默认模型，

@@ -20,6 +20,11 @@ import { SettingsPage } from './SettingsPage.jsx';
 import { resolveReadingVersion, shouldAutoTranslate } from './reading-version.js';
 import { activeIndex, outlineOf, scrollTarget } from './article-outline.js';
 import { pickVoice, speechChunks, SPEECH_RATES, chineseVoices, SPEECH_SAMPLE } from './article-speech.js';
+import {
+  SPEECH_API_PREFIX, SPEECH_CLOUD_CHUNK, SILICON_VOICES,
+  parseSpeechVoice, speechVoiceValue,
+} from '../speech.js';
+import { createCloudPlayer, fetchCloudAudio } from './speech-engine.js';
 import { readPosition, savePosition, scrollFromRatio, scrollRatio } from './read-position.js';
 import { articleToMarkdown, downloadText, markdownFileName } from './article-markdown.js';
 import { Discover } from './Discover.jsx';
@@ -1825,23 +1830,113 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     return () => synth.removeEventListener('voiceschanged', sync);
   }, []);
 
-  /** 用户选的音色（`voice.name`）。空串 = 没选过，按 `pickVoice` 自动挑。 */
+  /**
+   * 云端朗读的可用状态（0.55.0）。
+   *
+   * `null` = 还在问宿主。问不到（宿主没挂上那条路由 / 插件被禁）时落成
+   * `{ configured: false }` —— **不报错**：系统语音仍然能用，云端只是「还没配」。
+   * ★ 监听 `npr-settings-changed`：用户在设置页填完 Key 回到阅读页，下拉里必须
+   *   立刻多出那组云端音色。不监听的话要重开面板才看得到，而用户会以为没保存成功。
+   */
+  const [cloud, setCloud] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      void fetch(`${SPEECH_API_PREFIX}/config`, { cache: 'no-store' })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((body) => { if (!cancelled) setCloud(body?.ok === true ? body : { configured: false, voices: [] }); })
+        .catch(() => { if (!cancelled) setCloud({ configured: false, voices: [] }); });
+    };
+    load();
+    window.addEventListener('npr-settings-changed', load);
+    return () => { cancelled = true; window.removeEventListener('npr-settings-changed', load); };
+  }, []);
+
+  /**
+   * 用户选的音色。空串 = 没选过，按 `pickVoice` 自动挑。
+   *
+   * ★ 0.55.0 起存的是**带引擎前缀**的值（`local:Tingting` / `cloud:claire`）。
+   *   0.54.0 存下的裸名字由 `parseSpeechVoice` 兼容成「本机语音」——
+   *   不做兼容的话，升级后用户上次选的音色会静默失效，而界面看不出任何异常。
+   */
   const [speechVoice, setSpeechVoice] = useState(() => localStorage.getItem('npr.speechVoice') ?? '');
   // 与语速同理：toggleSpeech 里那个闭包捕获的是点击那一刻的值，用 ref 才能即时生效
   const speechVoiceRef = useRef(speechVoice);
   useEffect(() => { speechVoiceRef.current = speechVoice; }, [speechVoice]);
 
-  /** 中文语音清单（已去重、按地区排好）。 */
-  const voiceOptions = useMemo(() => chineseVoices(voices), [voices]);
+  /**
+   * 下拉里的两组选项。
+   *
+   * ★ 云端排前面：用户的抱怨是「本机的都不自然」，那一组是他已经试遍的。
+   * ★ 没配 Key 时**不列出云端音色**（而不是列出来点了报错）：一个能选但选完就报
+   *   「没填 Key」的下拉，比一个明确写着「去设置里填 Key」的提示更让人恼火。
+   */
+  const voiceGroups = useMemo(() => {
+    const local = chineseVoices(voices).map((item) => ({
+      value: speechVoiceValue('system', item.name),
+      label: item.label,
+    }));
+    const remote = (cloud?.configured === true ? (cloud.voices ?? SILICON_VOICES) : []).map((item) => ({
+      value: speechVoiceValue('siliconflow', item.id),
+      label: `${item.label} · 云端`,
+    }));
+    return { local, remote };
+  }, [voices, cloud]);
+
   /**
    * 下拉里要显示的那一项。
+   *
    * ★ 用户没选过时显示 `pickVoice` 自动挑中的那个，而不是空 —— 否则下拉是空值，
    *   用户以为「没选就没在用」，而实际上朗读一直在用某个音色。
+   * ★ 选过云端、但 Key 后来被清空时返回空串，界面上会补一条「云端音色（未配置）」
+   *   的禁用项：如实说明「你选的那个现在用不了」，而不是悄悄跳到本机语音。
    */
-  const activeVoiceName = useMemo(
-    () => pickVoice(voices, speechVoice)?.name ?? '',
-    [voices, speechVoice],
-  );
+  const activeVoiceValue = useMemo(() => {
+    const parsed = parseSpeechVoice(speechVoice);
+    if (parsed.engine === 'siliconflow') {
+      return cloud?.configured === true ? speechVoiceValue('siliconflow', parsed.voice) : '';
+    }
+    const picked = pickVoice(voices, parsed.voice)?.name ?? '';
+    return picked === '' ? '' : speechVoiceValue('system', picked);
+  }, [speechVoice, voices, cloud]);
+
+  /**
+   * 云端播放器（0.55.0）。两个实例、各自一个 `<audio>`：
+   *   - `mainCloudPlayer()` 负责「朗读这篇」
+   *   - `previewCloudPlayer()` 负责「试听」
+   *
+   * ★ 为什么不共用一个：共用时点一下试听会把「朗读这篇」的进度冲掉，而试听结束时
+   *   那声 `idle` 会把工具条那颗三角熄灭 —— 文章其实还在念。
+   * ★ 为什么懒建（在点击时建）而不是渲染时建：`createCloudPlayer` 会造一个
+   *   `<audio>` 元素，渲染期造元素是副作用；而且每次重渲染都造一个的话，上一个
+   *   还在响的元素就没人能停了。
+   */
+  const mainPlayerRef = useRef(null);
+  const previewPlayerRef = useRef(null);
+  const cloudDeps = () => ({
+    fetchAudio: (text, options) => fetchCloudAudio(SPEECH_API_PREFIX, text, options),
+  });
+  const mainCloudPlayer = () => {
+    if (mainPlayerRef.current === null) {
+      mainPlayerRef.current = createCloudPlayer({
+        ...cloudDeps(),
+        onState: (state) => setSpeaking(state === 'playing'),
+        onError: (error) => { setSpeaking(false); notify(error.message, true); },
+      });
+    }
+    return mainPlayerRef.current;
+  };
+  const previewCloudPlayer = () => {
+    if (previewPlayerRef.current === null) {
+      previewPlayerRef.current = createCloudPlayer({
+        ...cloudDeps(),
+        // 试听不改 speaking：它不是「朗读这篇」
+        onState: () => {},
+        onError: (error) => notify(error.message, true),
+      });
+    }
+    return previewPlayerRef.current;
+  };
 
   /**
    * 试听：用当前选中的音色念一小段。
@@ -1849,14 +1944,22 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
    *   用户以为按钮没反应。
    * ★ 试听**不改** `speaking` 状态：它不是「朗读这篇」，把工具条那颗三角点亮
    *   会让用户以为文章在念。
+   * ★ 云端那条路会**真的花几分钱**（一次试听约 40 字节 × 0.05/千字节，几厘），
+   *   所以按钮上不写「免费」，界面上也不暗示免费。
    */
   const previewVoice = () => {
+    const parsed = parseSpeechVoice(speechVoiceRef.current);
+    if (parsed.engine === 'siliconflow') {
+      if (cloud?.configured !== true) { notify('云端朗读还没填 API Key', true); return; }
+      previewCloudPlayer().play([SPEECH_SAMPLE], { voice: parsed.voice, speed: speechRateRef.current });
+      return;
+    }
     const synth = globalThis.speechSynthesis;
     if (!synth || typeof globalThis.SpeechSynthesisUtterance !== 'function') {
       notify('这个环境不支持朗读（没有语音合成能力）', true);
       return;
     }
-    const picked = pickVoice(synth.getVoices(), speechVoiceRef.current);
+    const picked = pickVoice(synth.getVoices(), parsed.voice);
     if (!picked) { notify('这台机器没有中文语音，中文文章读不了', true); return; }
     synth.cancel();
     const utter = new globalThis.SpeechSynthesisUtterance(SPEECH_SAMPLE);
@@ -1867,11 +1970,17 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     synth.speak(utter);
   };
 
-  /** 换音色。正在朗读时先停 —— 声音中途换掉会让人以为出了故障。 */
-  const chooseVoice = (name) => {
-    setSpeechVoice(name);
-    localStorage.setItem('npr.speechVoice', name);
-    if (globalThis.speechSynthesis?.speaking) {
+  /**
+   * 换音色。正在朗读时先停 —— 声音中途换掉会让人以为出了故障。
+   *
+   * ★ 参数是下拉项**完整的 value**（带引擎前缀），不是裸名字：0.55.0 起一个下拉里
+   *   同时装着本机语音与云端音色，裸名字分不出该走哪条路。
+   */
+  const chooseVoice = (value) => {
+    setSpeechVoice(value);
+    localStorage.setItem('npr.speechVoice', value);
+    const cloudPlaying = mainPlayerRef.current !== null && mainPlayerRef.current.active;
+    if (cloudPlaying || speaking || globalThis.speechSynthesis?.speaking) {
       stopSpeech();
       notify('已换音色，重新点朗读开始');
     }
@@ -1881,10 +1990,35 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     if (speechRun.current) speechRun.current.cancelled = true;
     speechRun.current = null;
     globalThis.speechSynthesis?.cancel();
+    // ★ 只停**存在**的播放器：`stopSpeech` 会在换篇/卸载的 cleanup 里被调用，
+    //   那时懒建的播放器可能还没造出来 —— 为了停它而造一个，等于每换一篇文章
+    //   就凭空多一个 `<audio>`。
+    if (mainPlayerRef.current !== null) mainPlayerRef.current.stop();
+    if (previewPlayerRef.current !== null) previewPlayerRef.current.stop();
     setSpeaking(false);
   };
 
   const toggleSpeech = () => {
+    // ★ 读 ref 而不是 localStorage：换音色后同一会话内立刻生效，不用重开面板
+    const parsed = parseSpeechVoice(speechVoiceRef.current);
+
+    if (parsed.engine === 'siliconflow') {
+      if (cloud?.configured !== true) {
+        notify('云端朗读还没填 API Key。到「设置 → 朗读」里填一个硅基流动的 Key。', true);
+        return;
+      }
+      const player = mainCloudPlayer();
+      // 已经在念：点一下暂停；暂停中：点一下继续
+      if (player.active) {
+        if (speaking) { player.pause(); setSpeaking(false); } else { player.resume(); setSpeaking(true); }
+        return;
+      }
+      const chunks = speechChunks(proseRef.current?.innerText ?? '', SPEECH_CLOUD_CHUNK);
+      if (chunks.length === 0) { notify('这篇没有可朗读的正文'); return; }
+      player.play(chunks, { voice: parsed.voice, speed: speechRateRef.current });
+      return;
+    }
+
     const synth = globalThis.speechSynthesis;
     if (!synth || typeof globalThis.SpeechSynthesisUtterance !== 'function') {
       notify('这个环境不支持朗读（没有语音合成能力）', true);
@@ -1895,8 +2029,7 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     if (synth.paused) { synth.resume(); setSpeaking(true); return; }
     const chunks = speechChunks(proseRef.current?.innerText ?? '');
     if (chunks.length === 0) { notify('这篇没有可朗读的正文'); return; }
-    // ★ 读 ref 而不是 localStorage：换音色后同一会话内立刻生效，不用重开面板
-    const picked = pickVoice(synth.getVoices(), speechVoiceRef.current);
+    const picked = pickVoice(synth.getVoices(), parsed.voice);
     // 没有中文语音就明说，不退回英语：那会把中文念成噪音，比不念更糟
     if (!picked) { notify('这台机器没有中文语音，中文文章读不了', true); return; }
     const run = { cancelled: false };
@@ -2328,32 +2461,63 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                         </button>
                       )}
                       <hr />
-                      {/* 朗读声音（0.54.0）。在此之前界面上**没有任何选择入口**：
-                          pickVoice 取「第一个 zh-CN 本地语音」，用户既不知道自己在听谁、
-                          也换不掉 —— 而 npr.speechVoice 只被读过、全项目没有一处写它。
-                          用户 2026-10-30：「现在的朗读效果非常差，非常机械声」。
+                      {/* 朗读声音（0.54.0 起有入口，0.55.0 起含云端音色）。
+                          在此之前界面上**没有任何选择入口**：pickVoice 取「第一个
+                          zh-CN 本地语音」，用户既不知道自己在听谁、也换不掉。
+                          用户 2026-10-30：「现在的朗读效果非常差，非常机械声」；
+                          试遍 20 条系统语音之后的结论是「没有一个读起来自然的」——
+                          那是采样拼接式合成的上限，所以 0.55.0 加了云端这一组。
                           ★ 放在语速上面：音色对「像不像人」的影响远大于语速。
-                          ★ 没有中文语音时**不禁用一个空下拉**：换成一行说明，告诉他
-                            去系统设置里下载 —— 否则用户只会看到点不动的灰块。 */}
+                          ★ 两组用 <optgroup> 分开、不混在一个平铺清单里：本机那组
+                            是免费的、云端那组按字计费，混在一起用户没法判断自己在
+                            花谁的钱。
+                          ★ 没有中文语音时**不禁用一个空下拉**：换成一行说明。 */}
                       <div className="npr-menu-row" role="group" aria-label="朗读声音">
-                        {voiceOptions.length > 0 ? (
+                        {voiceGroups.local.length > 0 || voiceGroups.remote.length > 0 ? (
                           <>
                             <span className="npr-menu-label">朗读声音</span>
                             <div className="npr-menu-pick">
                               <select className="npr-menu-select" aria-label="朗读声音"
-                                value={activeVoiceName}
+                                value={activeVoiceValue}
                                 onChange={(event) => chooseVoice(event.target.value)}>
-                                {voiceOptions.map((item) => (
-                                  <option key={`${item.lang}:${item.name}`} value={item.name}>{item.label}</option>
-                                ))}
+                                {/* ★ 选过云端音色、但 Key 后来被清空时必须**如实说出来**：
+                                    否则 <select> 会静默跳到第一项（某个本机语音），用户看到的是
+                                    「我选的温柔女声变成了婷婷」，而设置里那个值其实还在。 */}
+                                {activeVoiceValue === '' && (
+                                  <option value="" disabled>（当前选的音色现在用不了）</option>
+                                )}
+                                {voiceGroups.remote.length > 0 && (
+                                  <optgroup label="云端 · 更自然（按字数计费）">
+                                    {voiceGroups.remote.map((item) => (
+                                      <option key={item.value} value={item.value}>{item.label}</option>
+                                    ))}
+                                  </optgroup>
+                                )}
+                                {voiceGroups.local.length > 0 && (
+                                  <optgroup label="本机语音（免费 · 离线）">
+                                    {voiceGroups.local.map((item) => (
+                                      <option key={item.value} value={item.value}>{item.label}</option>
+                                    ))}
+                                  </optgroup>
+                                )}
                               </select>
                               <button type="button" className="npr-menu-test" onClick={previewVoice}>试听</button>
                             </div>
                           </>
                         ) : (
-                          <span className="npr-menu-hint">这台机器没有中文语音。系统设置 → 辅助功能 → 朗读内容 → 系统声音 → 管理声音，下载一个中文声音后重开这个面板。</span>
+                          <span className="npr-menu-hint">这台机器没有中文语音，也还没配云端朗读。系统设置 → 辅助功能 → 朗读内容 → 系统声音 → 管理声音，下载一个中文声音；或者到「设置 → 朗读」里填一个硅基流动的 API Key。</span>
                         )}
                       </div>
+                      {/* ★ 这条说明放在**下面单独一行**，不塞进上面那个 flex 行：
+                          那一行是「标签 + 控件」的固定形态，多一段长文字会把下拉挤成
+                          几个像素宽（0.54.0 量过：菜单总宽 293px，下拉只剩 158px）。 */}
+                      {voiceGroups.remote.length === 0 && voiceGroups.local.length > 0 && (
+                        <div className="npr-menu-row" role="note">
+                          <span className="npr-menu-hint">
+                            这些是本机语音 —— 机器味就是它们给的。想换更自然的声音：设置 → 朗读 → 填一个硅基流动 API Key，这里会多出一组云端音色（按字数计费）。
+                          </span>
+                        </div>
+                      )}
                       {/* 语速放在「更多」里而不是工具条上：它是一周改一次的东西，
                           而工具条上每一颗按钮都在抢宽度（窄窗口下会先把文字砍掉）。 */}
                       <div className="npr-menu-row" role="group" aria-label="朗读语速">

@@ -24,31 +24,44 @@ const reader = stripComments(readFileSync(join(clientDir, 'ReaderPage.jsx'), 'ut
 const app = stripComments(readFileSync(join(clientDir, 'LibraryApp.jsx'), 'utf8'));
 const refinements = stripComments(readFileSync(join(clientDir, 'refinements.css'), 'utf8'));
 
-/** 两个锚点之间的那段源码；任一锚点找不到就返回 null（判据必须报错，不能静默通过）。 */
+/**
+ * 订阅页「筛选 chip 行」那个容器的开标签原文。
+ *
+ * ★ 必须写**完整**的 class 值：它 0.53.x 起是 `npr-filters npr-filters-primary`。
+ *   这里原先写的是 `className="npr-filters"`（少了后面半截），于是 `indexOf` 返回
+ *   -1 ⇒ `between` 返回 null ⇒
+ *     · 「齿轮在工具栏里」那条**报红**（假阴性，看起来像功能坏了）；
+ *     · 「齿轮不在 chip 行里」那条**静默通过**（`null` 被读成「不在里面」）——
+ *       假绿，而且是最危险的一种：那条断言从此什么也不守。
+ *   ⇒ 锚点必须点名真实的字符串，并且 `between` 找不到锚点时**抛错**，不许返回 null。
+ */
+const FILTERS_ROW = 'className="npr-filters npr-filters-primary"';
+
+/** 两个锚点之间的那段源码。★ 任一锚点找不到就**抛错** —— 静默返回 null 会把
+ *  「不在里面」和「根本没找到这段」混成同一个结论（上一条注释里那个假绿就是这么来的）。 */
 function between(code, from, to) {
   const start = code.indexOf(from);
-  if (start === -1) return null;
+  assert.notEqual(start, -1, `锚点不存在：${from}`);
   const end = code.indexOf(to, start + from.length);
-  if (end === -1) return null;
+  assert.notEqual(end, -1, `结束锚点不存在：${to}`);
   return code.slice(start, end);
 }
 
 /** 齿轮是否落在某个区段里。 */
 function settingsButtonIn(code, from, to) {
-  const region = between(code, from, to);
-  return region !== null && region.includes('npr-settings-button');
+  return between(code, from, to).includes('npr-settings-button');
 }
 
 const GEAR = '<button type="button" className="npr-icon npr-settings-button" title="插件设置" aria-label="插件设置"';
 
 describe('设置齿轮：两个侧栏都在工具栏最右端', () => {
   it('订阅页：齿轮在侧栏工具栏里（筛选行之前）', () => {
-    assert.equal(settingsButtonIn(reader, 'className="npr-sidebar-toolbar"', 'className="npr-filters"'), true,
+    assert.equal(settingsButtonIn(reader, 'className="npr-sidebar-toolbar"', FILTERS_ROW), true,
       '订阅页的齿轮不在工具栏里');
   });
 
   it('订阅页：筛选 chip 行里不再有齿轮', () => {
-    assert.equal(settingsButtonIn(reader, 'className="npr-filters"', 'npr-search-box'), false,
+    assert.equal(settingsButtonIn(reader, FILTERS_ROW, 'npr-search-box'), false,
       '齿轮还在筛选行里 —— chip 行是「筛当前列表」，混进整页动作会被读成第四个筛选项');
   });
 
@@ -59,7 +72,6 @@ describe('设置齿轮：两个侧栏都在工具栏最右端', () => {
 
   it('书架页的齿轮直接落在「电子书书架」那一页', () => {
     const region = between(app, 'npr-settings-button', '</div>');
-    assert.notEqual(region, null);
     assert.match(region, /tab:\s*'library'/,
       '从书架点进来的设置没有落在书架那一页 —— 要改书源的人还得再点一次左侧导航');
   });
@@ -77,12 +89,12 @@ describe('设置齿轮：两个侧栏都在工具栏最右端', () => {
 
   it('★ 反向对照：把齿轮放回筛选行 ⇒ 两条判据都变红', () => {
     const before = reader.replace(GEAR, '').replace(
-      'className="npr-filters"',
-      `className="npr-filters">\n            ${GEAR}/>`,
+      FILTERS_ROW,
+      `${FILTERS_ROW}>\n            ${GEAR}/>`,
     );
     assert.notEqual(before, reader, '替换没生效，反向对照是假绿');
-    assert.equal(settingsButtonIn(before, 'className="npr-sidebar-toolbar"', 'className="npr-filters"'), false);
-    assert.equal(settingsButtonIn(before, 'className="npr-filters"', 'npr-search-box'), true);
+    assert.equal(settingsButtonIn(before, 'className="npr-sidebar-toolbar"', FILTERS_ROW), false);
+    assert.equal(settingsButtonIn(before, FILTERS_ROW, 'npr-search-box'), true);
   });
 
   it('★ 反向对照：书架页删掉齿轮 ⇒ 那条判据变红', () => {

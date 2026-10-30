@@ -254,10 +254,21 @@ describe('0.54：组件接线 —— 能选、能记住、换完立刻生效', (
   });
 
   it('★ 朗读时读的是 ref，不是 localStorage（换完立刻生效）', () => {
-    assert.match(readerSource, /pickVoice\(synth\.getVoices\(\), speechVoiceRef\.current\)/);
+    /* 0.55.0 起音色值带引擎前缀（local: / cloud:），所以多了一步 parseSpeechVoice。
+       但「从哪儿读」这一维没变：必须是 ref。
+       ★ 断言扫的是 toggleSpeech 的**函数体**，不是整个文件 —— 扫全文时，
+         previewVoice 里那一份同样的调用会让这条断言在「toggleSpeech 改坏了」
+         的情况下依然变绿（假绿）。 */
+    const toggle = /const toggleSpeech = \(\) => \{([\s\S]*?)\n  \};/.exec(readerSource)?.[1] ?? '';
+    assert.ok(toggle.length > 0, '没找到 toggleSpeech 的实现（改名了？这条断言会静默失效）');
+    assert.match(
+      toggle,
+      /parseSpeechVoice\(speechVoiceRef\.current\)/,
+      '朗读时没有从 ref 读音色 —— 同一会话里换音色要重开面板才生效',
+    );
     assert.doesNotMatch(
-      readerSource,
-      /pickVoice\(synth\.getVoices\(\), localStorage\.getItem\('npr\.speechVoice'\)/,
+      toggle,
+      /localStorage\.getItem\('npr\.speechVoice'\)/,
       '还在从 localStorage 现读 —— 同一会话里换音色要重开面板才生效',
     );
   });

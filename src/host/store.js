@@ -104,6 +104,19 @@ export function panCacheDir() {
   return join(pluginDataDir(), 'pan-cache');
 }
 
+/**
+ * 云端朗读的音频缓存目录（`host/speech.js` 写、也只它读）。
+ *
+ * ★ 与 `pan-cache` 同一个理由放在数据目录里：这些 mp3 全是**可再生产物**，
+ *   用户删掉整个数据目录时它们该一起消失，不该在别处留一份「看起来像数据」的副本。
+ * ★ 单独一个目录而不是塞进 `pan-cache`：那个目录的清理规则属于网盘那条链路
+ *   （按块 LRU、上限 2 GB），而这里按时间过期、上限 128 MB —— 两套规则写进
+ *   同一个目录，迟早互相删对方的东西。
+ */
+export function speechCacheDir() {
+  return join(pluginDataDir(), 'speech-cache');
+}
+
 /** 0.7.1 及以前用的机器级凭证：由**另一个项目**（`ebook-sorter`）生成。 */
 export function legacyPanAppPath() {
   return join(homedir(), '.baidu-pan-app.json');

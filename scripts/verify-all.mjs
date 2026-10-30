@@ -99,6 +99,10 @@ const HEAVY = [
   { name: 'book-layout', script: 'scripts/check-book-panel-layout.mjs', timeout: 6 * 60_000, why: '书页面板版式' },
   { name: 'book-reading', script: 'scripts/check-book-reading-chrome.mjs', timeout: 6 * 60_000, why: '书页阅读区（顶栏 / 浮动列）' },
   { name: 'book-skill-mutants', script: 'scripts/verify-book-skill-mutants.mjs', timeout: 10 * 60_000, why: '技能包变异验证（会临时改源码）' },
+  // 云端朗读的 12 条反向对照。归「重型」是因为它**会临时改写源码**再跑测试，
+  // 与上面那条同一个理由：不能塞进默认门禁（跑一次要十来秒，而且中途被打断会留变异体
+  // —— 所以它自己也带日志 + 信号还原，`build.mjs` 认那份日志）。
+  { name: 'speech-mutants', script: 'scripts/verify-speech-mutants.mjs', timeout: 10 * 60_000, why: '云端朗读变异验证（会临时改源码）' },
   { name: 'ocr-live', script: 'scripts/check-ocr-live.mjs', timeout: 3 * 60_000, why: '本机 OCR 真跑（要系统权限）' },
 ];
 

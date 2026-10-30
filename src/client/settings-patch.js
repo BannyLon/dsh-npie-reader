@@ -24,8 +24,12 @@
  *
  * - `bookSources`：书源。写者是 `POST /sources`（BookSources 的增删、改名、扫描）
  * - `libraryListIds`：载入哪几份插件生成的书单。写者是 `POST /lists/load`（第三步的勾选）
+ * - `speechApiKey`：朗读用的 API Key。写者是 `POST /speech/config`。
+ *   ★ 它进这张表还有第二个理由：`getSettings()` 根本不把它交给渲染进程
+ *     （见 `service.js`），所以设置弹窗那份快照里它永远是 `''` —— 一旦被提交回去，
+ *     就等于**每次点保存都清空一次 Key**，而界面会显示「设置已保存」。
  */
-export const LIVE_WRITTEN_SETTINGS = Object.freeze(['bookSources', 'libraryListIds']);
+export const LIVE_WRITTEN_SETTINGS = Object.freeze(['bookSources', 'libraryListIds', 'speechApiKey']);
 
 /**
  * 交给宿主 `saveSettings` 的 patch：整份 settings 去掉别人在写的字段。

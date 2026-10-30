@@ -41,6 +41,8 @@ import { createAnnotationStore } from './annotation-store.js';
 import { dateKey } from '../diary-format.js';
 import { createDiaryStore } from './diary-store.js';
 import { DIARY_API_PREFIX, makeDiaryRoutes } from './diary-routes.js';
+import { createSpeechSynth } from './speech.js';
+import { SPEECH_API_PREFIX, makeSpeechRoutes } from './speech-routes.js';
 import { createPanAuth } from './pan-auth.js';
 import { createLocalReader } from './local-books.js';
 import { buildPreviousIds, scanLocalRoots, scanPanRoots } from './book-source.js';
@@ -48,7 +50,7 @@ import { createLibrary, readExternalStates, readLibraryIndex, resolveLibraryPath
 import { LIBRARY_API_PREFIX, makeLibraryRoutes } from './library-routes.js';
 import {
   bookListsDir, bookListsIndexPath, libraryIndexPath, migrateLegacyPanCredentials, panCacheDir, panAppPath,
-  panTokenPath, pluginDataDir,
+  panTokenPath, pluginDataDir, speechCacheDir,
 } from './store.js';
 import { listFilePath, pruneListsIndex, readListsIndex, removeListFile, writeListFile, writeListsIndex } from './book-lists.js';
 import {
@@ -114,6 +116,26 @@ const SHORT_BODY_CHARS = 400;
  */
 function assertSessionId(sessionId) {
   if (typeof sessionId !== 'string' || sessionId === '' || sessionId.length > 160) throw new Error('无效会话');
+}
+
+/**
+ * 交给界面的设置：**剔掉密钥**（0.55.0）。
+ *
+ * ★ 为什么 `getSettings` 必须删掉 `speechApiKey`，而不是「反正界面不会看」：
+ *   `getSettings` 的结果会经 Remote 序列化到渲染进程，于是密钥同时出现在
+ *   DevTools 的 Network 面板、React DevTools 的 props、以及任何一次
+ *   `JSON.stringify(settings)` 里。**「没人读」不等于「没被交出去」**。
+ * ★ 剔掉之后设置页要怎么显示「填了没有」：走 `GET /speech/config`，它只回
+ *   `maskApiKey()` 之后的形态。这条分工是刻意的 —— 界面需要的是**状态**，
+ *   不是**值**。
+ * ★ 与 `settings-patch.js` 的 `LIVE_WRITTEN_SETTINGS` 是**一对**：那边保证设置弹窗
+ *   不会把空值提交回来覆盖它，这边保证它不会被打回渲染进程。只做一边就会出现
+ *   「点一次保存，Key 就没了」或「Key 又漏回浏览器了」。
+ */
+export function publicSettings(settings) {
+  const copy = { ...settings };
+  delete copy.speechApiKey;
+  return copy;
 }
 
 /**
@@ -296,6 +318,20 @@ export class RssService {
     });
     this.library = createLibrary({ log: message => ctx.logger.info(message) });
     /**
+     * 云端朗读的合成器（0.55.0）。
+     *
+     * ★ `getApiKey` 是**函数**，不是构造时取一次的值：用户在设置页填完 Key 之后
+     *   必须立刻能用。传值的话要重启插件才生效，而设置页会显示「已保存」——
+     *   那是个静默的假象（用户会反复点「朗读」以为坏了）。
+     * ★ 这里**不检查** Key 有没有配：合成器自己会在 `synthesize` 里拒。
+     *   构造期检查会让「先装插件、后填 Key」这个正常顺序变成「朗读按钮永久坏掉」。
+     */
+    this.speech = createSpeechSynth({
+      getApiKey: () => this.store.data.settings.speechApiKey,
+      cacheDir: speechCacheDir(),
+      log: message => ctx.logger.info(message),
+    });
+    /**
      * 解读产物的磁盘层。
      *
      * ★ 它**不经过 `this.store`**（`data.json` 那个）：那份是全量重写，一本 300 页
@@ -451,6 +487,21 @@ export class RssService {
       });
       disposers.push(scope.webServer.register(diaryRoute));
       ctx.logger.info(`dsh-npie-reader: 日记路由已挂载 ${DIARY_API_PREFIX}`);
+      /**
+       * 朗读路由（0.55.0）。第三条独立前缀，理由与上面两条相同：它挂的是
+       * **一个会花钱的外部服务**，风险面与「读书架」「写日记」都不同。
+       *
+       * ★ 它必须能单独挂失败：Key 没配、或者宿主禁了 outbound 网络时，
+       *   朗读不可用是**可以接受的降级**（系统语音还在），而书架和日记不该
+       *   因此一起打不开。
+       */
+      disposers.push(...makeSpeechRoutes({
+        synth: this.speech,
+        getApiKey: () => this.store.data.settings.speechApiKey,
+        setApiKey: key => this.setSpeechApiKey(key),
+        log: message => ctx.logger.info(message),
+      }).map(route => scope.webServer.register(route)));
+      ctx.logger.info(`dsh-npie-reader: 朗读路由已挂载 ${SPEECH_API_PREFIX}`);
       return () => { for (const dispose of disposers) dispose(); };
     });
 
@@ -3079,7 +3130,7 @@ export class RssService {
 
   async getSettings() {
     await this.ready;
-    return { settings: { ...READING_DEFAULTS, ...this.store.data.settings } };
+    return { settings: publicSettings({ ...READING_DEFAULTS, ...this.store.data.settings }) };
   }
 
   async saveSettings(request) {
@@ -3088,7 +3139,22 @@ export class RssService {
     Object.assign(this.store.data.settings, validateSettings(patch));
     this.store.touch();
     await this.store.flush();
-    return { settings: { ...READING_DEFAULTS, ...this.store.data.settings } };
+    return { settings: publicSettings({ ...READING_DEFAULTS, ...this.store.data.settings }) };
+  }
+
+  /**
+   * 写入朗读用的 API Key（0.55.0）。
+   *
+   * ★ 为什么不走 `saveSettings`：那条路是「整份 patch 覆盖」，而 Key 的写入者是
+   *   `POST /speech/config`、与设置弹窗是两个独立的写入者。走 `saveSettings` 就得
+   *   让设置弹窗持有 Key，也就等于把密钥又发回渲染进程一次 —— 那正是本设计要避免的事。
+   * ★ 空串是**有意义的写入**（清空），所以不在这里拦。真正拦「没配」的是合成器。
+   */
+  async setSpeechApiKey(key) {
+    await this.ready;
+    this.store.data.settings.speechApiKey = String(key ?? '');
+    this.store.touch();
+    await this.store.flush();
   }
 }
 

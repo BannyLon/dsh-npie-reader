@@ -11,6 +11,7 @@ import { probeText } from './service-probe.js';
 import { fetchBooks, reloadLibrary } from './library-api.js';
 import { BookSources } from './BookSources.jsx';
 import { CacheSettings } from './CacheSettings.jsx';
+import { SpeechSettings } from './SpeechSettings.jsx';
 import { aiModelOptions, describeModelCatalog } from '../ai-model.js';
 import { pageOwnedPatch } from './settings-patch.js';
 
@@ -28,6 +29,7 @@ const VERSION = typeof __NPIE_READER_VERSION__ === 'string' ? __NPIE_READER_VERS
 const TABS = [
   { key: 'reading', label: '阅读体验', icon: 'book-open' },
   { key: 'library', label: '电子书书架', icon: 'layers-3' },
+  { key: 'speech', label: '朗读', icon: 'podcast' },
   { key: 'sources', label: '订阅管理', icon: 'rss' },
   { key: 'prompts', label: '快捷提示词', icon: 'sparkles' },
   { key: 'about', label: '关于', icon: 'info' },
@@ -389,6 +391,16 @@ export function SettingsPage({ api, onClose, notify, onSubscriptionsChanged, ini
                 )}
               </div>
             </div>
+          </section>}
+          {/*
+            * 朗读这一屏**不依赖** `settings`：它的东西全部走 `POST /speech/config`
+             * 即时写盘，不跟着底部那个「保存设置」按钮走（那张按钮提交的是
+             * `pageOwnedPatch`，而 API Key 登记在 `LIVE_WRITTEN_SETTINGS` 里，
+             * 本来就不会被它提交）。所以这里没有 `settings &&` 这个前置条件。
+             */}
+          {tab === 'speech' && <section aria-label="朗读设置">
+            <div className="npr-settings-intro"><h2>朗读</h2><p>本机语音免费、离线，但机械；云端神经语音自然得多，按字数计费。</p></div>
+            <SpeechSettings notify={notify} />
           </section>}
           {tab === 'prompts' && <section aria-label="快捷提示词设置">
             <div className="npr-settings-intro"><h2>快捷提示词</h2><p>把常用的阅读提问放在手边。文章伴读与电子书伴读各自一套，互不影响。</p></div>
