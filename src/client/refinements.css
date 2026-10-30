@@ -2689,20 +2689,25 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
   border-bottom: 1px solid var(--npr-border);
 }
 /*
- * 封面态（开场页「寸心拾遗 · 思想原点」）：这条拖动区退回**书架欢迎页那一条**。
+ * 顶栏空着的时候（`data-bare`）：这条拖动区退回**书架欢迎页那一条**。
  *
+ * ★ 什么时候空着：封面态（开场页「寸心拾遗 · 思想原点」）、私密日记、读后感。
+ *   后两个是用户 2026-10-30 的原话：「私密日记这一页也改成与记录这一页格式统一
+ *   显示」「读后感里也全屏显示，不要有顶部的条」—— 判据在 `DiaryApp` 的 `showHead`。
  * ★ 上面那条 `border-bottom` 是「日期栏 / 正文」的分界，前提是栏里有字。
- *   封面态这一栏里一个字都没有，线就成了一条没来由的横线 —— 用户 2026-10-30：
+ *   栏里一个字都没有时，线就成了一条没来由的横线 —— 用户 2026-10-30：
  *   「红色线的地方明显有个分割线，为什么，其它的是没有的」。
  *   而书架欢迎页顶上只有那条**无边框、44px** 的空拖动行（`LibraryApp` 里
  *   `{!selected && <div className="npr-book-toolbar" …/>}`），同一种「开场」两种样子。
  *
  * ★ 高度也必须回到 44 / min-height 归零：`.npr-welcome` 的
  *   `margin-top: clamp(48px,14vh,160px)` 是两边共用的，多出来的 12px
- *   （56 - 44）会让灵感开场页的大标题比书架那页低一截 —— 用户要的是
+ *   （56 - 44）会让开场页的大标题比书架那页低一截 —— 用户要的是
  *   「完全统一」，不是「各差一点点」。
+ * ★ 高度**不能**归零：`-webkit-app-region: drag` 在它身上，0 高的元素按不住，
+ *   这一页顶部就拖不动窗口了（见 test/window-drag.test.mjs）。
  */
-.npr-diary-reader[data-cover] > .npr-book-toolbar {
+.npr-diary-reader[data-bare] > .npr-book-toolbar {
   height: 44px; min-height: 0; padding: 0; border-bottom: 0;
 }
 .npr-diary-head { flex: 1; min-width: 0; }
@@ -3160,6 +3165,13 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 /* 占位提示的定位基准（见 DiaryComposer 里 `.npr-write-body` 的注释）。
    没有它，`.npr-write-ph` 会相对带内边距的 `.npr-write` 定位，与光标起点差 16px。 */
 .npr-write-body { position: relative; }
+/* 预览时把编辑区收掉 —— **收掉，不是卸载**。
+   ★ 0.56.4：以前 JSX 用三元把它整棵摘掉，回来再挂一棵空的挂载点，而 ProseMirror
+     实例只创建一次（effect 依赖 `[disabled]`），它不认新容器 ⇒ 编辑区高度 0、
+     占位提示压在工具栏上（用户 2026-10-30：「点预览、再点继续写就错乱了」）。
+   ★ 用 `display: none` 而不是 `visibility: hidden`：后者还占着 76px 的高度，
+     预览下面会多出一大片空白。 */
+.npr-write[data-mode="preview"] .npr-write-body { display: none; }
 /* ── 读后感的写作区：一张纸，不是四个格子 ──────────────────────────────
    ★ 用户 2026-10-28 的原话是「把四个大标题变成可折叠的卡片区块」。**没有照做**，
      理由写在 `diary-format.js`：模板是四个 `##` 的 markdown 文本，不是四个字段。
@@ -3278,20 +3290,28 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-write-grow { flex: 1; }
 .npr-write-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .npr-write-hint { flex: 1; min-width: 0; font-size: 11px; color: var(--npr-faint); font-variant-numeric: tabular-nums; }
-/* 书籍档案卡（读后感工作台）：书名下面那一排数。
-   ★ 用一条**淡底 + 细边**把它和下面的输入框分开：它是「这本书的档案」，
-     不是正文的一部分；不加这条分隔，五个数看着像输入框的标题行。 */
+/* 书籍档案卡（读后感写作页）：划线 / 摘录笔记 / 读后感 / 字 / 读到。
+ *
+ * ★ 它**不在页面最顶上**：上面还有顶栏那一条（`showHead` 为真时报 `《书名》` +
+ *   「已读完 · N 条划线 · M 篇读后感」），这张卡是编辑器上方的一行参照。
+ *   0.56.0 中途顶栏被撤掉过一次，为了不丢书名把卡挪到了最顶上、还加了书名一格 ——
+ *   用户当场说「点书之后又回到带顶部栏的写读后感状态」：**盒子在顶上就是一条栏**。
+ *   顶栏恢复之后，卡退回原位，书名也还给顶栏（同一件事不说两遍）。
+ *
+ * ★ 用户 2026-10-28 说这块「太像后台数据报表」，要「精致胶囊」。改法是**去掉 3% 淡底、
+ *     换成极细边**：淡底是「表头」的语汇，一条细边 + 留白才是「标签」。
+ * ★ 圆角取 10px 而不是 999px —— 面板占掉右侧时这块会窄到 252px，
+ *   五个数折成两到三行（0.44.1 实测）。999px 在折行后会变成三个胖椭圆，
+ *   形状完全走样；10px 在单行时已经足够接近胶囊，折行也不难看。
+ */
 .npr-diary-dossier { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 0; margin: 0 0 10px; padding: 5px 12px; border: 1px solid color-mix(in srgb, var(--npr-fg) 7%, transparent); border-radius: 10px; background: transparent; }
-/* ★ 用户 2026-10-28 说这块「太像后台数据报表」，要「精致胶囊」。改法是**去掉 3% 淡底、
-     换成极细边**：淡底是「表头」的语汇，一条细边 + 留白才是「标签」。
-   ★ 圆角取 10px 而不是 999px —— 面板占掉右侧时这块会窄到 252px，
-     五个数折成两到三行（0.44.1 实测）。999px 在折行后会变成三个胖椭圆，
-     形状完全走样；10px 在单行时已经足够接近胶囊，折行也不难看。 */
 /* ★ 五个数之间给一道「·」分隔：0.32.0 是 18px 的纯间距，读起来是一句话
      （「12 划线 5 摘录笔记 3 读后感」），分不清哪几个数是一对。
      分隔符用 `::before` 而不是真的插入文字 —— 它是排版符号，不该被复制走。 */
 .npr-diary-dossier-cell + .npr-diary-dossier-cell::before { content: '·'; margin: 0 10px 0 0; color: var(--npr-faint); }
-.npr-diary-dossier-cell { display: inline-flex; align-items: baseline; gap: 5px; min-width: 0; }
+/* ★ `flex: 0 0 auto`（不缩）：五个数各自撑住自己的内容宽度。窄容器下它们**换行**，
+     而不是把「摘录笔记」挤成竖排 —— 换行由 `.npr-diary-dossier` 的 `flex-wrap` 兜着。 */
+.npr-diary-dossier-cell { display: inline-flex; align-items: baseline; gap: 5px; min-width: 0; flex: 0 0 auto; }
 .npr-diary-dossier-cell strong { font-size: 13px; font-weight: 600; color: var(--npr-fg); font-variant-numeric: tabular-nums; }
 .npr-diary-dossier-cell span { font-size: 11px; color: var(--npr-faint); }
 /* ── 模板条：编辑器上方的一行 ─────────────────────────────────────────

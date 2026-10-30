@@ -227,6 +227,25 @@ export function DiaryComposer({
     node.style.height = `${Math.min(node.scrollHeight, maxHeight)}px`;
   }, [value, mode, maxHeight]);
 
+  /**
+   * 从预览点「继续写」回来时，把光标放回编辑区。
+   *
+   * ★ 预览是把编辑区 `display: none` 收掉（不是卸载，见下面 `.npr-write-body` 的
+   *   注释）。浏览器会把焦点丢回 `body` —— 用户回来直接敲键盘，字落在页面上，
+   *   正文一个字没进。所以这一行是「回来之后还能接着写」的一半。
+   * ★ 用 ref 跳过第一次：`mode` 初值就是 `edit`，不跳过的话挂载那一刻就会抢焦点
+   *   （这一页上可能还有别的输入框在等着）。也**不能**把 `rich` 写进依赖：
+   *   编辑器加载完 `rich` 从 false 变 true 时会把焦点抢过去。
+   */
+  const modeSeen = useRef(false);
+  useLayoutEffect(() => {
+    if (!modeSeen.current) { modeSeen.current = true; return; }
+    if (mode !== 'edit') return;
+    if (rich && richRef.current) richRef.current.focus();
+    else el.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
   useEffect(() => {
     if (mode !== 'preview') { setPreview(''); return undefined; }
     const id = setTimeout(() => {
@@ -332,46 +351,60 @@ export function DiaryComposer({
         insertRef?.current?.(text, { x: event.clientX, y: event.clientY });
       }}>
       {header}
-      {mode === 'preview' ? (
-        preview
-          ? <div className="npr-write-preview" dangerouslySetInnerHTML={{ __html: preview }} />
-          : <p className="npr-write-empty">还没有内容。</p>
-      ) : (
-        /*
-         * ★ 这一层是**定位基准**，不是装饰：0.44.2 给读后感加了纸面内边距
-         *   （12px 16px），而占位提示是 `position: absolute`。没有这层的话，
-         *   它会相对带着内边距的 `.npr-write` 定位，文字与光标的起点差 16px。
-         */
-        <div className="npr-write-body">
-          {/*
-            * ★ 富文本挂载点**先于**编辑器存在：ProseMirror 需要一个已经排好版的
-            *   容器才能算光标与滚动位置。`rich` 为假时它被 CSS 收掉，显示 textarea。
-            * ★ 两者的值始终是**同一份 markdown 字符串**：富文本不是另一套存储，
-            *   它只是这份 .md 的一个视图 —— 拿编辑器打开文件依然是可读的原文。
-            */}
-          <div className="npr-write-rich" ref={richEl} data-ready={rich ? 'yes' : 'no'}
-            onKeyDown={(event) => {
-              const mod = event.metaKey || event.ctrlKey;
-              if (mod && event.key === 'Enter') { event.preventDefault(); onSubmit?.(); }
-            }} />
-          {/* 空的时候盖一条提示。ProseMirror 的空文档不是空节点（里面有一个 <br>），
-              所以占位只能由我们这一层出；有字就不渲染，聚焦时 CSS 再收掉。 */}
-          {rich && value.trim() === '' && <span className="npr-write-ph" aria-hidden="true">{placeholder}</span>}
-          {!rich && (
-            <textarea
-              ref={(node) => { el.current = node; if (inputRef) inputRef.current = node; }}
-              className="npr-write-input"
-              value={value}
-              placeholder={placeholder}
-              aria-label={placeholder}
-              spellCheck={false}
-              disabled={disabled}
-              onChange={(event) => onChange(event.target.value)}
-              onKeyDown={onKeyDown}
-            />
-          )}
-        </div>
-      )}
+      {/*
+        * ★★ 编辑区**永远挂着**，预览只是把它藏起来（`data-mode="preview"` 时 CSS 收掉
+        *   `.npr-write-body`，见 refinements.css）。
+        *
+        *   0.56.4 的 bug（用户 2026-10-30：「没写任何内容，点预览、再点继续写就错乱了」）：
+        *   这里原来是三元 —— 进预览就把整棵子树卸掉，回来再挂一棵**空的**
+        *   `<div class="npr-write-rich">`。而 ProseMirror 实例只在 effect 里创建一次
+        *   （依赖是 `[disabled]`，不会因为切模式重跑），`richRef.current` 指着的还是
+        *   那个**容器已经被 React 摘走**的旧实例 —— 它不认新的 DOM。
+        *   结果：回来之后编辑区高度 0、占位提示（`position: absolute`）压在工具栏上、
+        *   正文里点不出光标，整块看起来像塌了。
+        *
+        *   ⇒ 卸载重挂这条路对「有实例的富文本」是走不通的，只能藏。textarea 那条路
+        *   本来就不受影响（它是受控节点，重挂会照 value 画回来）—— 但两条路共用这一层，
+        *   所以按同一条写。
+        */}
+      <div className="npr-write-body">
+        {/*
+          * ★ 这一层是**定位基准**，不是装饰：0.44.2 给读后感加了纸面内边距
+          *   （12px 16px），而占位提示是 `position: absolute`。没有这层的话，
+          *   它会相对带着内边距的 `.npr-write` 定位，文字与光标的起点差 16px。
+          *   （预览时这层被 `display: none` 收掉，但**不从 DOM 里摘**。）
+          *
+          * ★ 富文本挂载点**先于**编辑器存在：ProseMirror 需要一个已经排好版的
+          *   容器才能算光标与滚动位置。`rich` 为假时它被 CSS 收掉，显示 textarea。
+          * ★ 两者的值始终是**同一份 markdown 字符串**：富文本不是另一套存储，
+          *   它只是这份 .md 的一个视图 —— 拿编辑器打开文件依然是可读的原文。
+          */}
+        <div className="npr-write-rich" ref={richEl} data-ready={rich ? 'yes' : 'no'}
+          onKeyDown={(event) => {
+            const mod = event.metaKey || event.ctrlKey;
+            if (mod && event.key === 'Enter') { event.preventDefault(); onSubmit?.(); }
+          }} />
+        {/* 空的时候盖一条提示。ProseMirror 的空文档不是空节点（里面有一个 <br>），
+            所以占位只能由我们这一层出；有字就不渲染，聚焦时 CSS 再收掉。 */}
+        {rich && value.trim() === '' && <span className="npr-write-ph" aria-hidden="true">{placeholder}</span>}
+        {!rich && (
+          <textarea
+            ref={(node) => { el.current = node; if (inputRef) inputRef.current = node; }}
+            className="npr-write-input"
+            value={value}
+            placeholder={placeholder}
+            aria-label={placeholder}
+            spellCheck={false}
+            disabled={disabled}
+            onChange={(event) => onChange(event.target.value)}
+            onKeyDown={onKeyDown}
+          />
+        )}
+      </div>
+      {/* 预览画在编辑区**之后**：它是同一份 markdown 的另一个视图，不是另一块内容。 */}
+      {mode === 'preview' && (preview
+        ? <div className="npr-write-preview" dangerouslySetInnerHTML={{ __html: preview }} />
+        : <p className="npr-write-empty">还没有内容。</p>)}
 
       <div className="npr-write-tools" role="toolbar" aria-label="格式">
         {shownCommands.map((item) => (item.divider

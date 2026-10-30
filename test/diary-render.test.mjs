@@ -144,4 +144,113 @@ describe('0.47.1：日记页首屏渲染冒烟', () => {
     assert.ok(html.includes('思想留白 · 拾遗'), '读后感侧栏没渲染出「思想留白 · 拾遗」');
     assert.ok(!html.includes('npr-diary-shelffilter'), '书单还没回来就把筛选条画出来了');
   });
+
+  /**
+   * 0.56.0：顶栏**说明页没有、工作页有**。
+   *
+   * ★ 为什么这条必须**真渲染**：`diary-bare-head.test.mjs` 判的是 `headVisible()`
+   *   的真值表与源码接线，它证明不了「那一段 JSX 真的被渲染 / 没被渲染」——
+   *   `{showHead && ...}` 写成 `{showHead || ...}`、或者顶栏被挪到 `showHead`
+   *   判据之外，字符串断言都可能照样绿。这里渲染三次，直接看 DOM 里有没有
+   *   `npr-diary-head`。
+   * ★ 三态必须一起验：只验「读后感说明页没有顶栏」的话，把顶栏全局删掉也能过 ——
+   *   而灵感那一条是要留的（用户 2026-10-30 第二次：「这个页面保持和之前
+   *   一致，就是顶部有标题栏」）。
+   *
+   * ★ 0.56.2 起**私密这一格渲染出来的是说明页**（它现在也有一张，进来先看见）。
+   *   私密的**工作页**（按过说明页之后那一屏）在一次挂载里拿不到 —— 它必须先过
+   *   说明页。所以「私密工作页有顶栏」这条由纯函数真值表
+   *   （`['private', false, false, true]`）钉住，这里不再假装能渲染到它。
+   */
+  it('★ 灵感工作页有顶栏；两屏说明页没有（三态一起验，防止「全局删掉」蒙混）', async () => {
+    if (DiaryApp === null) {
+      const mod = await import(pathToFileURL(outFile).href);
+      DiaryApp = mod.DiaryApp;
+    }
+    const React = require('react');
+    const api = new Proxy({}, { get: () => async () => ({}) });
+    const render = (module) => renderQuiet(React.createElement(DiaryApp, {
+      onExit() {},
+      notify() {},
+      api,
+      intent: { module },
+      SessionProvider: ({ children }) => children ?? null,
+      renderSlot: () => null,
+    }));
+
+    // 工作页：顶栏在（灵海报这一天的事实）。
+    const insp = render('inspiration');
+    assert.ok(insp.length > 3000, `inspiration 只渲染出 ${insp.length} 个字符 —— 基本等于白屏`);
+    assert.ok(insp.includes('npr-diary-head'), '灵感工作页的顶栏不见了 —— 用户要的是「说明页不要」，不是「全删」');
+    assert.ok(insp.includes('npr-diary-h1'), '灵感工作页少了 h1');
+    assert.ok(!insp.includes('data-bare'), '灵感工作页还打着 data-bare —— CSS 会把顶栏那条线让掉');
+
+    // 私密：进来先看见说明页 —— 那一屏没有顶栏。
+    const priv = render('private');
+    assert.ok(priv.length > 3000, `private 只渲染出 ${priv.length} 个字符 —— 基本等于白屏`);
+    assert.ok(!priv.includes('npr-diary-head'), '私密说明页上还挂着顶栏');
+    assert.ok(priv.includes('data-bare'), '私密说明页没打 data-bare —— CSS 不会把那条底边让掉');
+
+    // 说明页（读后感还没选书）：没有顶栏，但拖动行不能跟着消失
+    // —— `data-window-drag` 在它身上，删了顶部就拖不动窗口。
+    const html = render('reflection');
+    assert.ok(html.length > 3000, `reflection 只渲染出 ${html.length} 个字符 —— 基本等于白屏`);
+    assert.ok(!html.includes('npr-diary-head'), '读后感说明页还挂着顶栏（h1 + 副标题）');
+    assert.ok(!html.includes('npr-diary-h1'), '读后感说明页还挂着 h1');
+    assert.ok(html.includes('npr-book-toolbar'), '拖动行被删了 —— 这一页顶部拖不动窗口');
+    assert.ok(html.includes('data-bare'), '没打 data-bare —— CSS 不会把那条底边让掉');
+  });
+
+  /**
+   * 0.56.2：**两张说明页都真的渲染出来**，而且那一屏的顶栏真的空着。
+   *
+   * ★ 为什么必须真渲染：用户这次的原话是「为什么私密日记没有说明页」。
+   *   源码判据只能证明「分派写在了 `showCover` 里面」；`{showCover && …}` 写成
+   *   `{showCover || …}`、或者 `PrivateCover` 被挂到 `!showCover` 那一支上，
+   *   字符串断言全都照样绿。这里直接看 DOM 里有没有 `.npr-diary-startpage`、
+   *   里面那句标题是哪一张的。
+   *
+   * ★ 三态一起验：
+   *     不带 intent（默认灵感）      → 灵感那张「寸心拾遗 · 思想原点」
+   *     带私密意图（0.56.2 的入口）  → 私密那张「私密日记 · 只在本机」
+   *     带灵感意图（已经在写了）      → 一张都没有
+   *   只验其中一格的话，把两张写成同一张也能过。
+   */
+  it('★ 灵感 / 私密两张说明页都真的渲染出来，且那一屏没有顶栏', async () => {
+    if (DiaryApp === null) {
+      const mod = await import(pathToFileURL(outFile).href);
+      DiaryApp = mod.DiaryApp;
+    }
+    const React = require('react');
+    const api = new Proxy({}, { get: () => async () => ({}) });
+    const render = (intent) => renderQuiet(React.createElement(DiaryApp, {
+      onExit() {},
+      notify() {},
+      api,
+      intent,
+      SessionProvider: ({ children }) => children ?? null,
+      renderSlot: () => null,
+    }));
+
+    // ① 默认落在灵感：开场页在，顶栏空着。
+    const insp = render(undefined);
+    assert.ok(insp.includes('npr-diary-startpage'), '灵感开场页没渲染出来');
+    assert.ok(insp.includes('寸心拾遗 · 思想原点'), '灵感开场页的标题不见了');
+    assert.ok(!insp.includes('npr-diary-head'), '灵感开场页上还挂着顶栏');
+    assert.ok(insp.includes('data-bare'), '灵感开场页没打 data-bare');
+
+    // ② 私密：**它自己那一张**，不是灵感那张的复制。
+    const priv = render({ module: 'private' });
+    assert.ok(priv.includes('npr-diary-startpage'), '私密说明页没渲染出来 —— 用户这次要的就是它');
+    assert.ok(priv.includes('私密日记 · 只在本机'), '私密说明页的标题不见了');
+    assert.ok(!priv.includes('寸心拾遗'), '私密那一屏渲染成了灵感那张');
+    assert.ok(!priv.includes('npr-diary-head'), '私密说明页上还挂着顶栏');
+    assert.ok(priv.includes('data-bare'), '私密说明页没打 data-bare —— 顶上会多一条没来由的横线');
+    // 锁着的时候不能报「0 条 · 0 字」：那些数不是零，是取不到。
+    assert.ok(!priv.includes('0 条'), '私密说明页报了个条数 —— 上锁时宿主根本不给正文');
+
+    // ③ 带着灵感意图进来 = 已经在写了：不该再拦一下。
+    const writing = render({ module: 'inspiration' });
+    assert.ok(!writing.includes('npr-diary-startpage'), '带灵感意图进来还弹开场页 —— 用户已经在写了');
+  });
 });

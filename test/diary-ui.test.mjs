@@ -1,13 +1,14 @@
 /**
  * 日记作为**第三个 tab** 的入口契约（2026-10-26 新增）。
  *
- * 这一层守的是「**进得去、切得走、回得来、刷新后还在**」——四件事各自会以
+ * 这一层守的是「**进得去、切得走、回得来、开面板落在订阅**」——四件事各自会以
  * 完全不同的方式坏掉，而且**都不会报错**：
  *
  *   ① 入口没画出来 ⇒ 用户根本不知道有这个功能（不是崩溃，是消失）。
  *   ② 切得走但回不来 ⇒ 进了日记就只剩「订阅」一条路，书架丢了。
- *   ③ 刷新后落回订阅 ⇒ `localStorage` 里存着 `'diary'`，而初值写成
- *      `=== 'library' ? 'library' : 'feeds'` 就把它**静默吞成订阅**。
+ *   ③ 开面板落回上次那一页 ⇒ 点侧栏那个插件图标，进来看到的是上次待过的日记/书架，
+ *      而那个图标代表**整个插件**。0.56.3 起初值恒为 `feeds`（见下面对应的 describe）。
+ *      ※ 0.45 的判据是反的（「刷新后还在日记」+ 白名单防三元吞值），已在 0.56.3 推翻。
  *   ④ 日记页留着「专注」状态 ⇒ `.npr-root.npr-focus .npr-sidebar{display:none}`
  *      把日记自己的日历列藏掉，而日记页里没有任何「显示列表」的按钮。
  *
@@ -43,19 +44,6 @@ function effectAt(code, marker) {
   const end = code.indexOf('}, [', at);
   if (end < 0) return null;
   return code.slice(start, end);
-}
-
-/**
- * ③ 的判据：`npr.mode` 的初值必须**逐个列出**已知值。
- * 写成三元（`saved === 'library' ? … : …`）就会把 `'diary'` 静默吞成 `'feeds'`。
- */
-function acceptsDiaryFromStorage(code) {
-  const at = code.indexOf("localStorage.getItem('npr.mode')");
-  if (at < 0) return false;
-  // 初值表达式就在这条语句之后、到 `});` 为止的那一小段里。
-  const window = code.slice(at, at + 400);
-  return /saved\s*===\s*'library'\s*\|\|\s*saved\s*===\s*'diary'/.test(window)
-    || /saved\s*===\s*'diary'\s*\|\|\s*saved\s*===\s*'library'/.test(window);
 }
 
 /** ④ 的判据：日记那条 `setFocused(false)` 必须是**独立一行**，不能并进 library 那条。 */
@@ -138,19 +126,30 @@ describe('切换：三条分支互斥渲染，且「离开」都带目标', () =
   });
 });
 
-describe('持久化：刷新后还停在日记', () => {
-  it('npr.mode 的初值白名单里有 diary', () => {
-    assert.equal(acceptsDiaryFromStorage(reader), true,
-      'mode 初值没认 diary —— 刷新后静默落回订阅，日记 tab 看着像丢了');
+describe('打开插件落在哪一页：恒为订阅（0.56.3）', () => {
+  /**
+   * 用户 2026-10-30：「点击这个按钮打开插件时，自动默认到 rss 阅读这个功能页」。
+   * 当时他刚看完私密日记，再点侧栏那个入口，进来看到的还是日记 —— 从他的角度看
+   * 就是「点了这个图标，打开的不是它该有的那一页」。
+   *
+   * ★ 这条**推翻**了 0.45 的「记住上次那一页」（那一版还专门做了白名单防三元吞值）。
+   *   旧判据留在 CHANGELOG 里，别再照它把恢复逻辑加回来。
+   */
+  it('★ mode 初值恒为 feeds，且不再读写 npr.mode', () => {
+    assert.match(reader, /const \[mode, setMode\] = useState\('feeds'\);/,
+      '打开插件没落在订阅 —— 上次停在日记/书架，这次点图标进来看到的还是那一页');
+    assert.doesNotMatch(reader, /localStorage\.(?:getItem|setItem)\('npr\.mode'/,
+      '还在读写 npr.mode —— 只写不读的键会让下一个人以为「打开时恢复上次那一页」是行为');
   });
 
-  it('★ 反向对照：把白名单改回两值（三元写法）必须变红', () => {
+  it('★ 反向对照：把初值改回「读 npr.mode」，上面那条必须变红', () => {
     const old = reader.replace(
-      /return saved === 'library' \|\| saved === 'diary' \? saved : 'feeds';/,
-      "return saved === 'library' ? saved : 'feeds';",
+      "const [mode, setMode] = useState('feeds');",
+      "const [mode, setMode] = useState(() => localStorage.getItem('npr.mode') || 'feeds');",
     );
     assert.notEqual(old, reader, '替换没生效，反向对照是假绿');
-    assert.equal(acceptsDiaryFromStorage(old), false, '三元写法居然还判绿 —— 判据没牙');
+    assert.doesNotMatch(old, /const \[mode, setMode\] = useState\('feeds'\);/,
+      '恢复上次那一页的写法居然还判绿 —— 判据没牙');
   });
 
   it('「书架被设置关掉时请出去」那条不碰日记（日记没有开关）', () => {
@@ -711,8 +710,10 @@ describe('入口二：阅读页「读完」那一行 → 写读后感', () => {
   });
 });
 
-describe('书籍档案卡：五个数，全部来自已有计量', () => {
+describe('书籍档案卡：五格计量，全部来自已有计量', () => {
   it('卡片在，五格都在', () => {
+    // ★ 0.56.0 中途它被挪到页面最顶上、还加过一格书名（当时顶栏被撤掉了）；
+    //   顶栏恢复之后退回编辑器上方、书名还给顶栏 —— 同一件事不说两遍。
     assert.match(diary, /className="npr-diary-dossier"/);
     assert.equal((diary.match(/npr-diary-dossier-cell/g) ?? []).length, 5, '档案卡的格数变了');
     for (const label of ['划线', '摘录笔记', '读后感', '读到']) {

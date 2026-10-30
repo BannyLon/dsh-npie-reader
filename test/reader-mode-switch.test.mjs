@@ -72,7 +72,16 @@ function effectAt(code, marker) {
   return code.slice(start, end);
 }
 
-const dropEffect = effectAt(reader, 'setSelected(undefined)');
+/**
+ * 「切到书架时清空选中」那条 effect。
+ *
+ * ★ 锚点**不能**用 `setSelected(undefined)`：`hideArticle()` 里也有同样一句，而
+ *   `effectAt()` 取的是文件里**第一处** —— 于是切出来的是「每 15 分钟自动刷新」那条
+ *   effect 的正文（守卫、作废在途请求都不在里面），③ 一直红着，而代码本身是对的。
+ *   假红比不测更糟：它教人忽略红灯。
+ * ★ 改用只在那一处出现的模式守卫（与 `diary-ui.test.mjs` 同源写法）。
+ */
+const dropEffect = effectAt(reader, "if (mode !== 'library') return;");
 
 /** 把用户第二次报的那条恢复原样塞回去 —— 反向对照的素材。 */
 function withOldRestore(code) {

@@ -128,12 +128,13 @@ const OWNED_ATTRS = new Set([
   //     `contract-guard` 才报出来（同一轮里大纲按钮换了图标，但错误与图标无关）。
   //     仍然是本插件自己的 DOM 契约，宿主完全不认识 ⇒ 不能进 HOST_ANCHORS。
   'data-outline', 'data-level',
-  // 灵感开场页（0.53.2）自己写的一个：
-  //   `data-cover` —— 日记右栏的 `section` 上标「现在盖着开场页」，自有 CSS 靠它把
-  //     顶部那条拖动行的 `border-bottom` 让掉（编辑器态那条线是「日期栏 / 正文」的分界，
-  //     封面态那一栏里一个字都没有，线就成了一条没来由的横线）。
+  // 日记右栏顶栏（0.53.2 引入 `data-cover`，0.56.x 改名）：
+  //   `data-bare` —— 顶栏空着时（灵感/私密两张说明页、读后感还没选书）在
+  //     `.npr-diary-reader` 上标出来。自有 CSS 靠它把拖动行退回**书架欢迎页那一条**：
+  //     44px、无底边、无内边距。编辑器态那条 `border-bottom` 是「日期栏 / 正文」的分界，
+  //     空栏上还挂着它就是一条没来由的横线；56px 的 min-height 还会让说明页比书架低一截。
   //   宿主不认识它 ⇒ 只能进 OWNED_ATTRS，进 HOST_ANCHORS 会被「宿主产物必须命中」判红。
-  'data-cover',
+  'data-bare',
 ]);
 
 

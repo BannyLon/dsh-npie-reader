@@ -736,17 +736,25 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   /**
    * 主视图：`feeds`（订阅）/ `library`（书）/ `diary`（日记）。
    *
-   * 记在 localStorage 里：用户切到书架往往就是「接下来一段时间都读书」，
-   * 每次重开面板都掉回订阅会很难受。书架被设置关掉时强制回 `feeds`。
+   * ★★ 0.56.3 起**每次打开插件都落在订阅**，不再从 `localStorage` 恢复。
    *
-   * ★ 白名单而不是三元：`'diary'` 混进来时，写 `=== 'library' ? 'library' : 'feeds'`
-   *   会把它静默吞成订阅 —— 用户下次打开发现「日记 tab 又回到订阅了」，而没有任何
-   *   报错。未知值一律回落 `feeds` 是对的，但**已知值**必须逐个列出。
+   *   用户 2026-10-30：「点击这个按钮打开插件时，自动默认到 rss 阅读这个功能页」。
+   *   当时他刚在看私密日记，再点侧栏那个入口，进来看到的还是日记那一屏 ——
+   *   从他的角度看就是「点了这个图标，打开的不是它该有的那一页」。
+   *
+   *   那个图标的标签是「澄境 | Limina」，它代表**整个插件**，不是某一个功能页。
+   *   点它应该看到正门，而不是上次待过的某一间屋。想接着看，进来再点一下
+   *   「书」/「日记」—— 一次点击，比「打开后先找自己在哪儿」便宜。
+   *
+   * ★ 顺带把 `localStorage.setItem('npr.mode')` 一起删了：只写不读的键会在存储里
+   *   留一个「看起来有用」的假线索，下一个人（包括我自己）会照着它写出错误推断。
+   *
+   * ★ 这条改过一次方向，记在这里：0.45 时写的是「逐个列出已知值」的白名单
+   *   （`saved === 'library' || saved === 'diary'`），防的是三元把 `'diary'` 静默吞成
+   *   `'feeds'`。现在整条恢复逻辑都没了，那个坑也就不存在了 —— 别再照着旧注释
+   *   把恢复加回来。
    */
-  const [mode, setMode] = useState(() => {
-    const saved = localStorage.getItem('npr.mode');
-    return saved === 'library' || saved === 'diary' ? saved : 'feeds';
-  });
+  const [mode, setMode] = useState('feeds');
   const [channels, setChannels] = useState([]);
   const [channel, setChannel] = useState(() => localStorage.getItem('npr.channel') || 'feeds:all');
   /* 筛选 / 搜索词按**频道**记（0.44.9）。首帧就取回来，否则打开面板会先按「全部」
@@ -1567,12 +1575,13 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [mode, dialog, pickerOpen, askContext, appearanceOpen, menuOpen, rowMenu, addMenu, showAddFeed]);
 
-  // 模式落盘 + 书架被设置关掉时强制回订阅。
+  // 书架被设置关掉时强制回订阅。
   // ★ 关掉书架必须**同时**把用户从书架里请出去：只把入口按钮藏掉的话，
-  //   上一次停在书架的会话重开后会落在一个再也切不回去的视图里。
+  //   用户在设置里关掉书架的那一刻会停在一个再也切不回去的视图里。
+  // ★ 这里不再往 localStorage 写 `npr.mode`（0.56.3）：初值恒为 `feeds`，
+  //   写下去也没人读，见 `useState('feeds')` 那一段。
   useEffect(() => {
     if (reading.bookshelf === false && mode === 'library') { setMode('feeds'); return; }
-    localStorage.setItem('npr.mode', mode);
   }, [mode, reading.bookshelf]);
 
   /**

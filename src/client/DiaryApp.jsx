@@ -72,7 +72,8 @@ import { entryLines } from './diary-lines.js';
 import { agoLabel } from './diary-ago.js';
 import { tideReading } from './diary-tide.js';
 import { coverVisible, COVER_EXIT_MS } from './diary-cover.js';
-import { DiaryCover } from './DiaryCover.jsx';
+import { headVisible } from './diary-head.js';
+import { DiaryCover, PrivateCover } from './DiaryCover.jsx';
 import { DiaryTide } from './DiaryTide.jsx';
 import { placeRowMenu } from './row-menu.js';
 import { BookCover } from './BookCover.jsx';
@@ -372,44 +373,72 @@ export function DiaryApp({
   const mod = MODULE_BY_VALUE.get(moduleValue) ?? DIARY_MODULES[0];
 
   /**
-   * 「寸心拾遗 · 思想原点」那张封面（0.53.0）。
+   * 开场说明页（灵感「寸心拾遗 · 思想原点」0.53.0；私密「私密日记 · 只在本机」0.56.2）。
    *
    * ★ 用户 2026-10-29 要的是「灵感速记这一项也能点进来，右边先给一块像书架那样的
    *   默认页，标题『寸心拾遗 · 思想原点』，按下鼠标左键动画消失，出现记录灵感的内容」。
    *   所以它是**开场**：本次挂载里放一次，按下去就退场，之后整页就是编辑器。
+   * ★ 2026-10-30 用户给私密日记要了同一张：「私密日记的说明页和灵感开场页操作一样，
+   *   就是鼠标点一下消失，出现解锁页面。」
    * ★ 判据在 `coverVisible()` 里（三条「不该拦」的例外），这里只管两件事：
    *   退场动画的时序，以及退场后不再回来。
    * ★ 时序与 CSS 的 `transition` 必须是同一个数（`COVER_EXIT_MS`）：写死两处，
    *   改一处就会出现「动画还没走完页面已经换了」的一帧闪白。
+   *
+   * ★ 0.56.2 起**按模块记**（原来是一个布尔）。两张开场页共用一个布尔时，从灵感
+   *   按过再切到私密，私密那张就永远不出现 —— 而它恰恰是用户这次要的那张。
+   *   各记一份才是「这一张进过了」的本意：切回去不该再弹，切过去那张还欠着。
    */
-  const [coverEntered, setCoverEntered] = useState(false);
-  const [coverLeaving, setCoverLeaving] = useState(false);
+  const [coverEntered, setCoverEntered] = useState(() => ({}));
+  /**
+   * 「这一张正在退场」也按模块记，理由与 `coverEntered` 同源：共用一个布尔时，
+   * 私密那张还在退场的 260ms 里切到灵感，灵感那张会带着 `is-leaving`（opacity 0）
+   * 渲染出来 —— 空白半秒再出现，看起来像卡了一下。
+   */
+  const [coverLeaving, setCoverLeaving] = useState(() => ({}));
+  const leavingNow = Boolean(coverLeaving[moduleValue]);
   const coverTimer = useRef(0);
   useEffect(() => () => {
     if (coverTimer.current) window.clearTimeout(coverTimer.current);
   }, []);
-  const showCover = coverVisible({ module: moduleValue, entered: coverEntered, intent });
+  const showCover = coverVisible({ module: moduleValue, entered: Boolean(coverEntered[moduleValue]), intent });
+  /**
+   * 记下「这个模块的开场页进过了」。
+   *
+   * ★ 用**按下那一刻**的 `moduleValue`（闭包里捕获的那个），不是回调执行时的 ——
+   *   退场动画有 260ms，这段时间里用户完全可能切模块；照执行时的值记，会把标记
+   *   写到新模块头上，于是刚切过去的那一张开场页被静默吃掉。
+   */
+  const markCoverEntered = (module) => {
+    setCoverEntered((current) => ({ ...current, [module]: true }));
+  };
   const enterCover = () => {
-    if (coverLeaving) return;
-    setCoverLeaving(true);
+    if (leavingNow) return;
+    const module = moduleValue;
+    setCoverLeaving((current) => ({ ...current, [module]: true }));
     coverTimer.current = window.setTimeout(() => {
-      setCoverEntered(true);
-      setCoverLeaving(false);
+      markCoverEntered(module);
+      setCoverLeaving((current) => ({ ...current, [module]: false }));
     }, COVER_EXIT_MS);
   };
   /**
-   * 从侧栏动一下 = 「别拦我，直接进去」。
+   * 「整页任何一下」= 别拦我，直接进去。
    *
    * ★ 封面只盖住右边那一列，左边的时间线、标签、搜索框都还在（用户截图里就是这样）。
    *   可它们一旦被点，右边却还是封面 —— 那一天明明选中了、标签明明筛选了，
    *   屏幕上什么都没有变。这是「点了没反应」，比不给封面更糟。
-   * ★ 所以侧栏上任何一次按下/按键都直接把封面撤掉，而且**不做退场动画**：
+   * ★ 所以**整页**任何一次按下/按键都直接把封面撤掉，而且**不做退场动画**：
    *   用户已经在点别的地方了，再等 260ms 才响应才是真的迟钝。
+   * ★ 0.56.5 之前这条钩子挂在左栏 `<aside>` 上，实测手感是「只有日历和时间线会撤」——
+   *   判定面比用户看到的可点面积小，就必然漏点。现在挂在整页那一层（见根节点）。
+   * ★ 唯一的例外是窗口拖动条（`[data-window-drag]` 的顶栏空白段）：Electron 把
+   *   `-webkit-app-region: drag` 当标题栏命中，鼠标事件根本不到页面 —— 那一段按不动
+   *   是系统的，不是这条判据能修的。条上的按钮是 `no-drag`，照样能撤。
    */
   const skipCover = () => {
     if (!showCover) return;
-    setCoverEntered(true);
-    setCoverLeaving(false);
+    markCoverEntered(moduleValue);
+    setCoverLeaving((current) => ({ ...current, [moduleValue]: false }));
   };
 
   const [selected, setSelected] = useState(today);
@@ -1930,6 +1959,24 @@ export function DiaryApp({
     || (moduleValue === 'private' && (gate.available === false || gate.unlocked))
     || (moduleValue === 'reflection' && Boolean(book && book.readable));
 
+  /**
+   * 顶栏要不要有内容 —— 判据在 `diary-head.js`，这里只负责传状态。
+   *
+   * ★ 结论是「**说明页**没有顶栏，**工作页**有」：
+   *     灵感速记 / 私密日记（上锁或已解锁）/ 读后感写作页 → 有
+   *     灵感开场页 / 私密开场页 / 读后感说明页（还没选书）→ 没有
+   *   用户 2026-10-30 的原话：「这个页面保持和之前一致，就是顶部有标题栏」
+   *   「私密日记同样，这个页面和之前保持一致，只是增加的说明页没有标题栏」。
+   *   第一版我读成「私密与读后感都撤掉」，被纠正过一次，理由写在 diary-head.js 里。
+   *
+   * ★ 顶栏那一条**不能整个删掉**：`data-window-drag` 在它身上，删了之后这一页
+   *   顶部就按不住、拖不动窗口了。所以「没有顶栏」= 44px 无边框无内边距的空拖动行，
+   *   与书架欢迎页、灵感开场页用的是同一条（见 refinements.css 的 `[data-bare]`）。
+   */
+  const showHead = headVisible({ cover: showCover, module: moduleValue, book: Boolean(book) });
+  /** 顶栏空着（两张开场页 / 读后感说明页）：只剩一条 44px 的拖动行。 */
+  const bareHead = !showHead;
+
   return (
     /*
      * ★ `has-companion` 从 `chat` 改成 `aiOpen || chat`：面板**一打开**就该占位置。
@@ -1942,13 +1989,19 @@ export function DiaryApp({
       /* `--npr-list-width` 也提到这一层：AI 面板的宽度上限要在**这里**算
          （「正文至少留 340px」得先扣掉导航那 268px），而它原来只写在 `.npr-layout`
          的 inline style 上 —— 那是兄弟节点，面板读不到。 */
-      style={{ '--npr-companion-width': `${companionWidth}%`, '--npr-list-width': `${listWidth}px` }}>
+      style={{ '--npr-companion-width': `${companionWidth}%`, '--npr-list-width': `${listWidth}px` }}
+      /*
+       * ★ 撤开场页的钩子挂在**整页**（这一层），不是左栏某几个子区域（0.56.5）。
+       *   用户 2026-10-30：「说明页只有点击说明页本身以及点击灵感时间线的灵感条会消失，
+       *   点击其它不会消失」—— 那个手感正是「钩子只绑在日历 / 时间线两块上」。
+       *   判定面必须与用户看到的可点面积一样大：**整页任何一次按下都算**。
+       */
+      onPointerDownCapture={showCover ? skipCover : undefined}
+      onKeyDownCapture={showCover ? skipCover : undefined}>
       {/* ★ `npr-diary-layout` / `npr-diary-nav` 两个类只用来把「AI 面板打开时收起
           导航」这条规则**限定在日记页**（见 refinements.css）。阅读页的行为不变。 */}
       <div className="npr-layout npr-diary-layout" style={{ '--npr-list-width': `${listWidth}px` }}>
-        <aside className="npr-sidebar npr-diary-nav"
-          onPointerDownCapture={showCover ? skipCover : undefined}
-          onKeyDownCapture={showCover ? skipCover : undefined}>
+        <aside className="npr-sidebar npr-diary-nav">
           {/* ★ 这一条 `data-window-drag` 是**布局必需**：没有它，在日记页按住空白处拖不动窗口。 */}
           <div className="npr-sidebar-toolbar" data-window-drag>
             <ViewSwitch mode="diary" onChange={(next) => { if (next !== 'diary') onExit?.(next); }} showLibrary />
@@ -2439,22 +2492,28 @@ export function DiaryApp({
         </aside>
         <div className="npr-resize" role="separator" aria-orientation="vertical" onPointerDown={startDrag}
           onDoubleClick={() => { setListWidth(268); localStorage.setItem('npr.diaryListWidth', '268'); }} />
-        <section className="npr-reader npr-diary-reader" data-cover={showCover ? '' : undefined}>
+        <section className="npr-reader npr-diary-reader" data-bare={bareHead ? '' : undefined}>
           {/*
             * 右侧整块也要一条拖动区：三种模块下，面板顶部都是同一条线。
-            * ★ 封面态这条拖动区退回**书架欢迎页那一条**（44px、无底边、无内边距）。
-            *   带 `data-cover` 时 `.npr-diary-reader > .npr-book-toolbar` 的
-            *   `border-bottom` 必须让位：编辑器态那条线是「日期栏 / 正文」的分界，
-            *   封面态这条里一个字都没有，线就成了一条没来由的横线（用户 2026-10-30：
-            *   「红色线的地方明显有个分割线，为什么，其它的是没有的」）。
+            * ★ 顶栏空着的时候（两张开场页 / 读后感说明页）这条拖动区退回**书架欢迎页
+            *   那一条**：44px、无底边、无内边距。带 `data-bare` 时
+            *   `.npr-diary-reader > .npr-book-toolbar` 的 `border-bottom` 必须让位 ——
+            *   那条线是「日期栏 / 正文」的分界，栏里一个字都没有时它就是一条没来由的
+            *   横线（用户 2026-10-30：「红色线的地方明显有个分割线，为什么，其它的是
+            *   没有的」）。
             */}
           <div className="npr-book-toolbar" data-window-drag>
             {/*
-              * 封面态不报「今天 · N 条 · M 字」：那一行说的是「这一天已经有什么」，
-              * 而这会儿用户还没进来 —— 先报结果、再让他按一下，是把顺序颠倒了。
+              * 顶栏里放什么，见上面 `showHead` 那一段：
+              * 灵感模块是「今天 / N 条 / M 字」+「AI 整理这一天」；
+              * 私密模块是「今天 · N 条 · M 字 · 本地加密」（没有 AI 按钮）；
+              * 读后感的写作页是「《书名》· 已读完 · N 条划线 · M 篇读后感」。
+              * ★ 两张开场页（灵感 / 私密）上都不报「今天 · N 条 · M 字」：那一行说的是
+              *   「这一天已经有什么」，而这会儿用户还没进来 —— 先报结果、再让他按一下，
+              *   是把顺序颠倒了。
               * 这一层本身留着（`data-window-drag` 在它身上），44px 的拖动条照旧。
               */}
-            {!showCover && (
+            {showHead && (
               <>
                 <div className="npr-diary-head">
                   <h1 className="npr-diary-h1">{headTitle}</h1>
@@ -2477,19 +2536,29 @@ export function DiaryApp({
 
           <div className="npr-diary-main">
             {/*
-             * 开场封面（0.53.0）。它**不占用** flow：两件事同时成立会让编辑器
-             * 在封面底下继续挂载（`DiaryComposer` 的 ref、`draft` 的自动保存、
-             * 列表的滚动位置），按下封面时底下已经在跑 —— 看起来是「点一下换了一屏」，
-             * 实际是「两屏叠着」。所以是二选一，不是叠一层。
+             * 开场说明页（灵感 0.53.0 / 私密 0.56.2）。它**不占用** flow：两件事同时
+             * 成立会让编辑器在封面底下继续挂载（`DiaryComposer` 的 ref、`draft` 的
+             * 自动保存、列表的滚动位置），按下封面时底下已经在跑 —— 看起来是
+             * 「点一下换了一屏」，实际是「两屏叠着」。所以是二选一，不是叠一层。
+             *
+             * ★ 两张按 `moduleValue` 二选一，**不是**再写一个 `showCover &&`：
+             *   两个条件都成立时两张会一起挂上去（上下排两块「点一下开始」）。
+             *   私密那张不给 `tags` —— 私密日记没有标签（宿主那半边根本不存）。
              */}
-            {showCover && (
+            {showCover && (moduleValue === 'private' ? (
+              <PrivateCover
+                leaving={leavingNow}
+                days={footDays}
+                bytes={stats ? formatBytes(footBytes) : '—'}
+                onEnter={enterCover} />
+            ) : (
               <DiaryCover
-                leaving={coverLeaving}
+                leaving={leavingNow}
                 days={footDays}
                 tags={tagIndex.tags.length}
                 bytes={stats ? formatBytes(footBytes) : '—'}
                 onEnter={enterCover} />
-            )}
+            ))}
             {/*
              * ★ 横幅与正文必须一起放进一个**纵向**的容器。
              *   `.npr-diary-main` 是 `display:flex`（行方向，因为读后感要「正文 + 划线」
@@ -2636,7 +2705,10 @@ export function DiaryApp({
                 {moduleValue === 'reflection' && book && book.readable && (
                   <section className="npr-diary-write is-paper">
                     {/* 书籍档案卡：这本书读过多少、划过多少、写过多少。五个数全部是
-                        已有的计量，没有为它新加任何埋点。 */}
+                        已有的计量，没有为它新加任何埋点。
+                        ★ 书名**不在**这里：顶栏（`showHead`）已经报了 `《书名》`，
+                          再印一遍就是同一个事实说两次。0.56.0 中途把它挪进来过
+                          （当时顶栏被撤掉），顶栏一恢复就该挪回去。 */}
                     <div className="npr-diary-dossier" role="group" aria-label="这本书的档案">
                       <span className="npr-diary-dossier-cell">
                         <strong>{annotations.items.length}</strong><span>划线</span>
