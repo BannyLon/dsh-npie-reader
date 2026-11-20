@@ -67,6 +67,14 @@ node scripts/prune-catalog.mjs               # 对「探不通」的降并发复
 node scripts/prune-catalog.mjs --apply       # 按计划裁剪内置目录（先备份到 /tmp，被删的 Newsletter 源先归档）
 ```
 
+还有三个脚本**故意不挂进 `verify:all`**：它们要么需要一本真书，要么会改动用户数据，挂进去就只能空跑。
+
+| 脚本 | 用途 | 为什么不在默认链里 |
+|---|---|---|
+| `node scripts/check-book-textlayer.mjs --pdf <书.pdf>` | 透明文字层与字形的对齐（真 Chrome + 真 PDF） | 仓库里没有可提交的 PDF 夹具；不传 `--pdf` 只打印用法，所以挂进去等于恒真 |
+| `node scripts/verify-pan-refresh.mjs` | 网盘续期出来的新 `refresh_token` 到底有没有写回凭证文件 | 默认干跑；加 `--apply --dsh-stopped` 会**消耗掉当前 token**，必须先关桌面端 |
+| `node scripts/purge-orphan-articles.mjs --dry-run` | 清掉「已退订的源」留在文章缓存里的条目 | 改的是用户本机数据，且要在 dsh 完全退出后跑（否则退出时内存副本会覆盖回磁盘） |
+
 **仓库在 git 下**（0.24.4 起，`git init -b main`，首个提交 `e83ddcf` 是 v0.24.3 基线）。
 `.gitignore` 只挡**会变的东西** —— `lib/`（`prepack` 重建）、`test/.build/`（每次重新生成）、
 `test/.tmp/`（`mkdtemp` 落点）、`.build/`（出图草稿）、`probe-*/`（探测会话残留），

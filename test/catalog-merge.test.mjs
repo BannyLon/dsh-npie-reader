@@ -397,7 +397,7 @@ describe('目录数据文件的自我一致性', () => {
   });
 
   test('撤下的数据被保留在 retired/，没有直接丢掉', () => {
-    // 这个项目**没有版本控制**（不在任何 git 仓库里），直接删掉就找不回来了。
+    // 撤下的数据不能只存在于 commit 历史里 —— 要看「原来有哪些、为什么撤」得翻好几个 diff。
     // 所以撤下的清单与数据文件必须落在 retired/ 下，并且带一份说明。
     assert.ok(existsSync(join(root, 'retired', 'README.md')), 'retired/README.md 不见了 —— 撤下的清单就没人知道去哪找');
     assert.ok(existsSync(join(root, 'retired', 'podcast-feeds.json')), 'retired/podcast-feeds.json 不见了');
