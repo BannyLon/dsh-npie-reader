@@ -1,8 +1,8 @@
 /**
  * 最小 ZIP 读取器（EPUB 就是 ZIP）。
  *
- * ★ 为什么自己写、不用 npm 包：本仓库的硬规矩是**不借 `node_modules`**（见 README
- *   「边界与已知限制」）。EPUB 用到的只是「中央目录 + 本地头 + deflate」这三样，
+ * ★ 为什么自己写、不用 npm 包：本仓库的硬规矩是**不借 `node_modules`**（见 `docs/limits.md`
+ *   的「功能边界」）。EPUB 用到的只是「中央目录 + 本地头 + deflate」这三样，
  *   而 `node:zlib` 自带 `inflateRawSync` —— 不需要任何第三方实现。
  *
  * ★ 为什么**只**支持存储(0)与 deflate(8)：这两种覆盖了全部真实 EPUB（mimetype 必须

@@ -284,7 +284,7 @@ describe('目录数据文件的自我一致性', () => {
     // 这几条**照官网猜必错**：官网路径要么 404、要么 403，而真 feed 在别处。
     // 把它们写死在这里，是因为「清理无用地址」这类改动看着很安全 ——
     // 把 `tldr.tech/api/rss/ai` 改成更顺眼的 `tldr.tech/ai/rss`，测试全绿、界面上多一个 404 源。
-    // 每一条的实测结论见 README「Newsletter 内置目录」。
+    // 每一条的实测结论见 `docs/agent-tools.md` 的「Newsletter 内置目录」。
     const byName = new Map(newsletters.items.map((entry) => [entry.name, entry.url]));
     assert.equal(byName.get('The Batch @ DeepLearning.AI'), 'https://charonhub.deeplearning.ai/feed');
     assert.equal(byName.get('MIT Technology Review（AI 主题）'), 'https://www.technologyreview.com/topic/artificial-intelligence/feed');

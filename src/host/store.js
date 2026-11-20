@@ -230,7 +230,7 @@ function defaults() {
     // 用户自己加的东西不会被冲掉，而内置目录也能继续更新。
     //
     // `service.base` = 用户自建的「公众号转 RSS」服务地址（wewe-rss / Wechat2RSS 之类）。
-    // 插件**不抓公众号**（做不到，见 README「边界」），只负责记住这个地址、检测它通不通、
+    // 插件**不抓公众号**（做不到，见 `docs/limits.md`），只负责记住这个地址、检测它通不通、
     // 并把用户从服务里复制出来的 feed 地址订阅进来。
     catalog: { sources: [], hidden: [], service: { base: '' } },
     articles: {},

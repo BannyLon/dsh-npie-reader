@@ -12,7 +12,7 @@
  *   不受影响。
  *
  * ★ 只渲染「结构化字段」，不渲染 Markdown：客户端那个 Markdown 渲染器不支持表格、
- *   `<ol>` 会变成无序列表（见 README）。解读的产物本来就是 `{summary, points, terms}`，
+ *   `<ol>` 会变成无序列表（见 `docs/features.md`）。解读的产物本来就是 `{summary, points, terms}`，
  *   直接映射成 `<p>` / `<ul>` / `<dl>` 更准，也不用担心模型在 Markdown 里写出花来。
  */
 import { Icon } from './icons.jsx';
