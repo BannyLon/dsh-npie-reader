@@ -163,7 +163,7 @@ npm run build   # 生成 lib/index.js 与 lib/client.js
 
 论文和书的差别是**结构可预期**：先看标题、作者、venue、摘要，再决定读不读。
 
-![论文阅读页：左侧是论文库，中间按原版式渲染 PDF，右侧边栏可整页翻译、找词、调版心](docs/images/paper-reading.png)
+![论文阅读页：左侧是论文库，中间按原版式渲染 PDF，右侧是 AI 伴读](docs/images/paper-reading.png)
 
 - **三种导入方式**：arXiv 编号 / DOI / 标题，或直接上传本地 PDF。开放获取的会
   自动补下全文（元数据来自 **arXiv → Crossref → OpenAlex**），付费墙内的给你
