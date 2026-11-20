@@ -80,7 +80,7 @@ node scripts/prune-catalog.mjs --apply       # 按计划裁剪内置目录（先
 「附录 / 附录A 撞页」这些**形态**照着历次真机 dump 复刻，正文本身不参与任何断言。
 不要用真书 dump 替换它们 —— 那等于把第三方书籍的正文放进公开仓库。
 
-**仓库在 git 下**（0.24.4 起，`git init -b main`，首个提交 `e83ddcf` 是 v0.24.3 基线）。
+**仓库在 git 下**（0.24.4 起，`git init -b main`，首个提交 `b7f75d9` 是 v0.24.3 基线）。
 `.gitignore` 只挡**会变的东西** —— `lib/`（`prepack` 重建）、`test/.build/`（每次重新生成）、
 `test/.tmp/`（`mkdtemp` 落点）、`.build/`（出图草稿）、`probe-*/`（探测会话残留），
 每条都写了理由。★ 本机专用的「8 字符随机名」规则在 `.git/info/exclude`、**不进共享的

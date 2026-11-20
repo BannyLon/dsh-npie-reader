@@ -8948,7 +8948,7 @@ npm run verify:ocr-live <任意带中文的图>   # 真机：脚本存在 + 真�
 - ★ 8 字符随机名的排除规则**只写 `.git/info/exclude`，不进 `.gitignore`**：
   `[a-z0-9_]{8}` 这条模式太宽，写进共享文件会误伤将来任何 8 字符的源文件/目录 ——
   而 `.git/info/exclude` 是本机专用、不入库，正好只挡「我这台机器上的探测残留」。
-- 首次提交 `e83ddcf`（`git init -b main`）：**395 个文件**。核对过 `node_modules` /
+- 首次提交 `b7f75d9`（`git init -b main`）：**395 个文件**。核对过 `node_modules` /
   `test/.build` / `lib/` / `.DS_Store` / `.build` / `probe-*` / 8 字符随机名
   **一个都没进库**；最大的文件是 `vendor/pdfjs/pdf.worker.mjs`（1290 KB）。
 
