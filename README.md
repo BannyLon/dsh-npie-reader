@@ -55,7 +55,39 @@
 
 ## 安装
 
-### 方式一：从源码装（现在只有这一条路）
+先说一件会让人卡住的事：**`dsh plugin add dsh-npie-reader` 这条命令在桌面端用不了。**
+`desktop` 这个 profile 由 Electron App 独占管理，命令行碰它会被直接拒绝：
+
+```
+error: profile "desktop" is managed exclusively by the Electron application
+```
+
+所以两种装法都在**界面里**操作：侧栏点 **「插件」** → **「添加插件」**，在「包名或地址」
+一栏里填东西。
+
+两种方式的收尾相同，**两步都不能省**：
+
+1. 点 **「启用」**（从源码装时按钮叫「立即启用」）；
+2. **完全退出 App（`Cmd+Q`）再打开**，回到面板按 `Cmd+Shift+R` 强刷。
+
+第 2 步不能省：插件要在宿主进程里注册服务与本机 HTTP 路由，不重启不生效。装对了会看到
+日志 `dsh-npie-reader: service started`，侧栏出现 **「澄境 | Limina」**。
+
+### 方式一：从 npm 装（推荐，不需要 Node）
+
+在「包名或地址」里填包名，就这一个词：
+
+```
+dsh-npie-reader
+```
+
+然后点 **安装** → **启用** → 重启 App。构建产物在**发布时**已经打好放进包里
+（`prepack`），你不用装 Node.js，也不用构建。
+
+> **已经用源码装过的，先「卸载」再装 npm 版。** 同一个包名同时存在 `link:`（本地目录）
+> 和 registry（npm）两种来源会冲突，宿主会拒绝加载。
+
+### 方式二：从源码装（想改代码时用）
 
 `lib/`（构建产物）**故意不进仓库** —— 否则每次改代码都要提交几 MB 产物。代价是：
 装之前必须自己构建一次。这一步不能省，但只有两条命令：
@@ -70,33 +102,13 @@ npm run build   # 生成 lib/index.js 与 lib/client.js
 **没有 git 也没关系**：打开仓库页 → 绿色 **Code** 按钮 → **Download ZIP** → 解压 →
 在解压出来的目录里执行上面那两条 `npm` 命令。
 
-构建完装进 Harness（**用界面装，不要用命令行** —— `desktop` 这个 profile 由
-Electron App 独占管理，`dsh plugin --profile desktop …` 会被拒绝）：
-
-1. 侧栏点 **「插件」**；
-2. 点 **「添加插件」**，粘贴**刚才那个目录的绝对路径**（`link:` 前缀可省）；
-3. 点 **「立即启用」**；
-4. **完全退出 App（`Cmd+Q`）再打开**，回到面板按 `Cmd+Shift+R` 强刷。
-
-第 4 步不能省：插件要在宿主进程里注册服务与本机 HTTP 路由，不重启不生效。
-装对了会看到日志 `dsh-npie-reader: service started`，侧栏出现 **「澄境 | Limina」**。
+构建完，在「包名或地址」里粘贴**那个目录的绝对路径**（`link:` 前缀可省），然后启用、重启。
 
 > **忘了 `npm run build` 会怎样**：添加插件时报找不到 `lib/index.js`，或启动即
 > `failed to import`。补跑那两条命令，再重启 App。
 
 细节（`link:` 前缀、对账机制、`failed to import` 逐条排查）见
 [安装与启动细节](docs/development.md#安装与启动细节)。
-
-### 方式二：从 npm 装（发布后可用）
-
-发布后只需一行。构建产物在**发布时**已经打好放进包里（`prepack`），你不需要自己构
-建、也不需要装 Node：
-
-```bash
-dsh plugin add dsh-npie-reader
-```
-
-当前**尚未发布到 npm**，这一步暂时不可用。
 
 ---
 
@@ -219,8 +231,9 @@ dsh plugin add dsh-npie-reader
 
 ## 常见问题
 
-**装完侧栏没有入口？** 先确认第 4 步做了（`Cmd+Q` 完全退出后重开）。
-还没有就在日志里找 `service started`：找不到就是 `lib/` 没构建，回去跑 `npm run build`。
+**装完侧栏没有入口？** 先确认重启那步做了（`Cmd+Q` 完全退出后重开）。还没有就在日志里找
+`service started`：从源码装的话，找不到通常是 `lib/` 没构建，回去跑 `npm run build`；
+从 npm 装的话，检查是不是有同名的源码版没卸载干净。
 
 **订阅加了却不显示文章？** 有些站点的 feed 只给最近 10 篇摘要，正文要单独抓；
 还有的要求登录。「补全历史」能往回追，但追不到站上没公开的内容。
