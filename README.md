@@ -55,17 +55,24 @@
 
 ## 安装
 
-先说一件会让人卡住的事：**`dsh plugin add dsh-npie-reader` 这条命令在桌面端用不了。**
-`desktop` 这个 profile 由 Electron App 独占管理，命令行碰它会被直接拒绝：
+**装插件的入口是界面，不是终端。** 这不是这个插件的毛病，是桌面端的机制：`dsh plugin`
+这个子命令存在、装插件的能力也有（`dsh plugin --profile <名字> add <包名>` 在别的 profile
+上实测可用），但它**装不进桌面端用的那个 profile**。两种写法都试过：
 
 ```
+$ dsh plugin add dsh-npie-reader
+error: required option '--profile <name>' not specified
+
+$ dsh plugin --profile desktop add dsh-npie-reader
 error: profile "desktop" is managed exclusively by the Electron application
 ```
 
-所以两种装法都在**界面里**操作：侧栏点 **「插件」** → **「添加插件」**，在「包名或地址」
-一栏里填东西。
+`desktop` 这个 profile 由 Electron App 独占管理——App 运行时持有它的锁和加载生命周期，
+外部进程改它的依赖会跟 App 打架，所以 `dsh/lib/bin.js` 在参数解析阶段就拒绝了，连只读的
+`dsh plugin --profile desktop list` 都不放行。这类 profile 只能由 App 自己改，于是装插件
+的操作被搬到了界面里：侧栏点 **「插件」** → **「添加插件」**，在「包名或地址」一栏里填东西。
 
-两种方式的收尾相同，**两步都不能省**：
+下面两种方式的收尾相同，**两步都不能省**：
 
 1. 点 **「启用」**（从源码装时按钮叫「立即启用」）；
 2. **完全退出 App（`Cmd+Q`）再打开**，回到面板按 `Cmd+Shift+R` 强刷。
