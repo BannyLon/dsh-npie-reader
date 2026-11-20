@@ -636,6 +636,11 @@ cleanup 在 React 提交阶段同步抛 `TypeError`，被 Error Boundary 接住�
 测试连字段名一起守（`test/pan-auth.test.mjs`）。`lists.json` 与 `lists/` 下的每份书单
 都只是索引，但里面的路径与书名同样是隐私，所以给同一档权限。
 
+**你自己填的云端语音 / 识别 API key 落在 `data.json` 的 `settings` 里**（同样是 600），
+**不在**系统钥匙串 —— 与网盘凭证同一档处理。只有私密日记的密钥进钥匙串，因为它是
+「解密内容」用的，泄露就等于所有私密日记被读走；而 API key 泄露的后果是「别人花你的
+额度」，量级不同，所以不额外加一层。要换机器时，`data.json` 拷过去 key 就跟着过去了。
+
 > **续期结果会写回，但写入者只有一个**（0.18.1 起）。access_token 过期时 `pan.js` 用
 > refresh_token 续期，新 token 交给 `panAuth.saveToken` 落盘（先读旧文件再合并，
 > 未知字段原样透传），`pan.js` 自己**不碰**这个文件 —— 两个写入者共写才会互相覆盖。
@@ -671,7 +676,7 @@ error: profile "desktop" is managed exclusively by the Electron application
    `parseInstallSpec` 把绝对路径判为 `kind: 'path'`，走本机软链，不联网、不查注册表。
 3. 安装完成后点 **「立即启用」**。
 4. **完全退出 App（`Cmd+Q`）再打开**，然后浏览器强刷 `Cmd+Shift+R`。
-   Host 半区有改动时必须重启：本插件在 Host 半区注册 `rss` 服务、20 个 agent 工具，
+   Host 半区有改动时必须重启：本插件在 Host 半区注册 `rss` 服务、25 个 agent 工具，
    以及书架的本机 HTTP 路由。
 
 这一步同时完成三件事：
