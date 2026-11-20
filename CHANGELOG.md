@@ -1,6 +1,6 @@
 # Changelog
 
-## 未发布 — 2026-11-20
+## 0.86.3 — 2026-11-20
 
 ### 许可澄清（为开源做准备）
 
@@ -33,6 +33,21 @@ earlier work released under GPL-3.0-only」是无依据的表述，已删除。*
 - `THIRD-PARTY-NOTICES.md`：逐项列出 pdf.js / Milkdown / agentero motif /
   chinese-independent-blogs 的许可与版权行，并说明 dalibre、calibre 不属引用。
 - `vendor/editor/LICENSE`（Milkdown MIT 全文）—— 该产物此前缺许可声明。
+
+### 开源收尾
+
+公开仓库会把作者本机的绝对路径暴露给所有读者，README 的安装步骤还会让人照抄一个不存在的目录。
+
+- `README.md` 安装章节新增「第 0 步：先把源码放到本机」，示例路径改为
+  `/你的路径/dsh-npie-reader`；原先写死的 `/Users/habhy/…` 对所有读者都是死链。
+- 8 个 `scripts/check-*.mjs` 的 Headless Chrome 路径由写死本机目录改为
+  `join(homedir(), …)`，判据不变：仍以 `NPIE_CHROME` 环境变量优先、
+  `/Applications/Google Chrome.app` 兜底，找不到就报错退出（不静默跳过）。
+- 测试与文档里的示例路径统一为 `/Users/example`、`/Users/x`、`/Users/你`。
+- `package.json` 补 `author` / `repository` / `homepage` / `bugs`——npm 页面与
+  GitHub 仓库互链的前提。
+- 新增 `.github/workflows/ci.yml`：构建 + 发布包守卫 14 项 + 412 项不依赖浏览器的
+  测试。带真 Chrome 的布局 / 对比度检查不在 CI 跑，本地用 `npm run verify:all`。
 
 ## 0.86.2 — 2026-11-19
 
