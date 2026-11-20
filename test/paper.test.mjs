@@ -44,15 +44,15 @@ after(async () => {
 });
 
 const DRAFT = {
-  key: 'arxiv:1706.03762',
+  key: 'arxiv:2401.00001',
   source: 'arxiv',
-  arxivId: '1706.03762',
-  title: 'Attention Is All You Need',
-  authors: ['Ashish Vaswani', 'Noam Shazeer'],
+  arxivId: '2401.00001',
+  title: 'Sparse Routing for Long Documents',
+  authors: ['Ada Example', 'Bo Sample'],
   abstract: 'The dominant sequence transduction models…',
   year: 2017,
   venue: '',
-  pdfUrl: 'https://arxiv.org/pdf/1706.03762',
+  pdfUrl: 'https://arxiv.org/pdf/2401.00001',
 };
 
 function pdfBytes(size = 1200) {
@@ -67,25 +67,25 @@ function pdfBytes(size = 1200) {
 describe('arXiv / DOI 编号归一', () => {
   it('认得出各种写法，且都归到不带版本号的同一个 id', () => {
     const same = [
-      '1706.03762', '1706.03762v5', 'arXiv:1706.03762',
-      'https://arxiv.org/abs/1706.03762v2', 'https://arxiv.org/pdf/1706.03762.pdf',
-      'http://export.arxiv.org/abs/1706.03762',
+      '2401.00001', '2401.00001v5', 'arXiv:2401.00001',
+      'https://arxiv.org/abs/2401.00001v2', 'https://arxiv.org/pdf/2401.00001.pdf',
+      'http://export.arxiv.org/abs/2401.00001',
     ];
-    for (const input of same) assert.equal(normalizeArxivId(input), '1706.03762', input);
+    for (const input of same) assert.equal(normalizeArxivId(input), '2401.00001', input);
     // 老式编号（2007 年以前）也要认。
     assert.equal(normalizeArxivId('hep-th/9901001v2'), 'hep-th/9901001');
   });
 
   it('认不出的返回空串，而不是硬猜一个 id', () => {
-    for (const input of ['', '  ', 'attention is all you need', '10.1038/nature14539', 'v2']) {
+    for (const input of ['', '  ', 'sparse routing for long documents', '10.0000/example.0002', 'v2']) {
       assert.equal(normalizeArxivId(input), '', JSON.stringify(input));
     }
   });
 
   it('DOI 只认 10.x/… 的形态（裸 URL 与 doi: 前缀都剥掉）', () => {
-    assert.equal(normalizeDoi('10.1038/nature14539'), '10.1038/nature14539');
-    assert.equal(normalizeDoi('https://doi.org/10.1038/nature14539'), '10.1038/nature14539');
-    assert.equal(normalizeDoi('doi:10.1038/nature14539'), '10.1038/nature14539');
+    assert.equal(normalizeDoi('10.0000/example.0002'), '10.0000/example.0002');
+    assert.equal(normalizeDoi('https://doi.org/10.0000/example.0002'), '10.0000/example.0002');
+    assert.equal(normalizeDoi('doi:10.0000/example.0002'), '10.0000/example.0002');
     // 正对照：同一段文本当 arXiv 认不出、当 DOI 也认不出 ⇒ 走「关键词搜索」那条兜底。
     assert.equal(normalizeDoi('10.x/nope'), '');
     assert.equal(normalizeDoi('随便一段话'), '');
@@ -93,20 +93,20 @@ describe('arXiv / DOI 编号归一', () => {
 
   it('PDF 地址优先用记录里的 pdfUrl，没有就由 arXiv id 推出来', () => {
     assert.equal(pdfCandidate({ pdfUrl: 'https://example.org/a.pdf' }), 'https://example.org/a.pdf');
-    assert.equal(pdfCandidate({ pdfUrl: '', arxivId: '1706.03762v3' }), 'https://arxiv.org/pdf/1706.03762');
+    assert.equal(pdfCandidate({ pdfUrl: '', arxivId: '2401.00001v3' }), 'https://arxiv.org/pdf/2401.00001');
     // 两样都没有 = 没有可下载的开放全文（付费墙内那种）。
-    assert.equal(pdfCandidate({ pdfUrl: '', arxivId: '', doi: '10.1038/nature14539' }), '');
+    assert.equal(pdfCandidate({ pdfUrl: '', arxivId: '', doi: '10.0000/example.0002' }), '');
   });
 });
 
 describe('论文 id', () => {
   it('同一稳定键恒得同一个 id，且天然满足书条目 id 规则', () => {
-    const first = paperIdFromKey('arxiv:1706.03762');
-    assert.equal(paperIdFromKey('arxiv:1706.03762'), first);
-    assert.notEqual(paperIdFromKey('arxiv:1706.03763'), first);
+    const first = paperIdFromKey('arxiv:2401.00001');
+    assert.equal(paperIdFromKey('arxiv:2401.00001'), first);
+    assert.notEqual(paperIdFromKey('arxiv:2401.00002'), first);
     // 能当书条目 id 用，才能复用整个阅读器链路（`isBookId` 的规则完全一致）。
     assert.equal(isPaperId(first), true);
-    assert.equal(isPaperId('arxiv:1706.03762'), false);
+    assert.equal(isPaperId('arxiv:2401.00001'), false);
   });
 });
 
@@ -124,7 +124,7 @@ describe('论文库落盘', () => {
     assert.equal(second.created, false);
     assert.equal(store.list().length, 1);
     // 只补空字段，不覆盖已有内容 —— 用户可能改过标题。
-    assert.equal(second.paper.title, 'Attention Is All You Need');
+    assert.equal(second.paper.title, 'Sparse Routing for Long Documents');
     assert.deepEqual(second.paper.tags, []);
   });
 
@@ -255,7 +255,7 @@ describe('论文路由', () => {
     await routes.handler(routeReq({ url: `${PREFIX}/papers` }), res);
     assert.equal(res.status, 200);
     assert.equal(res.json.papers.length, 1);
-    assert.equal(res.json.papers[0].title, 'Attention Is All You Need');
+    assert.equal(res.json.papers[0].title, 'Sparse Routing for Long Documents');
     // 对外形态只给文件名与大小，**不暴露绝对路径**。
     assert.equal(res.json.papers[0].file, null);
     assert.deepEqual(res.json.tags, [{ name: 'Transformer', count: 1 }]);
@@ -335,13 +335,13 @@ describe('论文路由', () => {
 describe('论文 → 书条目', () => {
   const PAPER = {
     id: 'pabc123',
-    key: 'arxiv:1706.03762',
-    title: 'Attention Is All You Need',
-    authors: ['Ashish Vaswani', 'Noam Shazeer'],
+    key: 'arxiv:2401.00001',
+    title: 'Sparse Routing for Long Documents',
+    authors: ['Ada Example', 'Bo Sample'],
     venue: 'NeurIPS',
     year: 2017,
     pages: 11,
-    file: { name: '1706.03762.pdf', bytes: 7_500_000, savedAt: 1 },
+    file: { name: '2401.00001.pdf', bytes: 7_500_000, savedAt: 1 },
   };
 
   it('★ 有全文时 renderable 必须是 true —— 这是阅读器「能不能读」的唯一判据', () => {
@@ -390,8 +390,8 @@ describe('论文 → 书条目', () => {
   it('其余字段与阅读器的预期一致（ext / size / source 少一个就退化成整本下载或走错取字节通道）', () => {
     const book = paperAsBook(PAPER);
     assert.equal(book.id, 'pabc123');
-    assert.equal(book.title, 'Attention Is All You Need');
-    assert.equal(book.author, 'Ashish Vaswani, Noam Shazeer');
+    assert.equal(book.title, 'Sparse Routing for Long Documents');
+    assert.equal(book.author, 'Ada Example, Bo Sample');
     assert.equal(book.ext, 'pdf');
     assert.equal(book.size, 7_500_000);
     assert.equal(book.source, 'paper');
@@ -457,9 +457,9 @@ describe('论文路由：BibTeX / 补全元数据', () => {
     const res = routeRes();
     await routes.handler(routeReq({ url: `${PREFIX}/papers/${paper.id}/bibtex` }), res);
     assert.equal(res.status, 200);
-    assert.match(res.json.text, /^@misc\{vaswani2017attention,/);
-    assert.match(res.json.text, /title = \{\{Attention Is All You Need\}\}/);
-    assert.equal(res.json.key, 'vaswani2017attention');
+    assert.match(res.json.text, /^@misc\{example2017sparse,/);
+    assert.match(res.json.text, /title = \{\{Sparse Routing for Long Documents\}\}/);
+    assert.equal(res.json.key, 'example2017sparse');
   });
 
   it('BibTeX 只认 GET：POST 回 405（它是一次纯读，没有副作用）', async () => {

@@ -2131,8 +2131,8 @@ describe('书架：HTTP 路由真的挂上了', () => {
     const { service } = boot();
     await service.ready;
     const { paper } = await service.paperStore.upsert({
-      key: 'arxiv:1706.03762', source: 'arxiv', arxivId: '1706.03762',
-      title: 'Attention Is All You Need', authors: ['Ashish Vaswani'], year: 2017,
+      key: 'arxiv:2401.00001', source: 'arxiv', arxivId: '2401.00001',
+      title: 'Sparse Routing for Long Documents', authors: ['Ada Example'], year: 2017,
     });
     // 没有全文时**不许**伪造书条目：界面上要点得动「下载全文」，而不是点开一个永远转圈的阅读器。
     assert.equal(await service.bookById(paper.id), undefined);
@@ -2150,7 +2150,7 @@ describe('书架：HTTP 路由真的挂上了', () => {
      */
     assert.equal(book.renderable, true);
     // `BookReader` 靠 title / author / year 排版；缺字段不会报错，只会显示空白。
-    assert.equal(book.title, 'Attention Is All You Need');
+    assert.equal(book.title, 'Sparse Routing for Long Documents');
     assert.equal(book.year, 2017);
     await service.verifyReadable(book);
     assert.equal((await service.readBookBytes(book, 0, 4)).toString('latin1'), '%PDF-');
@@ -2173,8 +2173,8 @@ describe('书架：HTTP 路由真的挂上了', () => {
     const { service, state } = boot();
     await service.ready;
     const { paper } = await service.paperStore.upsert({
-      key: 'arxiv:1706.03762', source: 'arxiv', arxivId: '1706.03762',
-      title: 'Attention Is All You Need', authors: ['Ashish Vaswani'], year: 2017,
+      key: 'arxiv:2401.00001', source: 'arxiv', arxivId: '2401.00001',
+      title: 'Sparse Routing for Long Documents', authors: ['Ada Example'], year: 2017,
     });
     const bytes = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(600, 0x20)]);
     await service.paperStore.putPdf(paper.id, bytes, { name: 'attention.pdf' });

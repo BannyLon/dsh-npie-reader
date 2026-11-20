@@ -188,7 +188,7 @@ export function splitFrontmatter(text) {
   return { front: source.slice(0, end + 5), body: source.slice(end + 5) };
 }
 
-/** 标题行：`## 09:31 灵感 · 引自《被讨厌的勇气》第 3 章`。 */
+/** 标题行：`## 09:31 灵感 · 引自《示例书名》第 3 章`。 */
 export function entryHeading(entry) {
   const kind = KIND_SET.has(entry.kind) ? entry.kind : '灵感';
   const source = typeof entry.source === 'string' ? entry.source.trim() : '';

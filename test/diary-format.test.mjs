@@ -108,8 +108,8 @@ describe('entryHeading / parseDay', () => {
     assert.equal(entryHeading(entry()), '## 09:31 灵感');
     assert.equal(entryHeading(entry({ kind: '读后感' })), '## 09:31 读后感');
     assert.equal(
-      entryHeading(entry({ kind: '书摘', source: '《被讨厌的勇气》第 3 章' })),
-      '## 09:31 书摘 · 《被讨厌的勇气》第 3 章',
+      entryHeading(entry({ kind: '书摘', source: '《示例书名》第 3 章' })),
+      '## 09:31 书摘 · 《示例书名》第 3 章',
     );
   });
 
@@ -122,7 +122,7 @@ describe('entryHeading / parseDay', () => {
     const text = [
       buildFrontmatter('2026-10-26'),
       '',
-      '## 09:31 书摘 · 《被讨厌的勇气》第 3 章',
+      '## 09:31 书摘 · 《示例书名》第 3 章',
       '',
       '一切烦恼都来自人际关系。',
       '',
@@ -135,7 +135,7 @@ describe('entryHeading / parseDay', () => {
     const { front, entries } = parseDay(text);
     assert.match(front, /date: 2026-10-26/);
     assert.equal(entries.length, 2);
-    assert.deepEqual(entries[0], { time: '09:31', kind: '书摘', source: '《被讨厌的勇气》第 3 章', meta: {}, body: '一切烦恼都来自人际关系。' });
+    assert.deepEqual(entries[0], { time: '09:31', kind: '书摘', source: '《示例书名》第 3 章', meta: {}, body: '一切烦恼都来自人际关系。' });
     assert.equal(entries[1].kind, '读后感');
     assert.equal(entries[1].source, '引自 RSS：如何做选择');
     assert.equal(entries[1].body, '第一行\n第二行', '正文里的换行必须留着');
@@ -165,7 +165,7 @@ describe('buildDay ⇄ parseDay', () => {
   it('往返一致', () => {
     const entries = [
       entry({ time: '09:31', kind: '灵感', body: '甲' }),
-      entry({ time: '21:05', kind: '读后感', source: '《被讨厌的勇气》', body: '乙\n丙' }),
+      entry({ time: '21:05', kind: '读后感', source: '《示例书名》', body: '乙\n丙' }),
     ];
     const text = buildDay('2026-10-26', entries);
     assert.deepEqual(parseDay(text).entries, entries);
@@ -615,7 +615,7 @@ describe('来源（sourceLabel）：把书名 + 章拼回 source', () => {
     const canonical = (name) => (name.includes('《') ? name : `《${name}》`);
     for (const [title, chapter] of [
       ['深度工作', '第 3 章'],
-      ['被讨厌的勇气', ''],
+      ['示例书名', ''],
       ['《九三年》', '第二卷'],
       ['《译文名著文库》 076[法]雨果-九三年（叶尊译）', '第三卷'],
     ]) {

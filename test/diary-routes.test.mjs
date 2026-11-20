@@ -261,7 +261,7 @@ describe('POST /day/:date/append', () => {
   it('正常 ⇒ 200 且回 index / chars / path', async () => {
     const res = await call('/day/2026-10-28/append', {
       method: 'POST',
-      ...jsonBody({ time: '09:31', kind: '读后感', source: '《被讨厌的勇气》', body: '今天想明白一件事。' }),
+      ...jsonBody({ time: '09:31', kind: '读后感', source: '《示例书名》', body: '今天想明白一件事。' }),
     });
     assert.equal(res.status, 200);
     assert.equal(res.json.ok, true);
@@ -272,7 +272,7 @@ describe('POST /day/:date/append', () => {
     const day = await call('/day/2026-10-28');
     assert.equal(day.json.entries.length, 1);
     assert.equal(day.json.entries[0].kind, '读后感');
-    assert.equal(day.json.entries[0].source, '《被讨厌的勇气》');
+    assert.equal(day.json.entries[0].source, '《示例书名》');
   });
 
   it('连点两次 ⇒ 两条，序号递增', async () => {

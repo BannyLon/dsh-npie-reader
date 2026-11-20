@@ -126,11 +126,11 @@ describe('diary_append', () => {
     await runTool(tools, TOOL_NAMES.diaryAppend, {
       body: '划线一句',
       kind: '读后感',
-      source: '《被讨厌的勇气》第 3 章',
+      source: '《示例书名》第 3 章',
     });
     const out = await runTool(tools, TOOL_NAMES.diaryToday, {});
     assert.match(out, /读后感/);
-    assert.match(out, /引自 《被讨厌的勇气》第 3 章/);
+    assert.match(out, /引自 《示例书名》第 3 章/);
   });
 
   it('★ 老类型「书摘」不能被**新建**，而且回执必须**说出来**', async () => {

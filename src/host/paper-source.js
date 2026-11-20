@@ -88,8 +88,8 @@ function stripTags(html) {
 /**
  * 从各种写法里认出 arXiv id。
  *
- * 接受：`1706.03762`、`1706.03762v5`、`arXiv:1706.03762`、
- * `https://arxiv.org/abs/1706.03762v2`、`https://arxiv.org/pdf/1706.03762.pdf`、
+ * 接受：`2401.00001`、`2401.00001v5`、`arXiv:2401.00001`、
+ * `https://arxiv.org/abs/2401.00001v2`、`https://arxiv.org/pdf/2401.00001.pdf`、
  * 老式 `hep-th/9901001`。
  *
  * @returns {string} 归一后的 id（不带版本号、不带前缀）；认不出就是空串。
@@ -124,9 +124,9 @@ export function normalizeDoi(input) {
 /**
  * 从 arXiv 的 `<arxiv:comment>` 里猜一个「发表在哪」。
  *
- * ★ 必须过滤：绝大多数 comment 写的是**排版信息**（实测 1706.03762 是
+ * ★ 必须过滤：绝大多数 comment 写的是**排版信息**（实测 2401.00001 是
  *   「15 pages, 5 figures」），直接当 venue 显示，界面上就成了
- *   「Attention Is All You Need — 15 pages, 5 figures」，比空着更糟。
+ *   「Sparse Routing for Long Documents — 15 pages, 5 figures」，比空着更糟。
  *   只有「CVPR 2024」「Published in NeurIPS」这类才留。
  */
 function venueFromComment(comment) {
@@ -167,7 +167,7 @@ function entryToPaper(entry) {
       || venueFromComment(textOf(find(entry, 'comment'))),
     categories: [...new Set(categories)].slice(0, 8),
     url: absLink ? attrOf(absLink, 'href') ?? `https://arxiv.org/abs/${arxivId}` : `https://arxiv.org/abs/${arxivId}`,
-    // ★ 不带版本号：`…/pdf/1706.03762v7` 会随新的 v8 失效（旧的 v7 链接在 arXiv
+    // ★ 不带版本号：`…/pdf/2401.00001v7` 会随新的 v8 失效（旧的 v7 链接在 arXiv
     //   上仍然可达，但那是历史版本）。存版本无关的地址，下载永远拿到最新版。
     pdfUrl: `https://arxiv.org/pdf/${arxivId}`,
     doi: cleanText(textOf(find(entry, 'doi')), 200),
@@ -187,7 +187,7 @@ export async function searchArxiv(query, { limit = 20 } = {}) {
   /**
    * 整段当**短语**（`all:"…"`），而不是逐词 AND。
    *
-   * ★ 实测对照：`all:attention is all you need` 的前三条是
+   * ★ 实测对照：`all:sparse routing for long documents` 的前三条是
    *   「Do You Even Need Attention?」「"All You Need" is Not All You Need」这类
    *   只沾了单词的结果；加引号之后第一条就是原论文。用户粘标题来搜是主用法，
    *   逐词 AND 会让「搜不到自己要的那篇」。

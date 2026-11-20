@@ -58,7 +58,7 @@ function formatAuthors(authors) {
  */
 export function citeKeyFor(paper) {
   const firstAuthor = (Array.isArray(paper?.authors) ? paper.authors[0] : '') ?? '';
-  // 取「最后一个词」当姓：`Ashish Vaswani` → `vaswani`；`Vaswani, Ashish` → `vaswani`。
+  // 取「最后一个词」当姓：`Ada Example` → `vaswani`；`Example, Ada` → `vaswani`。
   const surname = String(firstAuthor).split(',')[0].trim().split(/\s+/).pop() ?? '';
   const year = Number(paper?.year) > 0 ? String(Math.trunc(paper.year)) : '';
   const stop = new Set(['a', 'an', 'the', 'on', 'of', 'for', 'in', 'to', 'and', 'with', 'is', 'are', 'towards', 'toward']);

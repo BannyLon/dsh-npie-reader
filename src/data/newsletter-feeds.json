@@ -1,8 +1,7 @@
 {
  "verifiedAt": "2026-10-28",
- "verifiedBy": "逐条真实请求（HTTP 200 + XML 根元素 + 至少 1 个 item/entry）；探不通的另查 DNS 解析与 TCP 连通性。★ 必须用**直连**测（插件抓取不经过任何代理），借道能出去的通道测出的 200 不代表插件取得到 —— 「库里有、插件里没有」多半就差在这一步。★ 2026-10-28 这一轮补了两条判据：① 取第一个条目的 pubDate/published/updated，**停更的源不收**（收进去用户只会以为插件坏了）；② 用浏览器 UA 重试一次，因为 403 常常是 UA 拦的而不是源没了。",
- "source": "https://mp.weixin.qq.com/s/pssEPL5LEfmi0V0wKEoa9A",
- "note": "items 里是实测能直接抓到的；unavailable 里是没收录的，原因见 reason 字段。reason 取值互不重叠：network = 本机网络到不了（DNS 污染 / TCP 阻断）；partial = feed 抓得到但正文永远抓不到；blocked = 反爬拦截（应用层）；no-feed = 平台压根没开 feed。TLDR AI 与 Daily Dose of DS 由用户另行提供（不在上面那篇公众号清单里），2026-10-09 实测通过后补入。★ 2026-10-28 用户问「还有哪些 AI Newsletter 你没收」，对着 24 个候选直连实测：新增 9 条（One Useful Thing / Interconnects / AI Supremacy / Last Week in AI / AINews / Ahead of AI / Simon Willison / OpenAI News / Google DeepMind），全部当轮有更新（最旧的 2026-09-09）。同轮改了两条旧结论：**The Neuron 从 partial 改成 blocked**（/rss/ 也是 Cloudflare 挑战页，整站拿不到，不只是正文）、**Ben's Bites 记为 no-feed**（/feed 与 /feed.xml 都返回 82KB 的 Substack 首页 HTML）。★ 这一目录 2026-10-09 起**也进体检**（快照是同目录的 catalog-health.json，category 为 Newsletter），删除线 365 天：停更超过一年直接裁掉，剪掉的条目先归档到 retired/newsletter-feeds-retired.json（AI Valley 停更 670 天、Grace Leung 727 天，已按此裁掉）。★ 本轮新增的 9 条还没进体检快照 ⇒ 界面上暂时不显示「最新一篇几天前」，下次跑 scripts/catalog-health.mjs --only Newsletter 会补上。",
+ "verifiedBy": "逐条真实请求（HTTP 200 + XML 根元素 + 至少 1 个 item/entry）；探不通的另查 DNS 解析与 TCP 连通性。必须用直连测（插件抓取不经过任何代理），借道能出去的通道测出的 200 不代表插件取得到。判据两条：① 取第一个条目的 pubDate/published/updated，停更的源不收；② 用浏览器 UA 重试一次，因为 403 常常是 UA 拦的而不是源没了。",
+ "note": "items 里是实测能直接抓到的；unavailable 里是没收录的，原因见 reason 字段。reason 取值互不重叠：network = 本机网络到不了（DNS 污染 / TCP 阻断）；partial = feed 抓得到但正文永远抓不到；blocked = 反爬拦截（应用层）；no-feed = 平台压根没开 feed。这一目录也进体检（快照是同目录的 catalog-health.json，category 为 Newsletter），删除线 365 天：停更超过一年直接裁掉，剪掉的条目先归档到 retired/newsletter-feeds-retired.json。",
  "items": [
   {
    "name": "The Rundown AI",
@@ -203,7 +202,7 @@
   "addedSince": {
    "at": "2026-10-28",
    "count": 9,
-   "note": "用户问「还有哪些常看的 AI Newsletter 你没收录」，对着 24 个候选直连实测后补入 9 条（One Useful Thing / Interconnects / AI Supremacy / Last Week in AI / AINews / Ahead of AI / Simon Willison / OpenAI News / Google DeepMind）。★ 记账是必须的：`pruned.to` 是「那次裁完剩几条」，不等于当前条目数，两者的差只能靠这条记录解释 —— 不记的话测试会红（见 catalog-merge.test.mjs「pruned 是历史快照」那条）。"
+   "note": "对着候选直连实测后补入 9 条，全部当轮有更新。记账是必须的：`pruned.to` 是「那次裁完剩几条」，不等于当前条目数，两者的差只能靠这条记录解释 —— 不记的话测试会红（见 catalog-merge.test.mjs「pruned 是历史快照」那条）。"
   }
  }
 }

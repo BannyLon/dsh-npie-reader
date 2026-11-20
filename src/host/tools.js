@@ -949,7 +949,7 @@ export function createToolDefinitions(service) {
       name: TOOL_NAMES.paperImport,
       description: 'Add ONE paper to the local library from an arXiv id / arXiv link / DOI / paper title, and (by default) download its open-access PDF. Returns the paper id and whether the full text actually landed. Paid/publisher PDFs cannot be downloaded — report that honestly and tell the user to upload the file themselves. Existing papers are merged, not duplicated.',
       parameters: {
-        input: { type: 'string', description: 'arXiv id (1706.03762), arXiv/DOI URL, DOI (10.xxxx/...), or a title to search.', required: true },
+        input: { type: 'string', description: 'arXiv id (2401.00001), arXiv/DOI URL, DOI (10.xxxx/...), or a title to search.', required: true },
         download: { type: 'boolean', description: 'Download the open-access PDF when the metadata is known (default true). Set false to only add metadata.' },
       },
       output: {

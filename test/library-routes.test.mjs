@@ -1858,14 +1858,14 @@ describe('划词翻译', () => {
       translatePassage: async (payload) => { seen.push(payload); return { text: '注意力就是你所需要的一切' }; },
     });
     const res = fakeRes();
-    await api.handler(post({ text: 'Attention is all you need', context: 'Attention Is All You Need' }), res);
+    await api.handler(post({ text: 'Sparse routing for long documents', context: 'Sparse Routing for Long Documents' }), res);
 
     assert.equal(res.status, 200);
     assert.equal(res.json.text, '注意力就是你所需要的一切');
     // ★ 原文必须**原样**过去：模型侧要按原文匹配回填（分段一错就会英文残留）。
     assert.equal(seen.length, 1);
-    assert.equal(seen[0].text, 'Attention is all you need');
-    assert.equal(seen[0].context, 'Attention Is All You Need');
+    assert.equal(seen[0].text, 'Sparse routing for long documents');
+    assert.equal(seen[0].context, 'Sparse Routing for Long Documents');
   });
 
   it('模型返回空串 ⇒ 仍然是 200 + 空文本（由客户端判成「没返回译文」，不在这里编造）', async () => {
@@ -1924,7 +1924,7 @@ describe('划词翻译', () => {
  */
 describe('页级按需翻译', () => {
   const paragraphs = [
-    { id: 'p1', text: 'Attention is all you need.' },
+    { id: 'p1', text: 'Sparse routing for long documents.' },
     { id: 'p2', text: 'The transformer is simple.' },
   ];
   const post = (body, headers = { 'content-type': 'application/json' }) => fakeReq({
@@ -2010,7 +2010,7 @@ describe('页级按需翻译', () => {
 
 describe('GET/POST /page-translation/:id', () => {
   const PAGE = {
-    paragraphs: [{ id: 'p1', text: 'Attention is all you need.' }],
+    paragraphs: [{ id: 'p1', text: 'Sparse routing for long documents.' }],
     translations: [{ id: 'p1', text: '注意力就是你所需要的一切。' }],
   };
   /** 内存版 store：只验路由接线与状态码，真正的文件行为在 page-translation-store.test.mjs。 */

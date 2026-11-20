@@ -87,12 +87,12 @@ describe('append', () => {
   });
 
   it('再追加一条，序号递增、顺序正确', async () => {
-    const result = await store.append({ date: '2026-10-26', time: '21:05', kind: '读后感', source: '《被讨厌的勇气》', body: '第二条' });
+    const result = await store.append({ date: '2026-10-26', time: '21:05', kind: '读后感', source: '《示例书名》', body: '第二条' });
     assert.equal(result.index, 1);
     const day = await store.read('2026-10-26');
     assert.equal(day.entries.length, 2);
     assert.deepEqual(day.entries.map(item => item.body), [body, '第二条']);
-    assert.equal(day.entries[1].source, '《被讨厌的勇气》');
+    assert.equal(day.entries[1].source, '《示例书名》');
   });
 
   it('空正文 / 纯空白正文一律拒（EMPTY_ENTRY），且不落盘', async () => {

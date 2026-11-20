@@ -69,7 +69,7 @@ describe('信封往返', () => {
       '今天很累。#生活',
       '## 09:31 灵感\n\n第一段\n\n- 列表\n- 第二项\n\n> 引用',
       '',
-      '表情与符号：😄 🎐 《被讨厌的勇气》 100%',
+      '表情与符号：😄 🎐 《示例书名》 100%',
     ];
     for (const plain of samples) {
       const blob = await secret.encrypt(plain);

@@ -164,7 +164,7 @@ function PaperDialog({ mode, onClose, onImport, onSearch, notify }) {
           <input
             autoFocus value={input} onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => { if (event.key === 'Enter') void (mode === 'search' ? runSearch() : runImport()); }}
-            placeholder={mode === 'search' ? 'attention is all you need' : '1706.03762 / 10.1038/nature14539'}
+            placeholder={mode === 'search' ? 'sparse routing for long documents' : '2401.00001 / 10.0000/example.0002'}
           />
           <button type="button" className="npr-paper-primary" disabled={busy !== ''} onClick={() => void (mode === 'search' ? runSearch() : runImport())}>
             {busy !== '' ? busy : (mode === 'search' ? '搜索' : '导入')}

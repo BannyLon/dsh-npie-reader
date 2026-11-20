@@ -13,12 +13,12 @@ import { bibtexFile, bibtexFor, citeKeyFor, entryTypeFor, escapeBibtex } from '.
 
 const PAPER = {
   id: 'pabc123',
-  title: 'Attention Is All You Need',
-  authors: ['Ashish Vaswani', 'Noam Shazeer'],
+  title: 'Sparse Routing for Long Documents',
+  authors: ['Ada Example', 'Bo Sample'],
   year: 2017,
   venue: 'NeurIPS',
-  doi: '10.5555/3295222.3295349',
-  arxivId: '1706.03762',
+  doi: '10.0000/example.0003',
+  arxivId: '2401.00001',
   categories: ['cs.CL'],
   url: '',
   tags: ['transformer'],
@@ -38,13 +38,13 @@ describe('escapeBibtex', () => {
   });
 
   it('折叠换行（arXiv 的标题在 XML 里是折行的）', () => {
-    assert.equal(escapeBibtex('Attention Is\nAll You Need'), 'Attention Is All You Need');
+    assert.equal(escapeBibtex('Sparse Routing for\nLong Documents'), 'Sparse Routing for Long Documents');
   });
 });
 
 describe('citeKeyFor', () => {
   it('姓 + 年 + 标题首个实词', () => {
-    assert.equal(citeKeyFor(PAPER), 'vaswani2017attention');
+    assert.equal(citeKeyFor(PAPER), 'example2017sparse');
   });
 
   it('跳过 the / a / on 这类虚词', () => {
@@ -52,7 +52,7 @@ describe('citeKeyFor', () => {
   });
 
   it('`Last, First` 形态也能取到姓', () => {
-    assert.equal(citeKeyFor({ authors: ['Vaswani, Ashish'], year: 2017, title: 'Attention' }), 'vaswani2017attention');
+    assert.equal(citeKeyFor({ authors: ['Example, Ada'], year: 2017, title: 'Sparse Routing' }), 'example2017sparse');
   });
 
   it('没作者没标题也不能给空键（空键让 `\\cite{}` 直接编不过）', () => {
@@ -63,7 +63,7 @@ describe('citeKeyFor', () => {
 describe('entryTypeFor', () => {
   it('有 venue ⇒ article；只有 arXiv ⇒ misc；都没有 ⇒ misc', () => {
     assert.equal(entryTypeFor(PAPER), 'article');
-    assert.equal(entryTypeFor({ arxivId: '1706.03762', venue: '' }), 'misc');
+    assert.equal(entryTypeFor({ arxivId: '2401.00001', venue: '' }), 'misc');
     assert.equal(entryTypeFor({}), 'misc');
   });
 });
@@ -71,13 +71,13 @@ describe('entryTypeFor', () => {
 describe('bibtexFor', () => {
   it('标题套双层花括号，作者用 and 连接，年份是裸数字', () => {
     const out = bibtexFor(PAPER);
-    assert.match(out, /^@article\{vaswani2017attention,/);
-    assert.match(out, /title = \{\{Attention Is All You Need\}\}/);
-    assert.match(out, /author = \{Ashish Vaswani and Noam Shazeer\}/);
+    assert.match(out, /^@article\{example2017sparse,/);
+    assert.match(out, /title = \{\{Sparse Routing for Long Documents\}\}/);
+    assert.match(out, /author = \{Ada Example and Bo Sample\}/);
     assert.match(out, /year = \{2017\}/);
     assert.match(out, /journal = \{NeurIPS\}/);
-    assert.match(out, /doi = \{10\.5555\/3295222\.3295349\}/);
-    assert.match(out, /eprint = \{1706\.03762\}/);
+    assert.match(out, /doi = \{10\.0000\/example\.0003\}/);
+    assert.match(out, /eprint = \{2401\.00001\}/);
     assert.match(out, /archivePrefix = \{arXiv\}/);
     assert.match(out, /primaryClass = \{cs\.CL\}/);
     assert.match(out, /keywords = \{transformer\}/);
@@ -111,13 +111,13 @@ describe('bibtexFor', () => {
 
 describe('bibtexFile', () => {
   it('键重复时加字母后缀 —— 同一个 .bib 里重复键会让整个文件编不过', () => {
-    const out = bibtexFile([PAPER, { ...PAPER, doi: '', arxivId: '1706.03763' }]);
-    assert.match(out, /@article\{vaswani2017attention,/);
-    assert.match(out, /@article\{vaswani2017attentiona,/);
+    const out = bibtexFile([PAPER, { ...PAPER, doi: '', arxivId: '2401.00002' }]);
+    assert.match(out, /@article\{example2017sparse,/);
+    assert.match(out, /@article\{example2017sparsea,/);
   });
 
   it('多条之间留一个空行（贴进 .bib 时可读，也仍然合法）', () => {
-    const out = bibtexFile([PAPER, { ...PAPER, title: 'BERT', arxivId: '1810.04805' }]);
+    const out = bibtexFile([PAPER, { ...PAPER, title: 'BERT', arxivId: '2401.00003' }]);
     assert.match(out, /\n\}\n\n@/);
   });
 

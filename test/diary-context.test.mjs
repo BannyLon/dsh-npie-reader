@@ -116,10 +116,10 @@ describe('处理对象', () => {
   it('每条都带时间、类型；有来源才带来源', () => {
     const out = diaryContext({
       date: '2026-10-26',
-      entries: [entry({ time: '09:31', kind: '书摘', source: '《被讨厌的勇气》' }), entry({ time: '10:00', source: '' })],
+      entries: [entry({ time: '09:31', kind: '书摘', source: '《示例书名》' }), entry({ time: '10:00', source: '' })],
       total: 2,
     });
-    assert.match(out, /09:31 · 书摘 · 引自 《被讨厌的勇气》/);
+    assert.match(out, /09:31 · 书摘 · 引自 《示例书名》/);
     assert.equal(out.includes('引自 ·'), false, '空来源不该留下一个孤零零的「引自」');
   });
 });

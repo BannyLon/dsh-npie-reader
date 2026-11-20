@@ -23,7 +23,7 @@ function fakeViewport({ height = 100 } = {}) {
 
 describe('safeLinkUrl：只放过 http / https / mailto', () => {
   it('正常外链原样返回（绝对化）', () => {
-    assert.equal(safeLinkUrl('https://arxiv.org/abs/1706.03762'), 'https://arxiv.org/abs/1706.03762');
+    assert.equal(safeLinkUrl('https://arxiv.org/abs/2401.00001'), 'https://arxiv.org/abs/2401.00001');
     assert.equal(safeLinkUrl('  http://example.com/x  '), 'http://example.com/x');
     assert.equal(safeLinkUrl('mailto:a@b.com'), 'mailto:a@b.com');
   });
