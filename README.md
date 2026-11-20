@@ -55,49 +55,19 @@
 
 ## 安装
 
-**装插件的入口是界面，不是终端。** 这不是这个插件的毛病，是桌面端的机制：`dsh plugin`
-这个子命令存在、装插件的能力也有（`dsh plugin --profile <名字> add <包名>` 在别的 profile
-上实测可用），但它**装不进桌面端用的那个 profile**。两种写法都试过：
-
-```
-$ dsh plugin add dsh-npie-reader
-error: required option '--profile <name>' not specified
-
-$ dsh plugin --profile desktop add dsh-npie-reader
-error: profile "desktop" is managed exclusively by the Electron application
-```
-
-`desktop` 这个 profile 由 Electron App 独占管理——App 运行时持有它的锁和加载生命周期，
-外部进程改它的依赖会跟 App 打架，所以 `dsh/lib/bin.js` 在参数解析阶段就拒绝了，连只读的
-`dsh plugin --profile desktop list` 都不放行。这类 profile 只能由 App 自己改，于是装插件
-的操作被搬到了界面里：侧栏点 **「插件」** → **「添加插件」**，在「包名或地址」一栏里填东西。
-
-下面两种方式的收尾相同，**两步都不能省**：
-
-1. 点 **「启用」**（从源码装时按钮叫「立即启用」）；
-2. **完全退出 App（`Cmd+Q`）再打开**，回到面板按 `Cmd+Shift+R` 强刷。
-
-第 2 步不能省：插件要在宿主进程里注册服务与本机 HTTP 路由，不重启不生效。装对了会看到
-日志 `dsh-npie-reader: service started`，侧栏出现 **「澄境 | Limina」**。
-
 ### 方式一：从 npm 装（推荐，不需要 Node）
 
-在「包名或地址」里填包名，就这一个词：
+1. 侧栏点 **「插件」** → **「添加插件」**；
+2. 「包名或地址」填 `dsh-npie-reader`；
+3. 点 **安装**，再点 **启用**；
+4. **完全退出 App（`Cmd+Q`）再打开**，回到面板按 `Cmd+Shift+R` 强刷。侧栏出现
+   **「澄境 | Limina」** 即为装好。
 
-```
-dsh-npie-reader
-```
-
-然后点 **安装** → **启用** → 重启 App。构建产物在**发布时**已经打好放进包里
-（`prepack`），你不用装 Node.js，也不用构建。
-
-> **已经用源码装过的，先「卸载」再装 npm 版。** 同一个包名同时存在 `link:`（本地目录）
-> 和 registry（npm）两种来源会冲突，宿主会拒绝加载。
+> 之前用本地目录装过这个插件的，先「卸载」再装这一版。
 
 ### 方式二：从源码装（想改代码时用）
 
-`lib/`（构建产物）**故意不进仓库** —— 否则每次改代码都要提交几 MB 产物。代价是：
-装之前必须自己构建一次。这一步不能省，但只有两条命令：
+先构建一次：
 
 ```bash
 git clone https://github.com/BannyLon/dsh-npie-reader.git
@@ -106,13 +76,17 @@ npm install     # 装 4 个构建依赖
 npm run build   # 生成 lib/index.js 与 lib/client.js
 ```
 
-**没有 git 也没关系**：打开仓库页 → 绿色 **Code** 按钮 → **Download ZIP** → 解压 →
-在解压出来的目录里执行上面那两条 `npm` 命令。
+没有 git 就打开仓库页 → **Code** → **Download ZIP** → 解压，在解压出的目录里跑那两条
+`npm` 命令。
 
-构建完，在「包名或地址」里粘贴**那个目录的绝对路径**（`link:` 前缀可省），然后启用、重启。
+再装进 App：
 
-> **忘了 `npm run build` 会怎样**：添加插件时报找不到 `lib/index.js`，或启动即
-> `failed to import`。补跑那两条命令，再重启 App。
+1. 侧栏点 **「插件」** → **「添加插件」**，「包名或地址」填**那个目录的绝对路径**；
+2. 点 **「立即启用」**；
+3. **完全退出 App（`Cmd+Q`）再打开**，回到面板按 `Cmd+Shift+R` 强刷。侧栏出现
+   **「澄境 | Limina」** 即为装好。
+
+> `npm run build` 不能省。跳过会报找不到 `lib/index.js`，或启动即 `failed to import`。
 
 细节（`link:` 前缀、对账机制、`failed to import` 逐条排查）见
 [安装与启动细节](docs/development.md#安装与启动细节)。
@@ -238,9 +212,8 @@ npm run build   # 生成 lib/index.js 与 lib/client.js
 
 ## 常见问题
 
-**装完侧栏没有入口？** 先确认重启那步做了（`Cmd+Q` 完全退出后重开）。还没有就在日志里找
-`service started`：从源码装的话，找不到通常是 `lib/` 没构建，回去跑 `npm run build`；
-从 npm 装的话，检查是不是有同名的源码版没卸载干净。
+**装完侧栏没有入口？** 确认走完了重启那步（`Cmd+Q` 完全退出后重开）。还没有就查日志里有
+没有 `service started`：源码装的跑一遍 `npm run build` 再重启；npm 装的先卸载同名旧版再装。
 
 **订阅加了却不显示文章？** 有些站点的 feed 只给最近 10 篇摘要，正文要单独抓；
 还有的要求登录。「补全历史」能往回追，但追不到站上没公开的内容。
