@@ -3,13 +3,16 @@
  *
  * 这个文件存在的理由：分段错了**不会报错**。切错的唯一症状是用户点第 5 章跳到
  * 第 3 章，或者界面上出现一个叫「2025年11月」的章节。所以这里不抄实现，而是拿
- * **两本真书的页面数据**（从 pdf.js 的 textContent 原样 dump）喂进去，钉住
- * 「章节数 / 页码连续性 / 标题长什么样」，并给每类判据配反向对照。
+ * **整本书的逐页行数组**喂进去，钉住「章节数 / 页码连续性 / 标题长什么样」，
+ * 并给每类判据配反向对照。
  *
- * 夹具来源（2026-10-23 真机 dump，`vendor/pdfjs` 6.4.299）：
- *   openclaw.json    《OpenClaw 橙皮书》98 页，无 PDF 书签，靠目录页反查
- *   orangebook.json  《Claude-Code 橙皮书》153 页，无书签，目录里含 `⾃序`（康熙部首）
- *   outline.json     《东野圭吾笑的世界》635 页，有 58 条书签（含扉页/目录/版权页噪音）
+ * ★ 夹具是**合成的**（`scripts/gen-segment-fixtures.mjs` 生成，确定性，不含任何真实出版物
+ *   的内容）。形态照着历次真机 dump 里遇到过的坑复刻 —— 只有形态重要，正文不参与
+ *   任何断言：
+ *     toc-3pages.json   98 页；目录占 p2–p4；40 章；第一章在 p5；目录页行尾无句读
+ *     toc-radical.json  153 页；目录在 p2；首条用康熙部首「⾃」，正文用「自」；
+ *                       目录里「附录」与「附录A」指向同一页
+ *     outline.json      635 页；58 条书签，含扉页/目录/版权页噪音；首条在 p3
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -24,8 +27,8 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const fixture = name => JSON.parse(readFileSync(join(HERE, 'fixtures', 'segment', name), 'utf8'));
 
-const openclaw = fixture('openclaw.json');
-const orangebook = fixture('orangebook.json');
+const tocA = fixture('toc-3pages.json');
+const tocB = fixture('toc-radical.json');
 const outline = fixture('outline.json');
 
 /** 造一页「正文」：行撑满、以句号结尾。 */
@@ -40,10 +43,10 @@ function tocPage(titles) {
 
 describe('normalizeTitle：标题归一化', () => {
   it('★ 康熙部首要折叠成正常汉字', () => {
-    // 实测：《Claude-Code 橙皮书》文本层里「自序」的「自」是 U+2F83（康熙部首），
+    // 实测：某些 PDF 字体映射会把「自」映射到 U+2F83（康熙部首），
     // 与目录页里的 U+81EA 不是同一个字符。不归一化 ⇒ 肉眼一样、比对失败、且无线索。
     assert.notEqual('⾃序', '自序');
-    assert.equal(normalizeTitle('⾃序 从不会写代码到被央视采访'), normalizeTitle('自序从不会写代码到被央视采访'));
+    assert.equal(normalizeTitle('⾃序 关于这本书'), normalizeTitle('自序关于这本书'));
   });
 
   it('抹掉空白、点导引与全角差异', () => {
@@ -92,8 +95,8 @@ describe('chaptersFromOutline：书签目录档', () => {
 });
 
 describe('chaptersFromToc：目录页反查档', () => {
-  it('《OpenClaw 橙皮书》：目录页在 p2–p4，反查出 30+ 章且页码连续', () => {
-    const { chapters, tocPages } = chaptersFromToc(openclaw.pages);
+  it('目录占 p2–p4：反查出 30+ 章且页码连续', () => {
+    const { chapters, tocPages } = chaptersFromToc(tocA.pages);
     assert.deepEqual(tocPages, [2, 3, 4]);
     assert.ok(chapters.length >= 30, `只切出 ${chapters.length} 章`);
     assert.equal(chapters[0].startPage, 5);
@@ -102,8 +105,8 @@ describe('chaptersFromToc：目录页反查档', () => {
     }
   });
 
-  it('《Claude-Code 橙皮书》：`⾃序`（康熙部首）也能反查到', () => {
-    const { chapters } = chaptersFromToc(orangebook.pages);
+  it('目录里的 `⾃序`（康熙部首）能反查到正文里的「自序」', () => {
+    const { chapters } = chaptersFromToc(tocB.pages);
     const first = chapters[0];
     assert.equal(first.startPage, 4);
     assert.ok(first.title.includes('序'), first.title);
@@ -111,8 +114,8 @@ describe('chaptersFromToc：目录页反查档', () => {
   });
 
   it('★ 同一页的多个条目只留最长的（「附录」与「附录A」撞页会倒挂）', () => {
-    // 实测橙皮书：留着短的会得到 `p117-116`，界面上是倒挂区间。
-    const { chapters } = chaptersFromToc(orangebook.pages);
+    // 实测：留着短的会得到 `p140-139`，界面上是倒挂区间。
+    const { chapters } = chaptersFromToc(tocB.pages);
     for (const chapter of chapters) {
       assert.ok(chapter.endPage >= chapter.startPage, `${chapter.title} 区间倒挂 ${chapter.startPage}-${chapter.endPage}`);
     }
@@ -123,7 +126,7 @@ describe('chaptersFromToc：目录页反查档', () => {
 
   it('★ 正文页不能被误判成目录页（判据是行尾标点，不是字符数）', () => {
     // 反向对照：把目录页的「无句读」特征破坏掉，就应当认不出目录。
-    const broken = openclaw.pages.map((lines, index) => (
+    const broken = tocA.pages.map((lines, index) => (
       index < 6 ? lines.map(line => `${line}。`) : lines
     ));
     const { tocPages } = chaptersFromToc(broken);
@@ -131,8 +134,8 @@ describe('chaptersFromToc：目录页反查档', () => {
   });
 
   it('★ 代码页/表格页不能被当成目录页（行尾无句读 ≠ 目录）', () => {
-    // 这是「行均长上限」这条判据的守门人。实测《OpenClaw 橙皮书》p35「完整平台列表」
-    // 的 noPunct 也是 1.00 —— 只看行尾标点，任何表格页都会被认成目录页。
+    // 这是「行均长上限」这条判据的守门人。实测某本手册的表格页：noPunct 也是 1.00
+    // —— 只看行尾标点，任何表格页都会被认成目录页。
     // 真正把正文页挡在外面的是**行是撑满的**（代码行 40+ 字/行）。
     const codePage = [
       '目录结构说明',
@@ -175,7 +178,7 @@ describe('segmentBook：四档降级与扫描版判定', () => {
   });
 
   it('有目录页、无书签 ⇒ 走 toc', () => {
-    const result = segmentBook({ pages: openclaw.pages, outline: [], pageCount: openclaw.pages.length });
+    const result = segmentBook({ pages: tocA.pages, outline: [], pageCount: tocA.pages.length });
     assert.equal(result.mode, 'toc');
     assert.equal(result.stats.tocPages.join(','), '2,3,4');
   });
@@ -209,8 +212,8 @@ describe('segmentBook：四档降级与扫描版判定', () => {
     // ★ 必须覆盖**每一档**。之前只测了 toc，outline 档漏了编号 ⇒ 章节文件名变成
     //   `chundefined.txt`，而所有断言全绿（2026-10-23 端到端跑真书才抓到）。
     const cases = [
-      ['toc', { pages: openclaw.pages, outline: [], pageCount: openclaw.pages.length }],
-      ['toc', { pages: orangebook.pages, outline: [], pageCount: orangebook.pages.length }],
+      ['toc', { pages: tocA.pages, outline: [], pageCount: tocA.pages.length }],
+      ['toc', { pages: tocB.pages, outline: [], pageCount: tocB.pages.length }],
       ['outline', { pages: [], outline: outline.outline, pageCount: outline.pages }],
     ];
     for (const [label, input] of cases) {
@@ -233,7 +236,7 @@ describe('segmentBook：四档降级与扫描版判定', () => {
   });
 
   it('★ 只占一页、两个字的分组标题页要标成 section（不是可读的一章）', () => {
-    // 实测《大医日出篇》838 页、19 条书签，第一条「上册」只占 p6 一页、正文两个字。
+    // 实测：一本 838 页的书有 19 条书签，第一条「上册」只占 p6 一页、正文两个字。
     // 不标出来 ⇒ 界面上出现「上册 p.6–6 2字」，点进去是一页白纸，
     // 而且 P2 会为它白烧一次模型调用。
     const pages = [

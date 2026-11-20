@@ -75,6 +75,11 @@ node scripts/prune-catalog.mjs --apply       # 按计划裁剪内置目录（先
 | `node scripts/verify-pan-refresh.mjs` | 网盘续期出来的新 `refresh_token` 到底有没有写回凭证文件 | 默认干跑；加 `--apply --dsh-stopped` 会**消耗掉当前 token**，必须先关桌面端 |
 | `node scripts/purge-orphan-articles.mjs --dry-run` | 清掉「已退订的源」留在文章缓存里的条目 | 改的是用户本机数据，且要在 dsh 完全退出后跑（否则退出时内存副本会覆盖回磁盘） |
 
+分段测试的三份夹具（`test/fixtures/segment/*.json`）是**合成数据**，由
+`node scripts/gen-segment-fixtures.mjs` 确定性生成：页数、目录页位置、章数、康熙部首、
+「附录 / 附录A 撞页」这些**形态**照着历次真机 dump 复刻，正文本身不参与任何断言。
+不要用真书 dump 替换它们 —— 那等于把第三方书籍的正文放进公开仓库。
+
 **仓库在 git 下**（0.24.4 起，`git init -b main`，首个提交 `e83ddcf` 是 v0.24.3 基线）。
 `.gitignore` 只挡**会变的东西** —— `lib/`（`prepack` 重建）、`test/.build/`（每次重新生成）、
 `test/.tmp/`（`mkdtemp` 落点）、`.build/`（出图草稿）、`probe-*/`（探测会话残留），
