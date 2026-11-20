@@ -16,7 +16,7 @@
  *      **跨半区契约**，只有交叉比对能提前抓到。
  */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { test, describe } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -161,10 +161,12 @@ describe('setBookContext 的字段名跨半区一致', () => {
 
   test('★ 反向对照：判据真的在读两侧（改一个字段名就会红）', () => {
     // 没有这条，「两侧一致」可能只是两个空数组的巧合（比如两个正则都没命中）。
-    // ★ 0.20.5 起多了 `quote`（用户划选的那一句）。它**必须**在这张名单里：
-    //   名单是这条断言的自检锚点，漏写等于把「两侧一致」悄悄放宽成「任意两个列表相等」。
-    assert.deepEqual(clientKeys(), ['bookId', 'page', 'pages', 'quote', 'sessionId', 'text', 'title']);
-    assert.deepEqual(hostKeys(), ['bookId', 'page', 'pages', 'quote', 'sessionId', 'text', 'title']);
+    // ★ 0.20.5 起多了 `quote`（用户划选的那一句）；0.76.0 起多了 `kind` 与 `meta`
+    //   （论文的身份）。它们**必须**在这张名单里：名单是这条断言的自检锚点，
+    //   漏写等于把「两侧一致」悄悄放宽成「任意两个列表相等」。
+    const KEYS = ['bookId', 'kind', 'meta', 'page', 'pages', 'quote', 'sessionId', 'text', 'title'];
+    assert.deepEqual(clientKeys(), KEYS);
+    assert.deepEqual(hostKeys(), KEYS);
     const renamed = bookCompanion.replace('pages: context.pages,', 'pageCount: context.pages,');
     assert.notEqual(renamed, bookCompanion, '变异没生效 —— 这条反向对照是空操作');
     const at = renamed.indexOf('api.setBookContext(');
@@ -223,8 +225,11 @@ describe('伴读样式与文章伴读同款（2026-10-09 用户要求）', () =>
     assert.doesNotMatch(cond, /synced/, '开场页渲染条件挂了 synced：取书期间会整段消失');
   });
 
-  test('★ 电子书伴读读的是 book 作用域的提示词（与文章那套互不影响）', () => {
-    assert.match(bookCompanion, /readQuickPrompts\('book'\)/);
+  test('★ 伴读读的是自己那一套提示词：书用 book、论文用 paper（与文章那套互不影响）', () => {
+    // 作用域不能再写死 'book'：论文与书共用同一个组件，写死就等于「论文拿到书的提问」。
+    assert.match(bookCompanion, /readQuickPrompts\(kind\)/);
+    assert.match(bookCompanion, /context\?\.kind === 'paper' \? 'paper' : 'book'/,
+      'kind 的折算点被改掉了 —— 论文会退回书的措辞与提问');
     assert.match(bookCompanion, /npr-prompts-changed/, '设置页改了要即时刷新');
     // 文章伴读继续走默认作用域 + 选段改写；两边各读各的 storage。
     assert.match(askArticle, /readQuickPrompts\(\)/);
@@ -242,15 +247,110 @@ describe('伴读样式与文章伴读同款（2026-10-09 用户要求）', () =>
     assert.match(libraryApp, /initialTab=\{settingsEntry\.tab\}/);
   });
 
-  test('设置页「快捷提示词」分成两张卡：文章一套、电子书一套', () => {
+  /**
+   * ★ 0.77.1 补：**每一处 `<BookReader>` 都必须传 `onManagePrompts`**。
+   *
+   * 上面那条只查了 `LibraryApp`，于是论文页（`PapersApp`）漏传了整整一个版本：
+   * 按钮在、`onClick` 是 `undefined`，点下去什么都不会发生 —— 用户原话
+   * 「这个增加提示词的"+"图标失效。不起作用」。
+   *
+   * 为什么写成「扫目录 + 逐个数」：这是**跨调用点的一致性**，手写名单必然漏，
+   * 而漏掉的那个恰恰是新加的那一页。`hits.length >= 2` 是防假阴性的自检 ——
+   * 正则写崩导致 0 命中时，空数组比空数组永远相等，这条判据会静默变成恒真。
+   */
+  test('★ 每一处 <BookReader 都传了 onManagePrompts（论文页曾漏传 ⇒ 按钮点了没反应）', () => {
+    const hits = [];
+    for (const name of readdirSync(clientDir)) {
+      if (!name.endsWith('.jsx')) continue;
+      const text = readFileSync(join(clientDir, name), 'utf8');
+      for (const match of text.matchAll(/<BookReader\b[\s\S]*?\/>/g)) hits.push({ name, body: match[0] });
+    }
+    assert.ok(hits.length >= 2,
+      `只找到 ${hits.length} 处 <BookReader，扫描没生效（这条判据是空转的）`);
+    const missing = hits.filter(hit => !/onManagePrompts=/.test(hit.body)).map(hit => hit.name);
+    assert.deepEqual(missing, [],
+      `这些调用点渲染了伴读却没传 onManagePrompts：${missing.join('、')} —— 那颗「+」会是死的`);
+    // 反向对照：把 PapersApp 里那一行删掉，上面的 missing 必须变成 ['PapersApp.jsx']。
+    const papersApp = readFileSync(join(clientDir, 'PapersApp.jsx'), 'utf8');
+    assert.match(papersApp, /onManagePrompts=\{onManagePrompts\}/);
+  });
+
+  test('设置页「快捷提示词」分成三张卡：文章、电子书、论文各一套', () => {
     const at = settingsPage.indexOf("tab === 'prompts'");
     assert.notEqual(at, -1, '设置页找不到 prompts 页签');
     const section = settingsPage.slice(at, settingsPage.indexOf('</section>', at));
     assert.match(section, /scope="article"/);
     assert.match(section, /scope="book"/);
-    // PromptManager 真的消费 scope（写死作用域的话这两个 prop 就是摆设）。
+    // ★ 少了这张卡，论文伴读的提示词就**没有任何编辑入口** —— 面板上的「+」
+    //   只会把用户送到设置页，而那里根本没有他刚点的那一套。
+    assert.match(section, /scope="paper"/);
+    // PromptManager 真的消费 scope（写死作用域的话这几个 prop 就是摆设）。
     assert.match(promptManager, /readQuickPrompts\(scope\)/);
     assert.match(promptManager, /saveQuickPrompts\([^)]*scope\)/);
+    assert.match(promptManager, /paper:\s*\{/, 'PromptManager 缺 paper 的标题与说明');
+  });
+});
+
+/**
+ * 论文与电子书共用同一个伴读组件（`BookCompanion`），分叉点只有三个：
+ * 措辞、提示词作用域、交给模型的上下文身份。这里钉的是**第三个**的接线，
+ * 因为它是唯一会让模型「答得像在读书」的地方，而且断线时界面上毫无异常。
+ */
+describe('论文伴读：同一个组件，按 kind 分叉', () => {
+  const library = readFileSync(join(clientDir, '..', 'library.js'), 'utf8');
+
+  test('判据是 `book.source`，不是 `format` / `ext`', () => {
+    // ★ 自建 PDF 电子书同样是 `format: 'pdf'`。用 format 分会把《干法》当成论文，
+    //   于是模型对着散文讲「这一页承担什么论证」—— 而界面上一切正常。
+    assert.match(bookReader, /kind: book\.source === 'paper' \? 'paper' : 'book'/);
+    assert.doesNotMatch(bookReader, /kind: book\.(format|ext)[^\n]*paper/,
+      '用 format/ext 判论文：自建 PDF 电子书会被误判成论文');
+  });
+
+  test('论文的 meta 只在 source === "paper" 时给，书那半边是 null', () => {
+    assert.match(bookReader, /meta: book\.source === 'paper'/);
+    // 反向对照：没有这条，「meta 只在论文下给」就退化成「随便给个对象也行」。
+    assert.doesNotMatch(bookReader, /meta: \{[^}]*authors [^}]*\}/,
+      'meta 无条件构造：书也会被当成论文带上作者字段');
+  });
+
+  test('`paperAsBook()` 把摘要带上（否则伴读只有这一页正文）', () => {
+    assert.match(library, /abstract: typeof paper\.abstract === 'string' \? paper\.abstract : ''/);
+  });
+
+  test('空态措辞分叉：论文写「这篇论文」，书写「这本书」', () => {
+    assert.match(bookCompanion, /与这篇论文对坐片刻/);
+    assert.match(bookCompanion, /与这本书对坐片刻/);
+    assert.match(bookCompanion, /isPaper \? '与这篇论文对坐片刻' : '与这本书对坐片刻'/,
+      '两个文案都必须真的挂在 isPaper 上，否则其中一条是死文案');
+  });
+
+  /**
+   * ★ 0.77.1 补：空态**正文**（h2 + 副句）也要分叉。
+   *
+   * 0.77.0 只换了上面那行小字（「与这本书对坐片刻」→「与这篇论文对坐片刻」），
+   * 底下「好奇，从这一页开始」原样留给了论文。用户当场就看出来了：
+   * 「好奇，从这一页开始，不适合论文阅读吧」。
+   * 这不是措辞洁癖 —— 电子书是**从兴趣往下读**，论文是**带着怀疑去验**；
+   * 同一句开场白放在两个场景里，其中一个必然是错的。
+   *
+   * 只断言「两个句子都在文件里」是不够的（那可能只是两段没接线的死文案），
+   * 所以这里切出 `isPaper ? (` 到自己那个 `) : (` 之间的**论文分支**，
+   * 断言书的开场白不在里面。
+   */
+  test('★ 空态正文也分叉：论文分支里不许留「好奇，从这一页开始」', () => {
+    const start = bookCompanion.indexOf('{isPaper ? (');
+    assert.notEqual(start, -1, '空态没有按 isPaper 分叉');
+    const end = bookCompanion.indexOf(') : (', start);
+    assert.notEqual(end, -1, '论文分支没有对应的 else 分支（分叉只做了一半）');
+    const paperArm = bookCompanion.slice(start, end);
+    assert.match(paperArm, /读论文，从一句追问开始/, '论文空态缺自己的开场白');
+    assert.match(paperArm, /哪句话只是作者的声称/, '论文空态的副句还是书的措辞');
+    assert.doesNotMatch(paperArm, /好奇，从这一页开始/, '论文分支里还留着书的开场白');
+    assert.doesNotMatch(paperArm, /一个细节，一处疑问/, '论文分支里还留着书的副句');
+    // 反向对照：书那半边必须**还在**（删掉书的文案同样不是「分叉」）。
+    assert.match(bookCompanion, /好奇，从这一页开始/);
+    assert.match(bookCompanion, /一个细节，一处疑问，或一句不同意的话/);
   });
 });
 

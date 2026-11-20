@@ -87,11 +87,12 @@ function boot(options = {}) {
 }
 
 const REMOTE_METHODS = [
-  'addCatalogSource', 'addSubscription', 'aiModelInfo', 'backfillSubscription', 'fetchFullText', 'generateVersion', 'getArticle',
-  'getSettings', 'getVersionContent', 'listAiModels', 'listCatalog', 'listChannels', 'listEntries',
-  'listSubscriptions', 'opmlExport', 'opmlImport', 'opmlPreview', 'prepareChat', 'probeCatalogService',
-  'refresh', 'removeCatalogSource', 'removeSubscription', 'saveSettings', 'searchArticles', 'setBookContext',
-  'setCatalogHidden', 'setCatalogService', 'setDiaryContext', 'setFavorite', 'setHidden', 'setRead', 'setReadingContext', 'updateSubscription',
+  'addCatalogSource', 'addSubscription', 'aiModelInfo', 'asrStatus', 'backfillSubscription', 'cancelTranscription',
+  'entryMeta', 'episodeDigest', 'fetchFullText',
+  'generateVersion', 'getArticle', 'getSettings', 'getTranscript', 'getTranscriptTranslation', 'getVersionContent', 'listAiModels', 'listCatalog', 'listChannels', 'listEntries',
+  'listSubscriptions', 'opmlExport', 'opmlImport', 'opmlPreview', 'prepareAsr', 'prepareChat', 'probeCatalogService',
+  'refresh', 'removeCatalogSource', 'removeSubscription', 'resolveSubscription', 'saveAsrConfig', 'saveSettings', 'searchArticles', 'setBookContext',
+  'setCatalogHidden', 'setCatalogService', 'setDiaryContext', 'setFavorite', 'setHidden', 'setRead', 'setReadingContext', 'startTranscription', 'transcriptionStatus', 'translateTranscriptBatch', 'updateSubscription',
 ];
 
 // ★ 这张表是**契约快照**，不是「大概有哪些」：多一个少一个都必须在这里改一次，
@@ -104,6 +105,9 @@ const TOOL_NAMES = [
   //   「压成三条」执行成「再追加三条」，原稿留在原地 ⇒ 用户得到的是**重复**。
   //   护栏不是「不给能力」，而是「改删前必须先 diary_today 拿到编号」。
   'diary_append', 'diary_delete', 'diary_search', 'diary_today', 'diary_update',
+  // 2026-11-06 C 档：论文五个只读/导入工具。**没有 paper_delete**（不可逆，
+  // 连 PDF 一起删，不该由模型一句话触发）。多一个少一个这条断言都会红。
+  'paper_abstract', 'paper_import', 'paper_list', 'paper_related', 'paper_search',
   'rss_add_subscription', 'rss_digest', 'rss_generate_version', 'rss_list_articles', 'rss_list_channels',
   'rss_read_article', 'rss_refresh', 'rss_remove_subscription', 'rss_search_articles',
 ];
@@ -132,6 +136,39 @@ describe('Remote manifest', () => {
     const block = source.slice(start, source.indexOf('\n};', start));
     const declared = [...block.matchAll(/'([A-Za-z][A-Za-z0-9]*)'/g)].map((match) => match[1]).sort();
     assert.deepEqual(declared, REMOTE_METHODS);
+  });
+
+  it('declared parameter count matches the client call site (0-arg methods must be declared 0-arg)', async () => {
+    // 症状（0.82.0 现场）：`asrStatus` 的描述里留着 1 个必填 `request`，而
+    // `api.asrStatus = () => call('asrStatus')` 一个业务参数都不传 ⇒ 运行期
+    //   `client api: rss/asrStatus expected 1 business argument(s) plus an optional
+    //    AbortSignal, got 0`
+    // 构建、启动、上面的集合快照全绿，只有用户点「本机识别」时才炸。
+    // 集合一致性抓不到「同名但参数个数漂移」，必须单独比一次。
+    const source = await readFile(join(pluginRoot, 'src/client/index.jsx'), 'utf8');
+    const declared = new Map();
+    for (const match of source.matchAll(/method\('([A-Za-z][A-Za-z0-9]*)'(,\s*false)?\)/g)) {
+      declared.set(match[1], match[2] ? 0 : 1);
+    }
+
+    const apiStart = source.indexOf('const api = {');
+    assert.notEqual(apiStart, -1, 'client index.jsx must build an api object');
+    const apiBlock = source.slice(apiStart, source.indexOf('\n  };', apiStart));
+    const entries = [...apiBlock.matchAll(
+      /([A-Za-z][A-Za-z0-9]*):\s*\([^)]*\)\s*=>\s*call\(\s*'([A-Za-z0-9]+)'\s*(,)?/gs,
+    )];
+    // 防假阴性：api 里少说也有三十个方法，匹配到个位数说明正则被改坏了。
+    assert.ok(entries.length > 25, `expected to parse the api object, got ${entries.length} entries`);
+
+    for (const [, name, called, passesArgument] of entries) {
+      assert.equal(called, name, `${name} 转发到了别的方法 ${called}`);
+      if (!declared.has(name)) continue;
+      const expected = declared.get(name);
+      assert.equal(
+        passesArgument ? 1 : 0, expected,
+        `${name}: 描述声明 ${expected} 个业务参数，客户端${passesArgument ? '传了' : '没传'} —— 两边必须一致`,
+      );
+    }
   });
 });
 
@@ -322,7 +359,10 @@ describe('updateSubscription 换地址', () => {
     assert.equal(service.entriesOf(sub.id).length, 2, '换源后频道 key 必须立刻解析到新内容');
   });
 
-  it('换到一个抓不到的新地址时留下失败原因，而不是静默变空', async () => {
+  it('★ 换到抓不到的新地址时整体回滚并报错，旧条目不能丢（0.84.7）', async () => {
+    // 旧行为是「清空 entries + status:'error' + 正常返回」：界面显示保存成功，
+    // 用户打开订阅看到一片空白，只会以为这个源本来就没内容。现在必须：
+    // 抓取失败 ⇒ 地址 / 条目 / 状态一起回滚，并 reject 出真实原因。
     const { service } = boot({
       fetchPlan: [
         { body: rssDocument({ title: '旧源', items: [{ title: 'Old A' }] }) },
@@ -331,11 +371,21 @@ describe('updateSubscription 换地址', () => {
     });
     await service.ready;
     const sub = await service.addSubscription({ url: 'https://old.example/feed.xml' });
-    const updated = await service.updateSubscription({ id: sub.id, url: 'https://dead.example/feed.xml' });
+    assert.equal(sub.entries.length, 1);
 
-    assert.equal(updated.status, 'error');
-    assert.equal(updated.lastError, 'fetch failed');
-    assert.equal(updated.entries.length, 0);
+    await assert.rejects(
+      () => service.updateSubscription({ id: sub.id, url: 'https://dead.example/feed.xml' }),
+      /已保留原来的订阅.*fetch failed/,
+    );
+
+    // 反向对照（这条才是真正要守的）：地址、条目、状态全部回到换之前。
+    const after = service.store.subscriptionById(sub.id);
+    assert.equal(after.url, 'https://old.example/feed.xml', '地址必须回滚');
+    assert.equal(after.entries.length, 1, '旧条目不能因为一次失败就被清空');
+    assert.equal(after.entries[0].title, 'Old A');
+    assert.equal(after.status, 'ok', '状态不能停在 error');
+    assert.equal(after.lastError, undefined);
+    assert.equal(service.entriesOf(sub.id).length, 1, '频道 key 仍解析到旧内容');
   });
 
   it('拒绝非法地址与撞车的地址，且不留半改状态', async () => {
@@ -1856,6 +1906,33 @@ describe('电子书伴读上下文 setBookContext', () => {
     assert.equal(service.store.data.companionContexts.shared.key, 'book:b1');
   });
 
+  it('★ 论文：身份真的进了注入文本，且与书分得开', async () => {
+    const { service, state } = boot();
+    await service.ready;
+    await service.setBookContext({
+      sessionId: 'paper-1', bookId: 'p1', title: 'DeepSeek-VL', page: 1, pages: 33,
+      text: 'We present DeepSeek-VL…', kind: 'paper',
+      meta: { authors: 'Haoyu Lu', venue: 'arXiv', year: 2024, abstract: 'We present…' },
+    });
+    const text = state.systemPromptContributions[0].text({ agent: { session: { id: 'paper-1' } } });
+    assert.match(text, /读一篇论文/);
+    assert.match(text, /作者：Haoyu Lu。/);
+    assert.match(text, /发表：arXiv · 2024。/);
+    assert.match(text, /摘要（作者原文/);
+    // 键也按 kind 分开 —— 论文 id 与书 id 是两个命名空间，同一个 id 不该互相覆盖。
+    assert.equal(service.store.data.companionContexts['paper-1'].key, 'paper:p1');
+
+    // ★ 反向对照：同一份数据不带 kind ⇒ 退回书的身份。没有这条，「论文带上身份」
+    //   可能只是文案里本来就有「论文」两个字，改了也不红。
+    await service.setBookContext({
+      sessionId: 'paper-2', bookId: 'p1', title: 'DeepSeek-VL', page: 1, pages: 33, text: 'x',
+      meta: { authors: 'Haoyu Lu' },
+    });
+    const asBook = state.systemPromptContributions[0].text({ agent: { session: { id: 'paper-2' } } });
+    assert.match(asBook, /读一本电子书/);
+    assert.doesNotMatch(asBook, /作者：/);
+  });
+
   it('★ 非法输入一律抛错，且一个字都不写进去', async () => {
     const { service } = boot();
     await service.ready;
@@ -1881,6 +1958,12 @@ describe('电子书伴读上下文 setBookContext', () => {
       //   于是去概括整页 —— 而用户看到的只是「按钮点过了，答非所问」。
       [{ ...good, quote: 1 }, /划选引文必须是字符串/],
       [{ ...good, quote: 'x'.repeat(4001) }, /划选引文过长/],
+      // ★ `kind` 不做「非 paper 即 book」的兜底：拼错大小写会静默退回书的措辞，
+      //   而界面上完全看不出异常 —— 模型已经把论文当书讲了。
+      [{ ...good, kind: 'Paper' }, /kind 只能是 book 或 paper/],
+      [{ ...good, kind: '', meta: { authors: 'A' } }, /kind 只能是 book 或 paper/],
+      [{ ...good, kind: 'paper', meta: 'Haoyu Lu' }, /论文信息必须是对象/],
+      [{ ...good, kind: 'paper', meta: ['A'] }, /论文信息必须是对象/],
       // ★ 字段名写错 / 漏传时必须抛错，不能被兜成 0 与空串 ——
       //   那样模型看到的是「第 0 页，这一页没有文字」这样**看起来很确定**的假话。
       [{ ...good, page: undefined }, /page 必须是非负整数/],
@@ -2021,21 +2104,90 @@ describe('日记伴读上下文 setDiaryContext', () => {
 });
 
 describe('书架：HTTP 路由真的挂上了', () => {
-  it('注册了四条 prefix 路由，路径取自共用常量', async () => {
+  it('注册了六条 prefix 路由，路径取自共用常量', async () => {
     const { service, state } = boot();
     await service.ready;
-    // ★ 顺序就是源码里的注册顺序：书架 → pdfjs → 编辑器 → 日记。
+    // ★ 顺序就是源码里的注册顺序：书架 → pdfjs → 编辑器 → 日记 → 朗读 → 论文。
     //   日记**单独一条前缀**（2026-10-26）：两条通道的风险面不同（书架能读配置过的书源目录，
     //   日记只碰自己的一个子目录），分开之后「日记挂了但书架还在」是可诊断的。
     //   2026-10-27 多了 `/vendor/npie-reader/editor`（0.35 换 Milkdown 编辑器带来的静态资源，
     //   373 KB，客户端是动态 import —— 用不到就不请求，但路由要在）。三条 → 四条。
+    //   0.55.0 多了 `/api/dsh-npie-reader/speech`（朗读走一个会花钱的外部服务，
+    //   风险面与「读书架」「写日记」都不同，且它必须能单独挂失败）。四条 → 五条。
+    //   0.67.0 多了 `/api/dsh-npie-reader/paper`（论文要外抓 arXiv / Crossref，
+    //   抓失败、超时、被墙都可能发生 —— 不该让书架的请求跟着 500）。五条 → 六条。
     assert.deepEqual(state.webRoutes.map((entry) => entry.route.path), [
       '/api/dsh-npie-reader/library',
       '/vendor/npie-reader/pdfjs',
       '/vendor/npie-reader/editor',
       '/api/dsh-npie-reader/diary',
+      '/api/dsh-npie-reader/speech',
+      '/api/dsh-npie-reader/paper',
     ]);
-    assert.deepEqual(state.webRoutes.map((entry) => entry.route.kind), ['prefix', 'prefix', 'prefix', 'prefix']);
+    assert.deepEqual(state.webRoutes.map((entry) => entry.route.kind), ['prefix', 'prefix', 'prefix', 'prefix', 'prefix', 'prefix']);
+  });
+
+  it('★ 论文 PDF 落盘之后就是一个普通 PDF 书条目（阅读器零改动复用的前提）', async () => {
+    const { service } = boot();
+    await service.ready;
+    const { paper } = await service.paperStore.upsert({
+      key: 'arxiv:1706.03762', source: 'arxiv', arxivId: '1706.03762',
+      title: 'Attention Is All You Need', authors: ['Ashish Vaswani'], year: 2017,
+    });
+    // 没有全文时**不许**伪造书条目：界面上要点得动「下载全文」，而不是点开一个永远转圈的阅读器。
+    assert.equal(await service.bookById(paper.id), undefined);
+
+    const bytes = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(600, 0x20)]);
+    await service.paperStore.putPdf(paper.id, bytes, { name: 'attention.pdf' });
+
+    const book = await service.bookById(paper.id);
+    assert.equal(book.source, 'paper');
+    assert.equal(book.ext, 'pdf');
+    assert.equal(book.size, bytes.length);
+    /**
+     * ★ `renderable` 少一个，界面上就是「这种格式暂不支持阅读」（2026-11-06 用户报的
+     *   那个故障）。它由共用的 `paperAsBook()` 给，这里守住「宿主这条路也带上了」。
+     */
+    assert.equal(book.renderable, true);
+    // `BookReader` 靠 title / author / year 排版；缺字段不会报错，只会显示空白。
+    assert.equal(book.title, 'Attention Is All You Need');
+    assert.equal(book.year, 2017);
+    await service.verifyReadable(book);
+    assert.equal((await service.readBookBytes(book, 0, 4)).toString('latin1'), '%PDF-');
+    // 正对照：没有这篇论文的 id 仍然取不到（别把 fallback 写成「什么都返回」）。
+    assert.equal(await service.bookById('p00000000'), undefined);
+  });
+
+  /**
+   * ★ **端到端**：真的走一遍 `/book/:id/raw`，而不是只断言字段。
+   *
+   * 为什么必须有这条：0.68.0 修了 `renderable`，0.68.1 又栽在**下一道**门禁
+   * `isReadable(book)` —— 它只在 `fsId` / `localPath` 里找凭据，论文两者都没有
+   * （字节在插件数据目录、按 id 拼），于是请求在路由层就被 400 挡下，用户看到
+   * 「这本书的书单记录里既没有网盘 fs_id 也没有本地路径，取不到字节」。
+   *
+   * 两次都是「字段对了、下一道门禁没对」。单点断言每次只看得见一格；这条路是
+   * 阅读器的**唯一入口**，整条打通之后，中间任何一道检查漏了都会在这里红。
+   */
+  it('★★ 论文走真实的 /book/:id/raw：能取到 %PDF- 分片（每道门禁都过得了）', async () => {
+    const { service, state } = boot();
+    await service.ready;
+    const { paper } = await service.paperStore.upsert({
+      key: 'arxiv:1706.03762', source: 'arxiv', arxivId: '1706.03762',
+      title: 'Attention Is All You Need', authors: ['Ashish Vaswani'], year: 2017,
+    });
+    const bytes = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(600, 0x20)]);
+    await service.paperStore.putPdf(paper.id, bytes, { name: 'attention.pdf' });
+
+    const [api] = state.webRoutes.map((entry) => entry.route);
+    const res = routeRes();
+    await api.handler(routeReq({
+      url: `/api/dsh-npie-reader/library/book/${paper.id}/raw`,
+      headers: { range: 'bytes=0-7' },
+    }), res);
+
+    assert.equal(res.status, 206, `路由没放行（body: ${res.text}）`);
+    assert.equal(Buffer.concat(res.chunks).toString('latin1'), '%PDF-1.4');
   });
 
   it('★ 路由对不可信请求回 403（这条链路上唯一的防线）', async () => {
@@ -2757,5 +2909,339 @@ describe('损坏的 data.json', () => {
     assert.ok(service.panAuth, '服务其余部分必须照常装配');
     assert.equal(service.store.corrupt, true);
     assert.equal(service.store.quarantinedTo !== undefined, true, '应当留下取证副本');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 单集字幕（P0）
+// ---------------------------------------------------------------------------
+
+describe('getTranscript', () => {
+  const VTT_BODY = `WEBVTT
+
+00:00:01.000 --> 00:00:03.000
+hello world
+
+00:00:03.200 --> 00:00:05.000
+second line
+`;
+
+  /** 往 store 里塞一集（`findFeedEntry` 只认订阅里的 entries）。 */
+  function seedEpisode(service, { key = 'feed:ep1', transcript } = {}) {
+    service.store.data.subscriptions.push({
+      id: 'sub-pod',
+      name: 'Pod',
+      url: 'https://pod.example/feed.xml',
+      entries: [{
+        key,
+        title: 'Ep one',
+        url: 'https://pod.example/ep1',
+        audio: 'https://cdn.example/ep1.mp3',
+        ...(transcript === undefined ? {} : { transcript }),
+      }],
+    });
+  }
+
+  /** 换掉 globalThis.fetch，并记录每一次调用的地址。 */
+  function stubFetch(body, { contentType = 'text/vtt', status = 200 } = {}) {
+    const calls = [];
+    globalThis.fetch = async (url) => {
+      calls.push(String(url));
+      return new Response(body, { status, headers: { 'content-type': contentType } });
+    };
+    return calls;
+  }
+
+  it('缓存命中时一次网络请求都不发（翻列表不该打第三方 CDN）', async () => {
+    const { service } = boot();
+    await service.ready;
+    seedEpisode(service, { transcript: { url: 'https://cdn.example/ep1.vtt', type: 'text/vtt' } });
+    await service.transcriptStore.write('feed:ep1', {
+      segments: [{ start: 0, end: 2, text: 'cached' }],
+      format: 'vtt',
+      source: { kind: 'feed' },
+    });
+    const calls = stubFetch('should not be read');
+    const result = await service.getTranscript({ key: 'feed:ep1' });
+    assert.equal(result.cached, true);
+    assert.equal(result.transcript.paragraphs[0].text, 'cached');
+    assert.deepEqual(calls, []);
+  });
+
+  it('条目里没有 transcript 时说明原因，而不是抛错', async () => {
+    const { service } = boot();
+    await service.ready;
+    seedEpisode(service);
+    const calls = stubFetch(VTT_BODY);
+    const result = await service.getTranscript({ key: 'feed:ep1' });
+    assert.equal(result.transcript, null);
+    assert.equal(result.reason, 'no-transcript');
+    assert.deepEqual(calls, []);
+  });
+
+  it('有 transcript 就抓一次、解析落盘；第二次读缓存不再联网', async () => {
+    const { service } = boot();
+    await service.ready;
+    seedEpisode(service, { transcript: { url: 'https://cdn.example/ep1.vtt', type: 'text/vtt' } });
+    const calls = stubFetch(VTT_BODY);
+
+    const first = await service.getTranscript({ key: 'feed:ep1' });
+    assert.equal(first.cached, false);
+    assert.equal(first.transcript.format, 'vtt');
+    assert.equal(first.transcript.paragraphs.length, 1, '两条相邻 cue 应并成一段');
+    assert.deepEqual(calls, ['https://cdn.example/ep1.vtt']);
+
+    const second = await service.getTranscript({ key: 'feed:ep1' });
+    assert.equal(second.cached, true);
+    assert.equal(calls.length, 1, '第二次必须命中缓存');
+  });
+
+  it('同一集并发只抓一次（连点两下不该发两次请求）', async () => {
+    const { service } = boot();
+    await service.ready;
+    seedEpisode(service, { transcript: { url: 'https://cdn.example/ep1.vtt', type: 'text/vtt' } });
+    const calls = stubFetch(VTT_BODY);
+    const [a, b] = await Promise.all([
+      service.getTranscript({ key: 'feed:ep1' }),
+      service.getTranscript({ key: 'feed:ep1' }),
+    ]);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(a.transcript.paragraphs, b.transcript.paragraphs);
+  });
+
+  it('refresh 绕开缓存重抓（面板上的「重新获取」）', async () => {
+    const { service } = boot();
+    await service.ready;
+    seedEpisode(service, { transcript: { url: 'https://cdn.example/ep1.vtt', type: 'text/vtt' } });
+    const calls = stubFetch(VTT_BODY);
+    await service.getTranscript({ key: 'feed:ep1' });
+    await service.getTranscript({ key: 'feed:ep1', refresh: true });
+    assert.equal(calls.length, 2);
+  });
+
+  it('上游失败包成 TRANSCRIPT_FETCH（路由据此回 502），且不留下坏缓存', async () => {
+    const { service } = boot();
+    await service.ready;
+    seedEpisode(service, { transcript: { url: 'https://cdn.example/ep1.vtt', type: 'text/vtt' } });
+    stubFetch('nope', { status: 500, contentType: 'text/plain' });
+    await assert.rejects(
+      () => service.getTranscript({ key: 'feed:ep1' }),
+      (error) => error.code === 'TRANSCRIPT_FETCH' && error.status === 502,
+    );
+    assert.equal(await service.transcriptStore.read('feed:ep1'), null);
+  });
+
+  it('不认识的 key 直接报错（不要静默给 null，那会被界面当成「这期没有字幕」）', async () => {
+    const { service } = boot();
+    await service.ready;
+    await assert.rejects(() => service.getTranscript({ key: 'feed:none' }), /unknown article/);
+  });
+});
+
+/**
+ * 字幕中文层：读缓存 + 逐批翻译。
+ *
+ * ★ 这批用例全部走**真 `translateSubtitleParagraphs`**（只把模型换成假流）：
+ *   从 `paragraphize` 切段 → 跳中文段 → 分批 → 落盘 → 指纹校验，一条链真跑。
+ *   只测 service 自己的 if/else 而不碰提示词解析的话，「模型回了带 ```json 的
+ *   数组」这类形态永远没人验，而它在真机上就是「点了翻译没反应」。
+ */
+describe('translateTranscriptBatch / getTranscriptTranslation', () => {
+  /** 每段独立成段：≥60 字且以句号结尾，`paragraphize` 才会在每条 cue 处断开。 */
+  const line = (index) => `Sentence ${index} ${'filler '.repeat(10)}ends here.`;
+
+  function seedTranscript(service, key, texts) {
+    return service.transcriptStore.write(key, {
+      segments: texts.map((text, index) => ({ start: index * 10, end: index * 10 + 5, text })),
+      format: 'vtt',
+      source: { kind: 'feed' },
+    });
+  }
+
+  /** 假模型：把 items 逐条译成 `中<id>`，按模型真实回答的形态（裸 JSON 数组）返回。 */
+  function translateReply(request) {
+    const text = request.messages.at(-1).content[0].text;
+    const payload = JSON.parse(text);
+    const body = JSON.stringify(payload.items.map((item) => ({ id: item.id, text: `中${item.id}` })));
+    return [{ type: 'text-delta', text: body }, { type: 'finish', reason: { kind: 'stop' } }];
+  }
+
+  it('★ 第一批只翻 20 段并当场落盘（关掉面板不白花钱）', async () => {
+    const { service } = boot({ llmChunks: translateReply });
+    await service.ready;
+    const texts = Array.from({ length: 25 }, (_, index) => line(index));
+    await seedTranscript(service, 'feed:tr1', texts);
+
+    const result = await service.translateTranscriptBatch({ key: 'feed:tr1' });
+    assert.equal(result.total, 25);
+    assert.equal(result.count, 20);
+    assert.equal(result.translated, 20);
+    assert.equal(result.done, false);
+    assert.equal(result.translations[0], '中0');
+    assert.equal(result.translations[19], '中19');
+    assert.equal(result.translations[20], '', '第 21 段属于下一批，这一批不该翻');
+
+    const cached = await service.transcriptStore.readTranslation('feed:tr1');
+    assert.equal(cached.translations.filter((text) => text !== '').length, 20);
+  });
+
+  it('★ 第二批续上并收尾，模型一共只调两次', async () => {
+    const { service, state } = boot({ llmChunks: translateReply });
+    await service.ready;
+    const texts = Array.from({ length: 25 }, (_, index) => line(index));
+    await seedTranscript(service, 'feed:tr2', texts);
+
+    await service.translateTranscriptBatch({ key: 'feed:tr2' });
+    const second = await service.translateTranscriptBatch({ key: 'feed:tr2', start: 20 });
+    assert.equal(second.done, true);
+    assert.equal(second.count, 5);
+    assert.equal(state.llmCalls.length, 2);
+    assert.equal(second.translations.filter((text) => text !== '').length, 25);
+  });
+
+  it('★ 重调同一段区间不再调模型（拿盘上的译文跳过）', async () => {
+    const { service, state } = boot({ llmChunks: translateReply });
+    await service.ready;
+    const texts = Array.from({ length: 4 }, (_, index) => line(index));
+    await seedTranscript(service, 'feed:tr3', texts);
+
+    await service.translateTranscriptBatch({ key: 'feed:tr3' });
+    assert.equal(state.llmCalls.length, 1);
+    const again = await service.translateTranscriptBatch({ key: 'feed:tr3' });
+    assert.equal(state.llmCalls.length, 1, '第二次又调了模型 —— 缓存等于没生效');
+    assert.equal(again.translated, 0);
+    assert.equal(again.done, true);
+  });
+
+  it('★ 本来就是中文的段照抄，一次模型都不调', async () => {
+    const { service, state } = boot({ llmChunks: translateReply });
+    await service.ready;
+    const texts = Array.from({ length: 3 }, (_, index) => `这是第${index}段中文口播内容。${'我们继续聊。'.repeat(10)}`);
+    await seedTranscript(service, 'feed:zh', texts);
+
+    const result = await service.translateTranscriptBatch({ key: 'feed:zh' });
+    assert.equal(state.llmCalls.length, 0);
+    assert.equal(result.translated, 0);
+    assert.equal(result.done, true);
+    assert.equal(result.translations[0], texts[0]);
+  });
+
+  /**
+   * 假模型：第一批漏掉 `dropIds`，之后老实全译（模拟「输出被截断，补翻一次就好了」）。
+   * 提示词本身就允许漏译（`translateSubtitleParagraphs` 写着「漏译时可以少给几项」），
+   * 所以这不是异常行为，宿主必须接得住。
+   */
+  function replyDroppingOnce(dropIds) {
+    let calls = 0;
+    return (request) => {
+      calls += 1;
+      const payload = JSON.parse(request.messages.at(-1).content[0].text);
+      const items = calls === 1 ? payload.items.filter((item) => !dropIds.includes(item.id)) : payload.items;
+      const body = JSON.stringify(items.map((item) => ({ id: item.id, text: `中${item.id}` })));
+      return [{ type: 'text-delta', text: body }, { type: 'finish', reason: { kind: 'stop' } }];
+    };
+  }
+
+  /** 假模型：永远漏掉这些段（模拟真正译不出来的段落）。 */
+  function replyDroppingAlways(dropIds) {
+    return (request) => {
+      const payload = JSON.parse(request.messages.at(-1).content[0].text);
+      const body = JSON.stringify(payload.items
+        .filter((item) => !dropIds.includes(item.id))
+        .map((item) => ({ id: item.id, text: `中${item.id}` })));
+      return [{ type: 'text-delta', text: body }, { type: 'finish', reason: { kind: 'stop' } }];
+    };
+  }
+
+  it('★ 漏译补不上时不报完成，推进位置停在缺口之前（0.84.9）', async () => {
+    const { service, state } = boot({ llmChunks: replyDroppingAlways(['4']) });
+    await service.ready;
+    const texts = Array.from({ length: 5 }, (_, index) => line(index));
+    await seedTranscript(service, 'feed:gap1', texts);
+
+    const result = await service.translateTranscriptBatch({ key: 'feed:gap1' });
+    assert.equal(result.translations[4], '');
+    assert.equal(result.unfilled, 1, '缺口要如实回传，界面才能说「还有几段没译」');
+    assert.equal(result.count, 4, '推进位置必须停在缺口之前 —— 推过去这个缺口就再也没人访问了');
+    assert.equal(result.done, false, '位置到了末尾不等于译完了：中间还有空格');
+    assert.equal(state.llmCalls.length, 2, '补翻只做一次；对同一段反复重试只会让用户白等');
+  });
+
+  it('★ 补翻一次就能补上时照常收尾，不因为漏译卡住整集', async () => {
+    const { service, state } = boot({ llmChunks: replyDroppingOnce(['4']) });
+    await service.ready;
+    const texts = Array.from({ length: 5 }, (_, index) => line(index));
+    await seedTranscript(service, 'feed:gap2', texts);
+
+    const result = await service.translateTranscriptBatch({ key: 'feed:gap2' });
+    assert.equal(result.translations[4], '中4');
+    assert.equal(result.unfilled, 0);
+    assert.equal(result.count, 5);
+    assert.equal(result.done, true);
+    assert.equal(state.llmCalls.length, 2, '一次批翻 + 一次缺口补翻');
+  });
+
+  it('★ 缺口在中间时下一批从缺口起，不会跳过它往下走', async () => {
+    const { service } = boot({ llmChunks: replyDroppingAlways(['2']) });
+    await service.ready;
+    const texts = Array.from({ length: 5 }, (_, index) => line(index));
+    await seedTranscript(service, 'feed:gap3', texts);
+
+    const first = await service.translateTranscriptBatch({ key: 'feed:gap3' });
+    assert.equal(first.count, 2, '缺在第 3 段 ⇒ 只推进 2 段');
+    assert.equal(first.done, false);
+
+    // 客户端下一次会传 start=2（= from + count），这一批必须**从缺口那一段开始**
+    const second = await service.translateTranscriptBatch({ key: 'feed:gap3', start: 2 });
+    assert.equal(second.from, 2);
+    assert.equal(second.unfilled, 1, '从缺口续翻仍然补不上 —— 位置不许越过它');
+    assert.equal(second.count, 0, '缺口在批首 ⇒ 一步都推不动，客户端会据此停下而不是死循环');
+  });
+
+  it('读缓存的完成判据是「每段都有译文」，不看段数（与批次口径一致）', async () => {
+    const { service } = boot({ llmChunks: translateReply });
+    await service.ready;
+    const texts = Array.from({ length: 3 }, (_, index) => line(index));
+    await seedTranscript(service, 'feed:gap4', texts);
+    await service.translateTranscriptBatch({ key: 'feed:gap4' });
+
+    const cached = await service.transcriptStore.readTranslation('feed:gap4');
+    await service.transcriptStore.writeTranslation('feed:gap4', {
+      translations: ['中0', '', '中2'],
+      sourceHash: cached.sourceHash,
+      model: cached.model,
+      via: cached.via,
+    });
+    const after = await service.getTranscriptTranslation({ key: 'feed:gap4' });
+    assert.equal(after.done, false, '盘上有个洞却报「已完成」—— 用户会以为中英混排是自己的错觉');
+  });
+
+  it('没有字幕时给 NO_TRANSCRIPT（不是空数组：界面要说「先获取字幕」）', async () => {
+    const { service } = boot({ llmChunks: translateReply });
+    await service.ready;
+    await assert.rejects(
+      () => service.translateTranscriptBatch({ key: 'feed:none' }),
+      (error) => error.code === 'NO_TRANSCRIPT',
+    );
+  });
+
+  it('读缓存：译过之后 done=true；字幕文本一变就整份作废', async () => {
+    const { service } = boot({ llmChunks: translateReply });
+    await service.ready;
+    const texts = Array.from({ length: 3 }, (_, index) => line(index));
+    await seedTranscript(service, 'feed:tr4', texts);
+    await service.translateTranscriptBatch({ key: 'feed:tr4' });
+
+    const first = await service.getTranscriptTranslation({ key: 'feed:tr4' });
+    assert.equal(first.done, true);
+    assert.equal(first.total, 3);
+    assert.equal(first.translations[2], '中2');
+
+    // ★ 源站换了转写文本（段数一样、时间轴一样，只有文字变了）：旧译文必须作废，
+    //   否则中文还对得上时间轴、却和耳朵里听到的不是同一句话。
+    await seedTranscript(service, 'feed:tr4', texts.map((text, index) => `${text} (v${index})`));
+    const after = await service.getTranscriptTranslation({ key: 'feed:tr4' });
+    assert.equal(after.done, false);
+    assert.deepEqual(after.translations, ['', '', '']);
   });
 });

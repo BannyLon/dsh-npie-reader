@@ -386,6 +386,92 @@ describe('POST /reveal', () => {
   });
 });
 
+/**
+ * 「跟着选项卡走」的作用域参数（0.86.0）。
+ *
+ * ★ 用**记账版** store（只记参数、不读盘）：这一层要钉的是「参数有没有原样传下去」
+ *   与「非法值有没有被拦在前面」。参数半路丢掉不会报错 —— 症状是界面切了模块、
+ *   导出的还是全部，而没有任何一行日志会说起这件事。
+ * ★ 非法模块必须 400 且**根本不调用** store：静默降级成「全部」会让用户拿到一份
+ *   看起来正常、其实含另两个模块内容的文件，而它已经落在下载目录了。
+ */
+describe('模块作用域（module=）', () => {
+  function makeSpy() {
+    const seen = {};
+    const routes = makeDiaryRoutes({
+      read: async () => ({}),
+      append: async () => ({}),
+      removeEntry: async () => ({}),
+      listMonth: async () => ({}),
+      stats: async () => ({}),
+      search: async (options) => {
+        seen.search = options;
+        return { hits: [], scanned: 0, truncated: false };
+      },
+      exportAll: async (options) => {
+        seen.exportAll = options;
+        return { files: [], total: 0, entries: 0, skippedPrivate: 0, scope: null };
+      },
+      reveal: async (options) => {
+        seen.reveal = options;
+        return { dir: '/tmp/diary', file: '', side: 'daily', module: options?.module ?? '' };
+      },
+    });
+    return { routes, seen };
+  }
+
+  async function hit(routes, path, options = {}) {
+    const res = fakeRes();
+    await routes.handler(fakeReq({ url: `${API}${path}`, ...options }), res);
+    return res;
+  }
+
+  it('/export 把模块原样传下去', async () => {
+    const { routes, seen } = makeSpy();
+    assert.equal((await hit(routes, '/export?module=reflection')).status, 200);
+    assert.equal(seen.exportAll.module, 'reflection');
+    assert.equal(seen.exportAll.includePrivate, false);
+  });
+
+  it('私密模块**自己**就是「含私密」，不必客户端再传 private=1', async () => {
+    const { routes, seen } = makeSpy();
+    assert.equal((await hit(routes, '/export?module=private')).status, 200);
+    assert.equal(seen.exportAll.module, 'private');
+    assert.equal(seen.exportAll.includePrivate, true);
+  });
+
+  it('/search 只有私密模块才去解密，公开模块一律关掉 includePrivate', async () => {
+    const { routes, seen } = makeSpy();
+    await hit(routes, '/search?q=x&module=reflection');
+    assert.equal(seen.search.module, 'reflection');
+    assert.equal(seen.search.includePrivate, false,
+      '公开模块还在解私密 —— 那把密钥唯一的用途被用在了不需要它的地方');
+    await hit(routes, '/search?q=x');
+    assert.equal(seen.search.module, '', '不带 module 时不该硬塞一个');
+  });
+
+  it('★ 认不出的模块 ⇒ 400，而且**不调** store（绝不静默降级成「全部」）', async () => {
+    const { routes, seen } = makeSpy();
+    for (const path of ['/export?module=reflektion', '/search?q=x&module=nope']) {
+      const res = await hit(routes, path);
+      assert.equal(res.status, 400, path);
+      assert.equal(res.json.code, 'BAD_MODULE', path);
+    }
+    assert.equal(seen.exportAll, undefined, '非法模块仍然导出了东西');
+    assert.equal(seen.search, undefined, '非法模块仍然搜了一遍');
+  });
+
+  it('/reveal 带模块；老客户端不带 body 时仍是空模块（打开根目录）', async () => {
+    const { routes, seen } = makeSpy();
+    assert.equal((await hit(routes, '/reveal', { method: 'POST', ...jsonBody({ module: 'private' }) })).status, 200);
+    assert.equal(seen.reveal.module, 'private');
+    assert.equal((await hit(routes, '/reveal', { method: 'POST' })).status, 200);
+    assert.equal(seen.reveal.module, '');
+    const bad = await hit(routes, '/reveal', { method: 'POST', ...jsonBody({ module: 'nope' }) });
+    assert.equal(bad.status, 400);
+  });
+});
+
 describe('退化与兜底', () => {
   it('★ 依赖缺失 ⇒ 501，而不是让整个 handler 抛错', async () => {
     const bare = makeDiaryRoutes({});

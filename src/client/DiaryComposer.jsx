@@ -33,6 +33,15 @@
  *   - 高度跟着内容长、⌘↵ 提交、私密模块的情绪行插在工具栏与底栏之间。
  * 已删掉的是 0.33 那圈 2px 品牌绿 outline 与灰底圆角盒子 —— 那是「表单」的样子，
  * 不是「稿纸」的样子。
+ *
+ * ★ **这里没有、也不该随手加「贴图」（0.73.1 的约束）**：
+ *   灵感速记浮层（`QuickCapture`）是唯一往 `diary/assets/` 写图的地方。原因不是
+ *   「编辑器里用不上图」，而是**清理口径**：`store.referencedAssets()` 只扫公开的
+ *   `daily/*.md`，因为私密正文是加密的、宿主读不到里面的 url。这里一旦接了贴图，
+ *   私密条目引用的图就落进那个盲区，`prune()` 会把它们当孤儿删掉 —— 而症状要到
+ *   几个月后翻旧日记时才出现（一张碎图，且原图已经没了）。
+ *   ⇒ 真要在这里加贴图，**必须同时**改 `referencedAssets()` 的口径（例如把私密
+ *   正文的图片名单单独落到一个明文索引里），两处一起改，不能只改这一边。
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { sanitizeHtml } from '../host/sanitize.js';
@@ -117,6 +126,15 @@ const COMMANDS = [
 const RICH_BLOCKED = new Set(['tag']);
 
 /**
+ * 色板的中文名，只服务 `aria-label` / `title`。
+ * ★ 色名（`amber`）本身不进界面：读屏软件念出「amber 便签」等于用英文念了一遍颜色，
+ *   而界面上这排圆点**只有颜色没有字** —— 看不见颜色的人在这里需要的是「黄便签」。
+ */
+const TONE_LABEL = {
+  amber: '黄', rose: '粉', sky: '蓝', mint: '绿', lilac: '紫', cream: '米',
+};
+
+/**
  * @param props.value     当前文本
  * @param props.onChange  `(next: string) => void`
  * @param props.onSubmit  点「记下来」/⌘↵
@@ -128,11 +146,16 @@ const RICH_BLOCKED = new Set(['tag']);
  * @param props.header    编辑器**上方**的一行（读后感的「结构化读后感模板」条）。
  *   它不属于正文，所以不能塞进 markdown：写进正文会跟着 `.md` 落盘，
  *   而且用户删掉那行标题就再也点不到「套用模板」了。
+ * @param props.tones     色板（便签墙用）。**给了才渲染色板，并且整块变成一张纸**：
+ *   灵感模块是「写一张便签贴到墙上」，私密与读后感不是，所以这里不按 variant 判，
+ *   按「有没有色板」判 —— 少一个分支，也不会出现「私密页忽然长出一排圆点」。
+ * @param props.tone      当前选中的色名（`NOTE_TONES` 里的一项）
+ * @param props.onTone    `(tone: string) => void`
  */
 export function DiaryComposer({
   value, onChange, onSubmit, placeholder, variant = 'quick', busy = false, disabled = false,
   submitLabel = '记下来', actions = null, maxHeight = 320, autoFocus = false, inputRef = null,
-  extra = null, insertRef = null, header = null,
+  extra = null, insertRef = null, header = null, tones = null, tone = '', onTone = null,
 }) {
   const el = useRef(null);
   const [mode, setMode] = useState('edit');
@@ -329,6 +352,10 @@ export function DiaryComposer({
   return (
     <div className="npr-write" data-variant={variant} data-mode={mode}
       data-drop={dropping ? 'yes' : 'no'}
+      data-wall={tones ? 'yes' : undefined}
+      /* 选中的纸色落在这一层：CSS 只认 `[data-tone]` 去挑 `--note-hue`，
+         所以「点一下粉点，整张卡跟着变粉」不需要任何额外的内联样式。 */
+      data-tone={tones ? tone : undefined}
       /*
        * ★ 拖拽落点用 `clientX/clientY` 交给 `insert(…, coords)` 去算 ProseMirror
        *   的文档位置（`posAtCoords`）。用「插到末尾」会让拖拽等于没做 ——
@@ -429,6 +456,20 @@ export function DiaryComposer({
       {extra}
 
       <div className="npr-write-foot">
+        {/* 色板：便签墙的「挑一张纸」。排在底栏最左 —— 它决定的是这张便签**长什么样**，
+            与右边「字数 / 记下来」不是一类动作，所以中间隔着一段会自己撑开的空白。 */}
+        {tones && (
+          <div className="npr-write-tones" role="group" aria-label="便签颜色">
+            {tones.map((item) => (
+              <button key={item} type="button" className="npr-write-tone" data-tone={item}
+                aria-pressed={tone === item}
+                aria-label={`${TONE_LABEL[item] ?? item}色便签`}
+                title={`${TONE_LABEL[item] ?? item}色便签`}
+                disabled={disabled}
+                onClick={() => onTone?.(item)} />
+            ))}
+          </div>
+        )}
         <span className="npr-write-hint">{chars} 字 · ⌘/Ctrl + Enter</span>
         {actions}
         <button type="button" className="npr-diary-save" disabled={disabled || busy || value.trim() === ''}

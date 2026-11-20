@@ -48,6 +48,16 @@ await esbuild.build({
   platform: 'node',
   format: 'esm',
   target: 'node22',
+  /**
+   * ★ 宿主也拿一份版本号（0.85.4）。
+   *
+   * 这一处不是「顺手加的」：宿主半区在**主进程**里，改完必须退出 dsh 重开才会
+   * 重新加载；客户端半区在面板里，刷新就换。两者版本因此经常不一致，而症状
+   * 恰好是「界面说已经修好，实际行为还是旧的」—— 上一轮就被这件事骗过一次
+   * （`content-range` 补齐写完了，宿主却仍是两小时前加载的旧模块）。
+   * 有了这个常量，`/library/audio-info` 能自报版本，客户端一比对就知道该信谁。
+   */
+  define: { __NPIE_READER_VERSION__: JSON.stringify(PLUGIN_VERSION) },
   outfile: join(here, 'lib/index.js'),
   external: ['@deepseek-ai/*', 'node:*'],
   sourcemap: false,

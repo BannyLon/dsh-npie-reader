@@ -95,29 +95,35 @@ describe('入口：三个 tab 都在，且语义说得清', () => {
   });
 });
 
-describe('切换：三条分支互斥渲染，且「离开」都带目标', () => {
-  it('ReaderPage 按 mode 三选一渲染，日记那条真的挂上了 DiaryApp', () => {
+describe('切换：四条分支互斥渲染，且「离开」都带目标', () => {
+  it('ReaderPage 按 mode 四选一渲染，日记那条真的挂上了 DiaryApp', () => {
     assert.match(reader, /mode === 'library' \?/, '书架分支不见了');
     assert.match(reader, /mode === 'diary' \?/, '日记分支不见了 —— 第三个 tab 点了没反应');
     assert.match(reader, /<DiaryApp /, 'DiaryApp 没被渲染');
+    // 0.67.0 的第四个视图：论文。
+    assert.match(reader, /mode === 'paper' \?/, '论文分支不见了 —— 第四个 tab 点了没反应');
+    assert.match(reader, /<PapersApp /, 'PapersApp 没被渲染');
     // 反向对照：日记必须排在「订阅」那一支**之前**，否则永远落到 else 里。
     const diaryAt = reader.indexOf("mode === 'diary' ?");
     const feedsAt = reader.indexOf('className={`npr-workarea${askContext');
     assert.ok(diaryAt > 0 && feedsAt > 0 && diaryAt < feedsAt, '日记分支落在了订阅分支之后 ⇒ 恒不生效');
+    // 论文同理：三条具名分支都必须排在 else（订阅）之前。
+    const paperAt = reader.indexOf("mode === 'paper' ?");
+    assert.ok(paperAt > 0 && paperAt < feedsAt, '论文分支落在了订阅分支之后 ⇒ 恒不生效');
   });
 
-  it('从书架/日记往回切时，目标模式各自映射对（不是恒 feeds）', () => {
-    assert.match(reader, /<LibraryApp[^>]*onExit=\{\(next\) => setMode\(next === 'diary' \? 'diary' : 'feeds'\)\}/,
-      '书架的 onExit 没认出 diary ⇒ 在书架里点「日记」会落回订阅');
-    assert.match(reader, /<DiaryApp[^>]*onExit=\{\(next\) => setMode\(next === 'library' \? 'library' : 'feeds'\)\}/,
-      '日记的 onExit 没认出 library ⇒ 在日记里点「书」会落回订阅');
+  it('从书架/论文/日记往回切时，目标模式各自映射对（不是恒 feeds）', () => {
+    assert.match(reader, /<LibraryApp[^>]*onExit=\{\(next\) => setMode\(next === 'diary' \|\| next === 'paper' \? next : 'feeds'\)\}/,
+      '书架的 onExit 没认出 diary/paper ⇒ 在书架里点「日记」或「论文」会落回订阅');
+    assert.match(reader, /<DiaryApp[^>]*onExit=\{\(next\) => setMode\(next === 'library' \|\| next === 'paper' \? next : 'feeds'\)\}/,
+      '日记的 onExit 没认出 library/paper ⇒ 在日记里点「书」或「论文」会落回订阅');
   });
 
   it('★ 反向对照：把 onExit 写回无参形态，上面那条必须变红', () => {
     // 旧写法（两个视图时代）是 `onExit={() => setMode('feeds')}` —— 第三个视图一来
     // 它就把「去日记」压成「回订阅」，而且**没有任何报错**。
     const old = reader.replace(
-      /onExit=\{\(next\) => setMode\(next === 'diary' \? 'diary' : 'feeds'\)\}/,
+      /onExit=\{\(next\) => setMode\(next === 'diary' \|\| next === 'paper' \? next : 'feeds'\)\}/,
       "onExit={() => setMode('feeds')}",
     );
     assert.notEqual(old, reader, '替换没生效，反向对照是假绿');
@@ -361,13 +367,23 @@ describe('`L` 灵感浮层：只有一个输入框', () => {
     assert.doesNotMatch(quick, /<input/, '浮层里出现了输入框');
     assert.doesNotMatch(quick, /<select/, '浮层里出现了下拉选择');
     assert.equal((quick.match(/<textarea/g) ?? []).length, 1, '浮层里不止一个输入框');
-    assert.equal((quick.match(/<button/g) ?? []).length, 2, '浮层的按钮不止「关闭」与「保存」两个');
-    // ★ 只数个数是不够的：2 这个数字对「把保存换成别的操作」完全不敏感 —— 只要按钮总数
-    //   还是 2，就算把「保存」删掉、塞一个无关按钮进来，这条判据照样绿。
-    //   所以还要点名:这两个按钮必须是**关闭**与**保存**。
+    // ★ 0.72.0 起有四颗按钮：**关闭 / 记下来**是常驻的，**清空**只在「恢复了草稿」时出现、
+    //   **标签候选**只在「正打着 `#`」时出现。所以判据不再只是数个数 —— 数个数对
+    //   「把保存换成别的操作」完全不敏感（只要总数还是那个数，删掉「保存」照样绿）；
+    //   现在还要钉住后两颗**真的在条件块里**，否则它们就成了常驻的第二排控件。
+    assert.equal((quick.match(/<button/g) ?? []).length, 4, '浮层的按钮多了 —— 检查是否长出了常驻控件');
     assert.match(quick, /aria-label="关闭"/, '浮层没有「关闭」按钮');
-    assert.match(quick, /保存/, '浮层没有「保存」按钮');
-    assert.match(quick, /appendDiaryEntry\(\{ date: dateKey\(\), kind: '灵感', body: draft, source, meta \}\)/);
+    assert.match(quick, /记下来/, '浮层没有「记下来」按钮');
+    assert.ok(quick.indexOf('npr-quick-discard') > quick.indexOf('{restored &&'),
+      '「清空」不在「有草稿要恢复」那个条件块里 —— 它会变成常驻按钮');
+    assert.ok(quick.indexOf('npr-quick-tag${') > quick.indexOf('{suggest &&'),
+      '标签候选不在 `suggest` 条件块里 —— 它会变成常驻的一排按钮');
+    // 载荷分字段点：整串匹配一旦改个换行就整条失效，而它守的其实是四件事。
+    assert.match(quick, /appendDiaryEntry\(\{/);
+    assert.match(quick, /kind: '灵感'/, 'kind 不是「灵感」');
+    assert.match(quick, /body: draft/, '正文不是用户敲的那一份');
+    assert.match(quick, /source: origin\.source/, 'source 没走 origin（恢复草稿时会挂错来源）');
+    assert.match(quick, /meta: origin\.meta/, 'meta 没走 origin（恢复草稿时会挂错书）');
   });
 
   it('★ 反向对照：把「关闭」按钮删掉，上面的点名判据必须变红', () => {
@@ -444,9 +460,20 @@ describe('私密：三个入口都必须带 scope', () => {
 describe('导出：私密那半边要两次点击', () => {
   it('第一次只上膛，第二次才下载', () => {
     assert.match(diary, /if \(!exportArmed\) \{ setExportArmed\(true\); return; \}/);
-    assert.match(diary, /fetchDiaryExport\(\{ includePrivate: true \}\)/);
+    assert.match(diary, /fetchDiaryExport\(\{ includePrivate: true, module: 'private' \}\)/);
+    /*
+     * ★ 0.86.0 改了这条判据，方向是「更窄」：默认导出不是「全部日记」，而是
+     *   **当前模块**。用户 2026-11-19 的原话是「明明我切到读后感了，点击下载
+     *   下载的还是日记」—— 旧判据 `fetchDiaryExport\(\)` 恰好把这个 bug
+     *   钉成了正确行为，所以它必须跟着改，而且配一条反向锚点。
+     */
+    assert.match(diary, /fetchDiaryExport\(\{ module: moduleValue \}\)/,
+      '默认导出没带模块 —— 又退回「下载整本日记」');
+    assert.doesNotMatch(diary, /fetchDiaryExport\(\)/,
+      '出现了不带参数的导出 —— 那条路写的是全部日记，与「当前模块」无关');
     // 默认导出**不能**带私密：那条路写的是下载目录里的明文。
-    assert.match(diary, /fetchDiaryExport\(\)/);
+    assert.doesNotMatch(diary, /fetchDiaryExport\(\{ includePrivate: true \}\)/,
+      '默认导出带上了私密 —— 明文会一次点击就落到下载目录');
   });
 });
 
@@ -799,7 +826,9 @@ describe('灵感流转：按 L 时自动带上正在读的书与章节', () => {
     assert.match(quick, /meta\.page = linked\.page;/, 'meta.page 没写');
     assert.match(quick, /meta\.article = linked\.articleKey;/, 'meta.article 没写 —— 文章的灵感没有出处');
     // 关联必须**看得见**，但它是一行纯文本（不是控件，见上一条 describe）。
-    assert.match(quick, /\{linked && <p className="npr-quick-link">会记到 \{where\}<\/p>\}/,
+    // ★ 0.72.0 起读的是 `origin.where`（= 草稿来源或当前上下文），因为恢复草稿时
+    //   这一行必须显示**草稿原来的**出处 —— 显示当前上下文就是在骗人。
+    assert.match(quick, /\{origin\.where && <p className="npr-quick-link">会记到 \{origin\.where\}<\/p>\}/,
       '「会记到哪儿」那行没了 —— 关联变成悄悄发生的');
     // ★ 书名号**不能无条件套**：书源标题本身就带《》（`《译文名著文库》 076[法]雨果…`），
     //   再套一层会存成 `《《译文名著文库》 076…》` —— 用户 2026-10-27 的截图就是它，
@@ -809,16 +838,18 @@ describe('灵感流转：按 L 时自动带上正在读的书与章节', () => {
   });
 
   it('★ 反向对照：删掉 meta.book 那一行，判据必须变红', () => {
-    const old = quick.replace('        meta.book = linked.bookId;\n', '');
+    // 不写死缩进：0.72.0 把 meta 的拼装挪进了 `useMemo`，行首空格变过一次，
+    // 而写死缩进的反向对照会在那次改动里**静默失效**（替换没生效 → 断言仍然绿）。
+    const old = quick.replace(/\n\s*meta\.book = linked\.bookId;/, '');
     assert.notEqual(old, quick, '替换没生效，反向对照是假绿');
     assert.doesNotMatch(old, /meta\.book = linked\.bookId;/);
   });
 
   it('★ 没有阅读上下文时不写 meta.book（不能凭空挂书）', () => {
     // 守卫的形状就是「`linked` 为假时整个 meta 是空对象」——如果哪天有人把
-    // `meta.book` 挪到 `if (linked)` 外面，订阅页记的灵感也会被挂上一个空 id。
-    assert.match(quick, /if \(linked\) \{[\s\S]{0,200}?if \(linked\.bookId\) \{\n\s*meta\.book = linked\.bookId;/,
-      'meta 的写入不在 `if (linked)` / `if (linked.bookId)` 里 —— 没有上下文时会写出一个空的书 id');
+    // `meta.book` 挪到 `if (!linked) return` 前面，订阅页记的灵感也会被挂上一个空 id。
+    assert.match(quick, /if \(!linked\) return meta;[\s\S]{0,120}?if \(linked\.bookId\) \{\n\s*meta\.book = linked\.bookId;/,
+      'meta 的写入不在「无上下文就返回空对象」/ `if (linked.bookId)` 之后 —— 没有上下文时会写出一个空的书 id');
   });
 });
 
@@ -1134,7 +1165,15 @@ describe('0.36：时间轴联动 / 一天太长 / 标签全量', () => {
     assert.match(diary, /const entriesShown = dayAll \? listEntries : listEntries\.slice\(-DAY_PREVIEW\)/,
       '默认没有截断 —— 一天几十条就要滚八屏');
     assert.match(diary, /更早还有 \{entriesHidden\} 条/, '折叠后没有说自己藏了多少 —— 等于把记录藏起来');
-    assert.match(diary, /\{entriesShown\.map\(/, '列表没改成渲染 entriesShown');
+    /*
+     * ★ 0.64：灵感模块改成便签墙之后是**两条渲染路**（墙 / 流水），所以不能只查
+     *   `{entriesShown.map(` 这一串字面量 —— 那样会把「墙」当成「列表没渲染」。
+     *   两条都钉住更严：墙倒序铺一份，私密/读后感照原样铺一份。
+     */
+    assert.match(diary, /\{entriesShown\.slice\(\)\.reverse\(\)\.map\(/,
+      '便签墙没有铺 entriesShown');
+    assert.match(diary, /\{moduleValue !== 'inspiration' && entriesShown\.map\(/,
+      '流水列表没改成渲染 entriesShown');
   });
 
   it('★ 点开被折叠的那一条时要自动展开，换天则把两个临时状态收回', () => {
@@ -1172,7 +1211,9 @@ const diaryCss = read('refinements.css');
 describe('0.37：写入口固定 / 每条三行 / AI 面板可拖', () => {
   it('★ 写入口在固定的 dock 里，不在滚动区里', () => {
     // 顺序即结构：dock 必须先出现，scroll 在它后面 —— 反过来就是「dock 在滚动区里面」。
-    const dockAt = diary.indexOf('<div className="npr-diary-dock">');
+    // ★ 0.64 起这一层多了 `data-wall` 属性（便签墙要收掉那条分界线），所以按
+    //   「类名 + 可有可无的属性」找它，而不是整串字面量 —— 结构判据一个字都不放宽。
+    const dockAt = diary.search(/<div className="npr-diary-dock"(?:\s[^>]*)?>/);
     const scrollAt = diary.indexOf('<div className="npr-diary-scroll">', dockAt);
     assert.ok(dockAt > 0, '没有 dock —— 写入口还和记录挤在同一个滚动容器里');
     assert.ok(scrollAt > dockAt, 'dock 不在滚动区之前（写入口还是会被滚走）');
@@ -1185,7 +1226,7 @@ describe('0.37：写入口固定 / 每条三行 / AI 面板可拖', () => {
   });
 
   it('★ dock 与滚动区各带一份 sheet（宽度约束不能一边有一边没有）', () => {
-    const dockAt = diary.indexOf('<div className="npr-diary-dock">');
+    const dockAt = diary.search(/<div className="npr-diary-dock"(?:\s[^>]*)?>/);
     const scrollAt = diary.indexOf('<div className="npr-diary-scroll">', dockAt);
     assert.match(diary.slice(dockAt, scrollAt), /<div className="npr-diary-sheet">/,
       'dock 里没有 sheet —— 600px 的宽度约束只作用在滚动区，上下两块左边缘会差几像素');
@@ -1200,7 +1241,8 @@ describe('0.37：写入口固定 / 每条三行 / AI 面板可拖', () => {
     // 「要不要给展开按钮」必须量出来：宽度可拖，字数换算不准。
     assert.match(diary, /node\.scrollHeight - node\.clientHeight > 1/, '展开按钮没有按实际溢出判断');
     assert.match(diary, /new ResizeObserver\(measure\)/, '拖窗口/拖侧栏后不会重新量 —— 按钮会残留');
-    assert.match(diary, /\{over && \(/, '没有 overflow 判据就直接给了按钮（每条都会有「展开全文」）');
+    // 便签墙上不给这颗「展开全文」文字按钮（出口是便签脚上那枚图标），所以多了 `!noMore`。
+    assert.match(diary, /\{over && (?:!noMore && )?\(/, '没有 overflow 判据就直接给了按钮（每条都会有「展开全文」）');
   });
 
   it('★ 展开是**窗口**，不是把这一条就地拉长', () => {
@@ -1250,7 +1292,7 @@ describe('0.38：写作坞的闸 / 提示词换行 / 侧栏保留 / 来源筛选
   it('★ `hasDock` 必须真的被用来包住写作坞（不是声明了却没人用）', () => {
     // 声明了不用的后果就是 0.37 那个 bug：dock 无条件渲染，读后感「还没选书」时
     // 顶上一条空白的 24px 带 + 一条边线，看起来像加载失败。
-    assert.match(diary, /\{hasDock && \(\s*\n\s*<div className="npr-diary-dock">/,
+    assert.match(diary, /\{hasDock && \(\s*\n\s*<div className="npr-diary-dock"(?:\s[^>]*)?>/,
       '写作坞没有被 hasDock 包住 —— 而 `hasDock` 又声明着，正是 0.37 漏掉 `)}` 的现场');
     // 闸的三个分支都要在（灵感恒有 / 私密解锁 / 读后感选到读完的书）。
     assert.match(diary, /const hasDock = moduleValue === 'inspiration'/, 'hasDock 的判据不见了');
@@ -1826,7 +1868,10 @@ describe('读后感侧栏：区分已写 / 待写，封面不再退化成方块'
   });
 
   it('写完一篇要重算索引，不能停在打开这一页时的快照', () => {
-    const refresh = /async function refresh\(\)[\s\S]*?\n  \}/.exec(diary)?.[0] ?? '';
+    // ★ 0.73 起 `refresh` 带一个「刷新哪一天」的参数（灵感记到今天，而界面可能
+    //   还停在用户翻看的那一天）。锚点放宽到「有没有参数」，但仍钉死函数体边界 ——
+    //   写成 `refresh\b` 会让它匹配到别的调用处，判据就变成假绿。
+    const refresh = /async function refresh\([^)]*\)[\s\S]*?\n  \}/.exec(diary)?.[0] ?? '';
     assert.notEqual(refresh, '', '找不到 refresh —— 锚点失效');
     assert.match(refresh, /await reloadReflections\(\);/, '写完读后感后「已写」标记不会变');
   });
@@ -2044,5 +2089,55 @@ describe('0.51：心绪潮汐（走势线）与往日回声（引文）', () => 
     // **没有**变成「日历的第二种排法」：日历里没有纵轴，也没有走势。
     assert.match(read('diary-tide.js'), /scoreY/, '纵轴没了 —— 那就退化成日历上又一排点');
     assert.match(diary, /selected=\{selected\}/, '曲线和日历没有共同的锚点（选中那一天）');
+  });
+});
+
+/**
+ * 2026-11-11 用户报的两个 bug，同一张截图里的两件事：
+ *   ① 「灵感记录是按当天的时间记录，不应该选中那天就记录到哪天里」
+ *   ② 「你的灵感时间线上记录的内容为什么有 ** 号」
+ *
+ * 两者都不会报错，只会「看起来不对」：
+ *   ① 的形态是「条目被写进上周那个 .md，时间轴上却找不到」——文件里明明有；
+ *   ② 的形态是同一串文字在右边卡片里是粗体、在左边侧栏里露着两个星号。
+ *
+ * ★ 为什么这层是源码级：判据在**落点日期**与**哪一处用了剥标记函数**，真跑要
+ *   宿主 + DOM + 时钟。每条都配反向对照（退回旧写法必须变红）。
+ */
+describe('0.73：灵感记到今天，预览不印 Markdown 标记', () => {
+  it('★ 灵感的落点日期是「此刻」，不是「正在翻的那一天」', () => {
+    // 现算而不是用挂载时的 `today`：面板开着跨零点，写进去的必须是今天。
+    assert.match(diary, /const at = dateKey\(\);/, '没有现算「此刻」的日期');
+    assert.match(diary, /const date = moduleValue === 'private' \? selected : at/,
+      '灵感仍然写进 selected —— 翻到上周随手记一句会被塞进上周那个文件');
+    // 反向对照：旧写法（灵感与私密共用 selected）必须已经不在了。
+    assert.equal(diary.includes("date: moduleValue === 'reflection' ? today : selected"), false,
+      '旧的三元还在 —— 灵感照样落到选中那天');
+  });
+
+  it('★ 记到别的日子 ⇒ 界面跟过去（否则「写了看不见」）', () => {
+    // 两件事必须一起做：正文换成今天，侧栏展开的日期也换成今天。
+    // 只换正文时，右栏已经是今天、左栏还展开着 10 月 29 日 —— 用户会以为条目丢了。
+    assert.match(diary, /if \(date !== selected\) \{[\s\S]{0,160}?pick\(date\);/,
+      '保存后没有换到实际落点那天');
+    assert.match(diary, /if \(date !== selected\) \{[\s\S]{0,160}?setOpenDay\(date\);/,
+      '侧栏展开的日期没跟着换');
+    assert.match(diary, /async function refresh\(at = selected\)/, '刷新还钉死在 selected 上');
+    assert.match(diary, /await refresh\(date\);/, '刷新没用实际落点');
+    // 回执要说清落在哪天：写着「已记下」而界面停在 10 月 29 日，用户不知道它去哪了。
+    assert.match(diary, /moved \? ' · 记在今天' : ''/, '回执没有说出「记在今天」');
+  });
+
+  it('★ 预览层剥标记：时间轴 / 悬停 / 往日回声 / 搜索命中同一口径', () => {
+    const lines = read('diary-lines.js');
+    assert.match(lines, /const text = plainSnippet\(preview\)/, 'entryLines 没有剥标记');
+    assert.match(diary, /title=\{`\$\{entry\.time\} \$\{plain\}`\}/, '悬停提示还是原始 preview');
+    assert.match(diary, /plainSnippet\(row\.preview\)/, '「本月这一档情绪」的列表还是原始 preview');
+    assert.match(diary, /plainSnippet\(cell\.preview\)/, 'quoteOf 还是原始 preview');
+    // 搜索命中是宿主 `search()` 对 `body` 的切片，和时间轴同一类纯文本预览。
+    assert.match(diary, /plainSnippet\(hit\.snippet\)/, '搜索命中还是原始 snippet');
+    // 反向对照：可见文本再退回 `row.preview`，星号就重新出现在屏幕上。
+    assert.equal(diary.includes('{row.preview ||'), false, '还有一处直接印原始 preview');
+    assert.equal(diary.includes('{hit.snippet}'), false, '还有一处直接印原始 snippet');
   });
 });

@@ -24,7 +24,7 @@
  *   ⑦ 沉浸态只藏了工具栏，没藏**书架那一列**（用户要的是「左边两列都不显示」）。
  *
  * 判据（每条都配一次反向对照：注入坏规则之后必须变红）：
- *   ⓪ 分工：源文本里顶部恰好 7 个 `npr-book-pill-item`、浮动列恰好 7 个 `npr-book-fab-slot`，
+ *   ⓪ 分工：源文本里顶部恰好 8 个 `npr-book-pill-item`、浮动列恰好 7 个 `npr-book-fab-slot`，
  *      两边互不串味；hover 展开的那条 CSS 已经**不存在**；
  *   ① 顶部只剩一条 10px 拖动条，铺满宽度、透明；
  *   ② 元信息行在正常流里（底边不越过舞台顶边）、只有一行、**不含书名**；
@@ -186,7 +186,9 @@ for (const anchor of [
   '.npr-book-fab.is-open .npr-book-fab-slot {',
   'transform: translate(var(--npr-fab-x, 0px), var(--npr-fab-y, 0px)) scale(1);',
   'width: var(--npr-fab-size, 38px);',
-  'transition-delay: calc((6 - var(--npr-fab-i, 0)) * 20ms);',
+  /* 0.76.1：延迟基数改成按页传的 `--npr-fab-last`（槽位数 − 2），因为这条规则是
+     PDF 7 槽与电子书 9 槽**共用**的。默认值 6 保持 PDF 侧行为不变（它不传这个变量）。 */
+  'transition-delay: calc((var(--npr-fab-last, 6) - var(--npr-fab-i, 0)) * 20ms);',
   '.npr-book-fab-label { position: absolute; right: calc(100% + 8px);',
   '.npr-workarea.is-book-immersive .npr-sidebar,',
   '.npr-book-palette { position: absolute; z-index: 50; top: calc(100% + 8px); right: 0;',
@@ -245,7 +247,21 @@ const countIn = (text, needle) => text.split(needle).length - 1;
  *   于是这条判据从 0.26.0 起一直是红的（重门禁不在默认那 8 项里，谁也没看见）。
  *   计数是**契约**：加一颗胶囊就必须同时改这里，否则红着的门禁会被当成噪音。
  */
-const PILL_COUNT = 7;
+/**
+ * 顶部胶囊的开关数。0.70.0 加了「翻译本页／显示原文」⇒ 7 → 8；
+ * 0.71.0 把「本页 / 全本」合进一颗「翻译」下拉 ⇒ 仍是 8 颗开关
+ * （用户 2026-11-06 原话「合二为一」；两条途径都在下拉菜单里）。
+ * 0.71.3 加回一颗「中/英」查看开关 ⇒ 9 颗（用户 2026-11-07：「还有有中英查看
+ * 的按钮」——把语言切换从下拉菜单搬到工具栏，一次点击就能对着原文核对译文）。
+ * 0.71.4 又把「中/英」并回「翻译」那一颗 ⇒ 回到 8 颗。用户当天否掉了 9 颗那版：
+ * 「菜单堆叠在顶部菜单栏，非常拥挤，而且不好理解」「根本没办法判断这一页翻译
+ * 没翻译」。合并后的形态是**一颗按钮两态**：这一页没译文时写「翻译」，有译文时
+ * 写「中/英」，菜单项跟着换 —— 两个阶段互斥，本来就不该是两个按钮。
+ * ★ 这是**契约快照**：改生产代码加了/删了一颗开关，这里必须同步，否则
+ *   「⓪ 分工」会红。同时下面的 DOM 桩也要跟着改，不然「DOM 实测」
+ *   那几条会用一份落后于真实界面的假页面去量位置。
+ */
+const PILL_COUNT = 8;
 const SLOT_COUNT = 7;
 
 /** 去掉注释的 CSS：断言「某类名已清干净」时必须忽略注释（注释里写过的名字不算规则）。 */
@@ -294,6 +310,17 @@ const html = `<!doctype html><meta charset="utf-8">
           <button type="button" class="npr-book-pill-item" id="pillFind" aria-pressed="false" title="书内搜索（⌘F）">
             <svg width="14" height="14" aria-hidden="true"><circle cx="6" cy="6" r="4" fill="none" stroke="currentColor"/></svg><span>搜索</span>
           </button>
+          <!-- 0.70.0 页级按需翻译：与生产代码一样紧跟「搜索」，常驻可见。 -->
+          <!-- 0.71.0：两颗「翻译本页 / 翻译全本」合成一颗下拉（用户「合二为一」）。
+               0.71.4：中/英也并回这一颗 —— 文字随「这一页有没有译文」在
+               「翻译 / 中/英」之间变，这里画的是**没译文**那一态（最宽的那一态：
+               图标 + 两个汉字 + 箭头，量宽度就该拿最宽的来量）。 -->
+          <span class="npr-book-translate-wrap">
+            <button type="button" class="npr-book-pill-item" id="pillTranslate" aria-pressed="false" title="翻译">
+              <svg width="14" height="14" aria-hidden="true"><path d="M2 5h10M7 2v3M11 19l4-8 4 8" stroke="currentColor"/></svg><span>翻译</span>
+              <svg width="11" height="11" aria-hidden="true"><path d="m3 5 3 3 3-3" stroke="currentColor" fill="none"/></svg>
+            </button>
+          </span>
           <button type="button" class="npr-book-pill-item" id="pillDigest" aria-pressed="false" title="本书目录">
             <svg width="14" height="14" aria-hidden="true"><path d="M4 3v9" stroke="currentColor"/></svg><span>目录 29</span>
           </button>
@@ -919,7 +946,7 @@ try {
   const slotInChrome = countIn(CHROME_SRC, 'npr-book-fab-slot');
   const slotInFab = countIn(FAB_SRC, 'npr-book-fab-slot');
   const pillInFab = countIn(FAB_SRC, 'npr-book-pill-item');
-  check(`⓪ 顶部胶囊恰好 ${PILL_COUNT} 项（标记读完 / 伴读 / 划线 / 搜索 / 目录 / 配色 / 沉浸）`,
+  check(`⓪ 顶部胶囊恰好 ${PILL_COUNT} 项（标记读完 / 伴读 / 划线 / 搜索 / 翻译[中英同颗] / 目录 / 配色 / 沉浸）`,
     pillInChrome === PILL_COUNT,
     `BookReader.jsx 的 .npr-book-chrome 块里 npr-book-pill-item 出现 ${pillInChrome} 次`);
   check(`⓪ 右下角恰好 ${SLOT_COUNT} 格（页码 / 上下页 / 适宽 / 适应窗口 / 放大 / 缩小）`,

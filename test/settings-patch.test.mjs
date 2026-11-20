@@ -48,11 +48,14 @@ function snapshotWithTwoSources() {
 const APPEARANCE_EDIT = { fontSize: 22, readingTheme: 'paper' };
 
 describe('pageOwnedPatch：不把别人在写的字段提交回去', () => {
-  it('只去掉 bookSources / libraryListIds，其余字段一个不少', () => {
+  it('只去掉别人在写的那几项（书源 / 载入书单 / API Key / 读法），其余字段一个不少', () => {
     const snapshot = { ...snapshotWithTwoSources(), ...APPEARANCE_EDIT };
     const patch = pageOwnedPatch(snapshot);
     assert.equal(Object.hasOwn(patch, 'bookSources'), false);
     assert.equal(Object.hasOwn(patch, 'libraryListIds'), false);
+    // 读法（0.65.0）由**阅读器**那颗按钮写，设置页从没渲染过它 ——
+    // 提交回去等于把用户刚在读的书里选的那一档盖掉。
+    assert.equal(Object.hasOwn(patch, 'ebookReadMode'), false);
     assert.equal(patch.fontSize, 22);
     assert.equal(patch.readingTheme, 'paper');
     // 其余默认项也要在：漏掉它们等于「保存设置」把这些项重置成默认值。
@@ -178,6 +181,12 @@ describe('appearanceDefaults：「恢复默认」只动外观', () => {
     //   是同一类失效（见 `book-render.test.mjs` 里 `readCode` 的注释）。
     const source = stripComments(readFileSync(join(pluginRoot, 'src/client/ReadingAppearance.jsx'), 'utf8'));
     assert.equal(source.includes('...READING_DEFAULTS'), false, '「恢复默认」又回到整份默认值了');
-    assert.match(source, /onClick=\{\(\) => set\(appearanceDefaults\(\)\)\}/, '「恢复默认」没有走 appearanceDefaults()');
+    /**
+     * ★ 0.66.0 起这条断言认**两个**调用名：设置页把「恢复默认」提到卡片抬头右侧，
+     *   所以它变成了独立组件 `ReadingReset`，回调从内部的 `set(...)` 变成 prop
+     *   `onChange(...)`。守的东西没变 —— 按钮提交的必须是 `appearanceDefaults()`，
+     *   而不是任何一份「整份默认值」。只认 `set` 会让这次重构被判成「按钮没接上」。
+     */
+    assert.match(source, /onClick=\{\(\) => (?:set|onChange)\(appearanceDefaults\(\)\)\}/, '「恢复默认」没有走 appearanceDefaults()');
   });
 });

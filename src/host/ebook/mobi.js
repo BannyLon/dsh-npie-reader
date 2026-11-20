@@ -160,6 +160,13 @@ function parseMobiHeader(record0, { base = 0 } = {}) {
   const huffOffset = record0.readUInt32BE(16 + 0x64) || 0;
   const huffCount = record0.readUInt32BE(16 + 0x68) || 0;
   const exthFlags = record0.readUInt32BE(16 + 0x70) || 0;
+  /**
+   * 第一张图片所在的 record 索引（MOBI 头 offset `0x5C`）。
+   *
+   * ★ 封面**不是**从这个索引直接取，而是 `firstImageIndex + EXTH[201]` ——
+   *   一本书里的图片 record 从「封面」开始排是**不成立**的（前面常有一堆装饰图）。
+   */
+  const firstImageIndex = record0.readUInt32BE(16 + 0x5C) || 0;
 
   let name = '';
   if (nameOffset > 0 && nameLength > 0 && nameOffset + nameLength <= record0.length) {
@@ -167,6 +174,24 @@ function parseMobiHeader(record0, { base = 0 } = {}) {
   }
 
   const exth = {};
+  /**
+   * ★ 这两个**必须从原始字节读**（`readUInt32BE`），不能走下面那张字符串表：
+   *   EXTH 201 / 202 的值是**4 字节大端整数**，用 `toString()` 出来是
+   *   `"\u0000\u0000\u0000\u0003"` 这种 —— `parseInt` 永远拿到 NaN，于是
+   *   「有封面」与「没封面」在代码里长得一模一样，封面功能会静默失效。
+   */
+  let coverOffset = -1;
+  let thumbOffset = -1;
+  /**
+   * EXTH 121 = KF8 正文起始 record，同样是**4 字节整数**。
+   *
+   * ★ 这一条此前是从字符串表里 `parseInt` 出来的 —— 值里全是 `\u0000`，
+   *   于是 `kf8Boundary` **恒为 0**，下面 `parts.unshift(kf8)` 那段「优先 KF8」
+   *   一次都没执行过。症状完全看不见：MOBI7 那一半也有正文，照样读得出来，
+   *   只是章节结构用的是旧的那一套。0.71.6 修封面时才发现（双格式的封面索引
+   *   在 KF8 头里，取不到边界就永远走不到那一支）。
+   */
+  let kf8Boundary = 0;
   if ((exthFlags & 0x40) !== 0 && headerLength > 0) {
     const at = 16 + headerLength;
     if (at + 12 <= record0.length && record0.toString('latin1', at, at + 4) === 'EXTH') {
@@ -178,6 +203,9 @@ function parseMobiHeader(record0, { base = 0 } = {}) {
         if (length < 8 || cursor + length > record0.length) break;
         const value = record0.toString(encoding === 65001 ? 'utf8' : 'latin1', cursor + 8, cursor + length);
         if (!(type in exth)) exth[type] = value;
+        if (type === 121 && length >= 12) kf8Boundary = record0.readUInt32BE(cursor + 8);
+        if (type === 201 && length >= 12) coverOffset = record0.readUInt32BE(cursor + 8);
+        if (type === 202 && length >= 12) thumbOffset = record0.readUInt32BE(cursor + 8);
         cursor += length;
       }
     }
@@ -188,15 +216,62 @@ function parseMobiHeader(record0, { base = 0 } = {}) {
     encoding: encoding === 65001 ? 'utf8' : 'latin1',
     version,
     firstNonBook,
+    firstImageIndex,
+    coverOffset,
+    thumbOffset,
     name: normalizeWhitespace(name),
     huffOffset,
     huffCount,
-    kf8Boundary: Number.parseInt(exth[121] ?? '0', 10) || 0,
+    kf8Boundary,
     author: normalizeWhitespace(exth[100] ?? ''),
     title: normalizeWhitespace(exth[503] ?? ''),
     publisher: normalizeWhitespace(exth[101] ?? ''),
     exth,
   };
+}
+
+/**
+ * 解出来的正文像不像二进制数据。
+ *
+ * ★ 为什么正文也要拦（封面那条路早就有魔数校验，这里没有）：头部损坏的 MOBI 会
+ *   声明一个离谱的 `textLength`，而按 record 解出来的「正文」可能其实是**一整张
+ *   JPEG + 几千个 NUL**。它长度自洽、不报错，会被当成一本正常的书收进书架，用户
+ *   点开只看到满屏方块，且完全不知道发生了什么 —— 属于「存在性 ≠ 有效性」。
+ *
+ * 两条判据：① 已知二进制文件头（确凿）；② 控制字符占比 > 10%（兜底）。
+ * 正常正文是 ASCII 或 UTF-8（多字节都在 0x80 以上），除 \t\n\r 外几乎不含控制字符，
+ * 所以这条**不会误伤中文书**；判 4 KB 前缀而不是全书，是 mega 合集的解析开销考虑。
+ */
+export function looksLikeBinary(bytes) {
+  if (!Buffer.isBuffer(bytes) || bytes.length === 0) return false;
+  const head = bytes.subarray(0, Math.min(bytes.length, 4096));
+  if (head.length >= 4) {
+    if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return true;                    // JPEG
+    if (head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47) return true; // PNG
+    if (head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46) return true;                    // GIF
+    if (head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46) return true; // PDF
+    if (head[0] === 0x50 && head[1] === 0x4b && head[2] === 0x03) return true;                    // ZIP
+  }
+  let control = 0;
+  for (const byte of head) {
+    if (byte === 0x09 || byte === 0x0a || byte === 0x0d) continue;
+    if (byte < 0x20) control += 1;
+  }
+  return control / head.length > 0.1;
+}
+
+/**
+ * 头里的 `textLength` 值不值得信。
+ *
+ * ★ 反向的危险比「垃圾大值」更大：坏值小得离谱（比如 100）时无条件采信，会把整本
+ *   书截成 100 字节，**而且看起来像正常解析**（长度自洽、无乱码），谁都不会去查。
+ *   要求它与实测解压长度同量级：正常偏差在 2% 上下（多读了几条尾部记录），
+ *   0.5 这个下限既挡得住垃圾小值，也不会放过正常的裁剪。
+ */
+export function trustTextLength(declared, actual) {
+  if (!Number.isFinite(declared) || declared <= 0) return false;
+  if (!Number.isFinite(actual) || actual <= 0 || declared > actual) return false;
+  return declared >= actual * 0.5;
 }
 
 /** 解出一段 record 区间的正文。 */
@@ -219,14 +294,12 @@ function decodeSection(records, header, startRecord) {
   }
   if (textRecords.length === 0) throw coded('MOBI_NO_TEXT', '这本 MOBI 没有正文记录');
 
-  let text;
+  let bytes;
   if (compression === MOBI_COMPRESSION_NONE) {
-    text = Buffer.concat(textRecords.map(record => sliceTextRecord(record, recordSize)))
-      .subarray(0, textLength || undefined);
+    bytes = Buffer.concat(textRecords.map(record => sliceTextRecord(record, recordSize)));
   } else if (compression === MOBI_COMPRESSION_PALMDOC) {
     // ★ 先解压、再按 recordSize 截断：多余字节在**解压之后**的流末尾。
-    text = Buffer.concat(textRecords.map(record => sliceTextRecord(decompressPalmDoc(record), recordSize)))
-      .subarray(0, textLength || undefined);
+    bytes = Buffer.concat(textRecords.map(record => sliceTextRecord(decompressPalmDoc(record), recordSize)));
   } else if (compression === MOBI_COMPRESSION_HUFF) {
     /**
      * HUFF/CDIC（`comp=17480`）：本机 9 本里 2 本是它，都是 AZW3。
@@ -244,6 +317,15 @@ function decodeSection(records, header, startRecord) {
   } else {
     throw coded('MOBI_COMPRESSION', `这本 MOBI 用了不认识的压缩方式（${compression}）`);
   }
+
+  /**
+   * ★ 顺序不能反：**先**判「是不是文字」，**再**决定裁不裁。先按 `textLength` 裁，
+   *   坏值会把一段二进制截成看似正常的长度，魔数也可能被裁掉，两条判据互相拆台。
+   */
+  if (looksLikeBinary(bytes)) {
+    throw coded('MOBI_BINARY', '这本 MOBI 的正文不是文字（文件头可能损坏），已停止解析，以免把乱码当正文显示。');
+  }
+  const text = trustTextLength(textLength, bytes.length) ? bytes.subarray(0, textLength) : bytes;
   return { text, compression, encoding: header.encoding };
 }
 
@@ -368,6 +450,88 @@ export function parseMobi(buffer, { ext = 'mobi', fallbackTitle = '' } = {}) {
     warnings,
     compression: decoded.compression,
   };
+}
+
+/**
+ * 图片魔数 → MIME。认不出来的一律 `''`。
+ *
+ * ★ 这张表**不是可选的**：`firstImageIndex + coverOffset` 算错一个数就会指到正文
+ *   record 上，而正文是压缩过的 HTML —— 直接发给界面会得到一张「像噪点的图」，
+ *   浏览器不报错、用户只会觉得「封面怎么是花的」。魔数校验是唯一在源头挡住它的东西。
+ * ★ 只收浏览器 `<img>` 画得出来的位图：MOBI 里也可能塞 SVG（当包装页），
+ *   那种不在这里解。
+ */
+function imageMime(bytes) {
+  if (!Buffer.isBuffer(bytes) || bytes.length < 8) return '';
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png';
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return 'image/gif';
+  if (bytes[0] === 0x42 && bytes[1] === 0x4d) return 'image/bmp';
+  if (bytes.toString('latin1', 0, 4) === 'RIFF' && bytes.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+  return '';
+}
+
+/** `firstImageIndex` 的哨兵值：`0xFFFFFFFF` 表示「这本书里没有图片段」。 */
+const NO_IMAGES = 0xffffffff;
+
+/**
+ * 从 MOBI / AZW / AZW3 字节里取出封面图。
+ *
+ * 取值链（与 calibre / dalibre 同一套，但多一层校验）：
+ *   `MOBI 头 0x5C` = 第一张图片的 record 索引；
+ *   `EXTH 201` = 封面相对它的偏移；`EXTH 202` = 缩略图偏移（201 缺失时的退路）。
+ *
+ * ★ `base` 的两种口径都要试：单格式文件里 `firstImageIndex` 是**绝对** record 索引；
+ *   而双格式（MOBI7 + KF8）文件的 KF8 头里，见过按**相对 KF8 起点**记的写盘。
+ *   两种都算一遍、取第一条**通过魔数校验**的 —— 猜错的那条只会被魔数挡掉，不会出错图。
+ *
+ * @param {Buffer} buffer 整本 MOBI 的字节
+ * @returns {{ bytes: Buffer, mime: string, href: string } | null}
+ *   解不出来一律 `null`（**不抛**）：封面是界面的装饰，不该让侧栏报错。
+ */
+export function mobiCoverImage(buffer) {
+  let records;
+  let head;
+  try {
+    records = palmRecords(buffer);
+    const record0 = records[0];
+    if (record0 === undefined) return null;
+    head = parseMobiHeader(record0);
+  } catch {
+    return null;
+  }
+  if (head === null) return null;
+
+  /**
+   * 双格式文件（MOBI7 前半 + KF8 后半）有**两个 record 0**，各有一套图片索引。
+   * 与 `parseMobi` 同一个顺序：KF8 优先（它才是亚马逊后来重排用的那一版，
+   * 封面通常也更新），读不出来再退回 MOBI7。
+   */
+  const heads = [head];
+  if (head.kf8Boundary > 0 && head.kf8Boundary < records.length) {
+    const kf8 = parseMobiHeader(records[head.kf8Boundary], { base: head.kf8Boundary });
+    if (kf8 !== null) heads.unshift(kf8);
+  }
+
+  for (const candidate of heads) {
+    const firstImage = candidate.firstImageIndex;
+    // 0 与 0xFFFFFFFF 都是「没有图片段」；越界的直接跳过（坏文件比封面更常见）。
+    if (!(firstImage > 0) || firstImage === NO_IMAGES || firstImage >= records.length) continue;
+    const offsets = [candidate.coverOffset, candidate.thumbOffset]
+      .filter((value) => Number.isInteger(value) && value >= 0);
+    for (const offset of offsets) {
+      // 绝对索引（单格式：与 calibre 写的一致）与相对 `base` 索引（KF8 里见过）都试。
+      for (const base of [0, candidate.base]) {
+        const index = base + firstImage + offset;
+        if (!(index >= 0) || index >= records.length) continue;
+        const bytes = records[index];
+        const mime = imageMime(bytes);
+        if (mime === '') continue;
+        return { bytes, mime, href: `record:${index}` };
+      }
+    }
+  }
+  return null;
 }
 
 export { MOBI_COMPRESSION_HUFF, MOBI_COMPRESSION_PALMDOC };

@@ -29,6 +29,8 @@
  *   POST /reload             丢掉缓存重读书单
  *   GET  /state   POST /state  阅读进度
  *   GET  /annotations/:id  POST /annotations/:id   划线 / 笔记（整份读，按 op 改一条）
+ *   GET/POST /page-translation/:id   PDF 页译文缓存（整本读 / 写单页 / 清空）
+ *   POST /translate  POST /translate-page          划词翻译 / 整页逐段翻译
  *   GET  /book/:id/raw       Range 取字节（网盘或本地，由 `readBytes` 分派）
  *   GET  /sources  POST /sources   书源配置（GET 同时给出每份书单的状态与载入选择）
  *   POST /sources/scan       扫描书源 → 生成书单（body 里给 `id` 就只生成那一条源）
@@ -41,22 +43,80 @@
  */
 
 import { readFile, stat } from 'node:fs/promises';
+import { appendFileSync, renameSync, statSync } from 'node:fs';
+import { Readable } from 'node:stream';
 import { extname, join, normalize, sep } from 'node:path';
 import { FIND_QUERY_MAX } from '../book-find.js';
 import { BOOKS_PAGE_LIMIT, EDITOR_VENDOR_PREFIX, LIBRARY_API_PREFIX, PDFJS_VENDOR_PREFIX, isBookId, isReadable } from '../library.js';
 import { contentRange, formatRange, mimeForExtension, parseRange, unsatisfiedContentRange } from '../range.js';
-import { MAX_COVER_BYTES, epubCoverImage } from './book-cover.js';
+import { MAX_COVER_BYTES, ebookCoverImage } from './book-cover.js';
 import { segmentBook } from './segment.js';
 import { overlayOcrPages } from './page-text.js';
 import { digestOutline, findInEbook, pagesOf, sectionIndex } from './ebook/index.js';
 import { OCR_MAX_IMAGE_BYTES, decodeImagePayload, sniffImageExt } from './ocr.js';
+import { transcriptView } from '../transcript.js';
 import { isTrustedLocalRequest } from './trust.js';
 
 // 前缀的真值在共用模块里（浏览器半区也要用）。这里转出去，方便调用点就近 import。
 export { LIBRARY_API_PREFIX, PDFJS_VENDOR_PREFIX };
 
 /** 状态写入的 body 上限。 */
+/**
+ * 宿主半区的构建版本（构建时由 `build.mjs` 注入）。
+ *
+ * ★ `typeof` 而不是直接读：单测用 `node --test` 直接 import 这份源码，那时
+ *   没有 esbuild 的 define，裸引用会抛 `ReferenceError` —— 而 `typeof 未声明`
+ *   在 JS 里是安全的（返回 `'undefined'`）。`dev` 这个取值本身也是信息：
+ *   客户端看到它就知道对面是源码直跑，不是安装版。
+ */
+const HOST_BUILD = typeof __NPIE_READER_VERSION__ === 'string' ? __NPIE_READER_VERSION__ : 'dev';
+
 const JSON_BODY_LIMIT = 64 * 1024;
+/**
+ * 音频通道的取证日志（0.85.7）。
+ *
+ * ★ 为什么落到文件，而不是走 `ctx.logger`：这条链路出问题时，用户看到的是
+ *   「拖不动」，我能拿到的只有一张截图；而真正需要的事实（`<audio>` 到底发了
+ *   什么 Range、宿主回了什么头、请求有没有走到宿主）都在宿主这一侧。写进
+ *   `~/.dsh/` 之后，一次复现就能直接读出全部请求，不必再让用户猜着截图。
+ * ★ 只记 `/audio`，一行一条，超过 512 KB 时轮转一次 —— 音频一集会有几十条
+ *   Range 请求，不设上限会把它变成磁盘噪音。
+ */
+const AUDIO_LOG = join(process.env.HOME ?? '/tmp', '.dsh', 'npie-reader-audio.log');
+const AUDIO_LOG_LIMIT = 512 * 1024;
+
+/** 追加一行音频取证日志。任何失败都吞掉：日志不能影响播放。 */
+function audioTrace(line) {
+  try {
+    // 同步写：一条一行、几十字节；异步排队的收益抵不上「漏掉最后一条」的代价。
+    try {
+      if (statSync(AUDIO_LOG).size > AUDIO_LOG_LIMIT) renameSync(AUDIO_LOG, `${AUDIO_LOG}.1`);
+    } catch { /* 文件还不存在 */ }
+    appendFileSync(AUDIO_LOG, `${new Date().toISOString()} ${line}\n`);
+  } catch { /* 权限不足 / 磁盘满：都不该让音频失败 */ }
+}
+
+/**
+ * 宿主自己的 origin（`http://127.0.0.1:<宿主端口>`）。
+ *
+ * ★ 为什么需要它（0.85.7）：面板页面用相对路径 `<audio src="/api/...">` 时，
+ *   媒体请求走的是**面板 origin** 那条链路，而那条链路在宿主里被转手过一次，
+ *   `content-length` 在转手时会被扣掉（本文件顶部 pdf.js 那段注释记着同一件事）。
+ *   媒体流没有 `content-length` ⇒ Chromium 判 `seekable = [0,0]` ⇒ 拖不动、
+ *   ±15 秒被夹回 0。把宿主自己的端口告诉客户端，让它用**绝对地址**直连 node
+ *   server，就绕开了中间那一层。
+ * ★ `req.socket.localPort` 是宿主 server 这一侧的端口：请求即使是被转发过来的，
+ *   这个值也仍然指向宿主自己。
+ */
+function hostOriginOf(req) {
+  const port = req?.socket?.localPort;
+  return typeof port === 'number' && port > 0 ? `http://127.0.0.1:${port}` : null;
+}
+/**
+ * 页译文缓存的 body 上限（0.71.0）。一页最多 40 段、每段原文与译文各 2500 字，
+ * 加上 JSON 转义余量，64 KB 不够 —— 这条比 `/translate-page` 还宽一点是对的。
+ */
+const PAGE_TRANSLATION_BODY_LIMIT = 256 * 1024;
 
 /**
  * 无 Range 的请求最多为它发多少字节。
@@ -161,7 +221,7 @@ function ebookErrorStatus(error) {
   // 磁盘类与 `readErrorStatus` 同一套：解读产物 / 抽出的正文写不下去时走这条。
   if (code === 'DISK_FULL' || code === 'DISK_TOO_MANY_FILES') return 507;
   if (code === 'DISK_IO' || code === 'DISK_BAD_PATH') return 500;
-  if (code === 'BOOK_DRM' || code === 'MOBI_HUFFDIC' || code === 'MOBI_COMPRESSION'
+  if (code === 'BOOK_DRM' || code === 'EPUB_DRM' || code === 'MOBI_HUFFDIC' || code === 'MOBI_COMPRESSION'
     || code === 'ZIP_METHOD' || code === 'ZIP64' || code === 'EBOOK_FORMAT') return 415;
   if (code === 'LOCAL_OUTSIDE_ROOT' || code === 'NO_LOCAL_ROOT') return 403;
   if (code === 'LOCAL_MISSING') return 404;
@@ -230,6 +290,7 @@ export function vendorRelativePath(pathname, prefix = PDFJS_VENDOR_PREFIX) {
  * @param handlers.scanSources - `async ({ id }) => { lists, errors, stats, total }`。
  * @param handlers.panAuth - 网盘授权器（`pan-auth.js` 的 `createPanAuth`）。
  * @param handlers.listPanDirs - `async (path) => [{ name, path, isDir }]`。
+ * @param handlers.pageTranslationStore - PDF 页译文落盘缓存（0.71.0），缺了退化成 501。
  * @param handlers.log - 记一行日志。
  * @returns WebRoute 数组。
  */
@@ -246,8 +307,26 @@ export function makeLibraryRoutes(handlers) {
     annotationStore,
     ocrRunner,
     ebookOf,
+    translateEbookSection,
+    /** 划词翻译（`POST /translate`）。缺省时该路由退化成 501，不影响阅读。 */
+    translatePassage,
+    /** 页级按需翻译（`POST /translate-page`）。缺省同样退化成 501。 */
+    translatePageParagraphs,
+    /** 页译文落盘缓存（0.71.0）：`GET/POST /page-translation/:id`。 */
+    pageTranslationStore,
+    ebookTranslationOf,
+    ebookTranslationIndex,
+    startEbookPrefetch,
+    stopEbookPrefetch,
+    ebookPrefetchStatus,
     cacheUsage,
     cleanCache,
+    /** 单集字幕（P0）：读缓存 / 按需抓取。缺任一项时对应路由退化成 501。 */
+    transcriptStore,
+    fetchTranscript,
+    /** 单集音频中转（0.81.0）：`audioOf(key)` 反查地址，`openAudio(url, opts)` 打开流。 */
+    audioOf,
+    openAudio,
   } = handlers;
 
   /**
@@ -279,6 +358,26 @@ export function makeLibraryRoutes(handlers) {
    * 而真机上它永远在（`service.ebookOf`）。
    */
   const ebookReady = typeof ebookOf === 'function';
+  /**
+   * 电子书**对照翻译**的依赖（0.57.0）。
+   *
+   * ★ 单独一道闸，理由同 `skillReady`：只喂了解析器的夹具应当还能取正文、
+   *   能搜书，缺的只是「翻译这一节」那一条 —— 因此退回 501，而不是让整个
+   *   `/book/...` 前缀挂掉（那样连书都打不开）。
+   */
+  const ebookL10nReady = ebookReady
+    && typeof translateEbookSection === 'function'
+    && typeof ebookTranslationOf === 'function';
+  /**
+   * 整本预翻（0.59.0）的依赖。
+   *
+   * ★ 再单独一道闸：只接了「翻这一节」的夹具应当还能逐节翻，缺的只是
+   *   「一次翻完」—— 因此退回 501，而不是让上面那三条一起下线。
+   */
+  const ebookPrefetchReady = ebookL10nReady
+    && typeof startEbookPrefetch === 'function'
+    && typeof stopEbookPrefetch === 'function'
+    && typeof ebookPrefetchStatus === 'function';
   const digestGenerateReady = digestReady
     && typeof startDigests === 'function' && typeof stopDigests === 'function';
   /**
@@ -289,6 +388,19 @@ export function makeLibraryRoutes(handlers) {
    *   `/digest/...` 前缀变成 501 —— 抽目录、看状态、生成解读都得照常。
    */
   const skillReady = digestReady && typeof exportSkill === 'function';
+
+  /**
+   * 页译文缓存（0.71.0）的依赖。
+   *
+   * ★ 与解读、划线都**完全独立**的一道闸：它只是本机文件读写，不调模型。缺了就
+   *   让 `/page-translation/...` 那三条回 501（`POST /translate-page` 照常能翻），
+   *   客户端会把「没落盘」当成软失败继续显示译文 —— 不能因为缓存没接好就把整本
+   *   翻译连同阅读页一起打挂。
+   */
+  const pageTranslationsReady = pageTranslationStore !== undefined && pageTranslationStore !== null
+    && typeof pageTranslationStore.list === 'function'
+    && typeof pageTranslationStore.putPage === 'function'
+    && typeof pageTranslationStore.clearBook === 'function';
 
   /**
    * 划线 / 笔记那两条路由的依赖。
@@ -578,6 +690,20 @@ export function makeLibraryRoutes(handlers) {
     return { mode: meta.mode, stats: result.stats, chapters: meta.chapters };
   }
 
+  /**
+   * 单集字幕（P0）。
+   *
+   * ★ 两道闸分开：**读缓存**只需要 store，**抓取**还需要一个能联网的 `fetchTranscript`。
+   *   合成一道的话，只喂了 store 的测试夹具会让「读已有的那份」也变成 501 ——
+   *   而读缓存本来就不该依赖网络。
+   * ★ 段落切分放在**路由层**（`transcriptPayload`），不在 store 里：store 只管字节，
+   *   判据留在共用模块 `src/transcript.js`。这样宿主与界面读的是同一份切段规则，
+   *   换规则时不用同时改两个地方。
+   */
+  const transcriptReadReady = transcriptStore !== undefined && transcriptStore !== null
+    && typeof transcriptStore.read === 'function';
+  const transcriptFetchReady = transcriptReadReady && typeof fetchTranscript === 'function';
+
   const api = {
     kind: 'prefix',
     path: LIBRARY_API_PREFIX,
@@ -612,7 +738,16 @@ export function makeLibraryRoutes(handlers) {
         if (!isBookId(id)) return sendJson(res, 400, { ok: false, error: '无效的书 id', code: 'BAD_BOOK_ID' });
         const book = await bookById(id);
         if (book === undefined) return sendJson(res, 404, { ok: false, error: '没有这本书', code: 'NO_BOOK' });
-        if (String(book.ext ?? '').toLowerCase() !== 'epub') {
+        /**
+         * 宿主只解**容器类**电子书的封面：EPUB（zip + OPF）与 MOBI / AZW / AZW3
+         * （PalmDB + EXTH）。PDF 的封面归客户端（pdf.js 渲染首页），txt 没有封面。
+         *
+         * ★ 判据是**同一份白名单**，与 `ebookCoverImage` 内部的分派一一对应 ——
+         *   这里多放一个格式，就会走到 `ebookCoverImage` 的 `null` 分支，用户看到的是
+         *   「这本书里没有可用的封面图」，而真话是「这种格式不做封面」。
+         */
+        const coverExt = String(book.ext ?? '').toLowerCase();
+        if (!['epub', 'mobi', 'azw', 'azw3'].includes(coverExt)) {
           return sendJson(res, 404, { ok: false, error: '这种格式的封面不由宿主提供', code: 'NO_COVER_ROUTE' });
         }
         // ★ 网盘书要先把整本拖下来才拿得到封面 —— 为侧栏一张图拖一本书，不值。
@@ -632,7 +767,7 @@ export function makeLibraryRoutes(handlers) {
         if (cover === null) {
           try {
             const buffer = await readBytes(book, 0, book.size - 1);
-            cover = epubCoverImage(Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer));
+            cover = ebookCoverImage(coverExt, Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer));
           } catch (error) {
             log(`[书架] ${id} 取封面失败：${error.message}`);
             cover = null;
@@ -680,6 +815,231 @@ export function makeLibraryRoutes(handlers) {
           return sendJson(res, readErrorStatus(error), { ok: false, error: error.message, code: error.code ?? '' });
         }
       }
+      /**
+       * ---- GET /transcript?key=…  POST /transcript -------------------------
+       *
+       * 单集字幕。GET 只读缓存（**绝不联网**），POST 才去抓。
+       *
+       * ★ 为什么 GET 不顺手抓：打开一集就问一次第三方 CDN，会让「翻列表」这种动作
+       *   变成几十次外部请求；而用户真正需要字幕时是**点开这一集**，那时客户端显式
+       *   发 POST。副作用留给显式动作，和 `/cache` 与 `/cache/clean` 的分工同一条理由。
+       * ★ 返回的是**段落**（已经合并过），不是原始 cue：一集 1500 条 cue 直接丢给
+       *   渲染半区，等于把「怎么并段」这件事复制到客户端，两处迟早不一致。
+       */
+      if (rest === '/transcript') {
+        if (!transcriptReadReady) {
+          return sendJson(res, 501, { ok: false, error: '字幕功能没有接上', code: 'NO_TRANSCRIPT_STORE' });
+        }
+        const keyOf = (value) => (typeof value === 'string' ? value.trim() : '');
+        if (method === 'GET') {
+          const key = keyOf(queryOf(req).get('key'));
+          if (key === '') return sendJson(res, 400, { ok: false, error: '需要 key 参数（文章 key）', code: 'BAD_KEY' });
+          try {
+            const record = await transcriptStore.read(key);
+            if (record === null) {
+              return sendJson(res, 200, { ok: true, key, transcript: null, reason: 'not-cached' });
+            }
+            return sendJson(res, 200, { ok: true, key, transcript: transcriptView(record) });
+          } catch (error) {
+            return sendJson(res, readErrorStatus(error), { ok: false, error: error.message, code: error.code ?? '' });
+          }
+        }
+        if (method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+        if (!transcriptFetchReady) {
+          return sendJson(res, 501, { ok: false, error: '抓取字幕没有接上', code: 'NO_TRANSCRIPT_FETCH' });
+        }
+        if (!(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
+          return sendJson(res, 415, { ok: false, error: '需要 JSON body' });
+        }
+        let body;
+        try {
+          body = await readBody(req);
+        } catch (error) {
+          return sendJson(res, 400, { ok: false, error: error.message });
+        }
+        const key = keyOf(body.key);
+        if (key === '') return sendJson(res, 400, { ok: false, error: '需要 key', code: 'BAD_KEY' });
+        try {
+          const record = await fetchTranscript({ key, refresh: body.refresh === true });
+          return sendJson(res, 200, { ok: true, key, transcript: transcriptView(record) });
+        } catch (error) {
+          // 字幕错误自带 status（格式不支持 415、没有字幕 404、过大 413）；
+          // 磁盘类走与其它路由同一张表，剩下的按 400 处理。
+          const status = Number.isFinite(error?.status) ? error.status : readErrorStatus(error);
+          return sendJson(res, status, { ok: false, error: error.message, code: error.code ?? '' });
+        }
+      }
+      /**
+       * `GET /audio?key=…` —— 单集音频的中转（0.81.0）。
+       *
+       * ★ 为什么中转而不再让 `<audio>` 直接指外链：短链 302 那一跳不带
+       *   `accept-ranges`，Chromium 就退化成全量顺序下载，一集 106 MB 要缓冲十几秒
+       *   才出声（`00:00 / 00:00`）；而且在宿主面板里还要额外过 CSP 的 `media-src`。
+       *   中转层主动带 `Range` 发出去、把 `206` 与 `accept-ranges` 透传回来，
+       *   两个问题一起消失。详见 `audio-proxy.js` 顶部。
+       *
+       * ★ 这里**不做 Range 计算**：上游给什么就回什么。自己切一遍只在一种情况下
+       *   有必要（上游不支持 Range），而那种情形本来就拖不动。
+       */
+      /**
+       * `GET /audio-info?key=…` —— 音频通道的**自检**（0.85.4）。
+       *
+       * ★ 为什么需要它：进度条拖不动这类问题有三层可能（客户端逻辑 / 宿主没重载
+       *   / 上游响应头缺东西），三层在界面上长得一模一样。上一轮就是这样被判错
+       *   两次。这条路由让宿主自己交出事实：我是什么版本、上游回了什么、
+       *   我补出来的 `content-range` 是什么。
+       * ★ 代价极小：只发 `Range: bytes=0-1`，读完头就把 body `cancel()` 掉。
+       *   不要用 `bytes=0-`（那是 64 MB）。
+       * ★ 这条路由**本身的存在性**就是判据：旧版宿主没有它 ⇒ 404 ⇒ 客户端立刻
+       *   知道「对面没重载」，不用猜。
+       */
+      if (rest === '/audio-info') {
+        if (typeof audioOf !== 'function' || typeof openAudio !== 'function') {
+          return sendJson(res, 501, { ok: false, build: HOST_BUILD, error: '音频中转没有接上', code: 'NO_AUDIO_PROXY' });
+        }
+        if (method !== 'GET') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+        const key = typeof queryOf(req).get('key') === 'string' ? queryOf(req).get('key').trim() : '';
+        if (key === '') return sendJson(res, 400, { ok: false, build: HOST_BUILD, error: '需要 key 参数', code: 'BAD_KEY' });
+        let source = '';
+        try {
+          source = (await audioOf(key)) ?? '';
+        } catch (error) {
+          return sendJson(res, readErrorStatus(error), { ok: false, build: HOST_BUILD, error: error.message });
+        }
+        if (source === '') return sendJson(res, 404, { ok: false, build: HOST_BUILD, error: '这一集没有音频', code: 'NO_AUDIO' });
+        const abort = new AbortController();
+        res.on('close', () => { if (!res.writableEnded) abort.abort(); });
+        let upstream;
+        try {
+          upstream = await openAudio(source, { range: 'bytes=0-1', signal: abort.signal, log });
+        } catch (error) {
+          return sendJson(res, 502, { ok: false, build: HOST_BUILD, error: error.message, code: error.code ?? 'AUDIO_FAILED' });
+        }
+        const headers = upstream.headers ?? {};
+        const range = String(headers['content-range'] ?? '');
+        // `bytes 0-1/64551564` ⇒ 总长；拿不到就是 null（客户端据此知道「不可跳」）。
+        const tail = range.includes('/') ? Number.parseInt(range.slice(range.lastIndexOf('/') + 1), 10) : NaN;
+        const total = Number.isFinite(tail) && tail > 0 ? tail : null;
+        // 读完头就松手：这两个字节没有用，让连接早点还回去。
+        try { await upstream.body?.cancel(); } catch { /* 已经结束 */ }
+        return sendJson(res, 200, {
+          ok: true,
+          build: HOST_BUILD,
+          key,
+          /**
+           * ★ 宿主自己的 origin（0.85.7）。客户端据此把 `<audio>` 的 src 换成
+           *   绝对地址，绕开面板 origin 那条会扣 `content-length` 的转发层。
+           *   `null` = 拿不到端口（不是 socket 请求），客户端就继续用相对路径。
+           */
+          origin: hostOriginOf(req),
+          status: upstream.status,
+          total,
+          contentRange: range || null,
+          acceptRanges: headers['accept-ranges'] ?? null,
+          contentType: headers['content-type'] ?? null,
+          /** 一句话结论：这条流在浏览器眼里能不能定位。 */
+          seekable: upstream.status === 206 && total !== null,
+        });
+      }
+      if (rest === '/audio') {
+        if (typeof audioOf !== 'function' || typeof openAudio !== 'function') {
+          return sendJson(res, 501, { ok: false, error: '音频中转没有接上', code: 'NO_AUDIO_PROXY' });
+        }
+        if (method !== 'GET' && method !== 'HEAD') {
+          return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+        }
+        const key = typeof queryOf(req).get('key') === 'string' ? queryOf(req).get('key').trim() : '';
+        if (key === '') return sendJson(res, 400, { ok: false, error: '需要 key 参数（文章 key）', code: 'BAD_KEY' });
+        let source = '';
+        try {
+          source = (await audioOf(key)) ?? '';
+        } catch (error) {
+          return sendJson(res, readErrorStatus(error), { ok: false, error: error.message, code: error.code ?? '' });
+        }
+        if (source === '') return sendJson(res, 404, { ok: false, error: '这一集没有音频', code: 'NO_AUDIO' });
+
+        // 客户端断开（换集 / 关面板）时把上游也掐掉，别让 100 MB 的下载继续跑。
+        const abort = new AbortController();
+        res.on('close', () => { if (!res.writableEnded) abort.abort(); });
+        let upstream;
+        try {
+          upstream = await openAudio(source, { range: req.headers.range ?? '', signal: abort.signal, log });
+        } catch (error) {
+          const status = Number.isFinite(error?.status) ? error.status : 502;
+          if (status === 499) return res.end();
+          log(`[音频] ${key} 打开失败：${error.message}`);
+          return sendJson(res, status, { ok: false, error: error.message, code: error.code ?? 'AUDIO_FAILED' });
+        }
+
+        const responseHeaders = {
+          ...upstream.headers,
+          /**
+           * ★ 不再给音频响应设 `max-age=3600`（0.85.5）。
+           *
+           * 那个值原本是为了「一集里 Chromium 发几十个 Range 请求，每次都回源会让
+           * 拖动发涩」。代价被低估了：**头写错的那一版会被浏览器缓存一小时**。
+           * 现场就是这样 —— 宿主修好并重启之后，Chromium 仍在用一小时前那条没有
+           * `content-range` 的 206 条目，时长照错、进度条照拖不动，看起来像「修了
+           * 没用」。缓存一条 100 MB 级媒体流的收益，远小于「修完了却看不到效果」
+           * 的代价；`must-revalidate` 让每次 Range 都问一次，本地回环成本可以忽略。
+           * `no-transform` 顺带禁止中间层（含宿主自己的 gzip 中间件）改写字节。
+           */
+          'cache-control': 'private, max-age=0, must-revalidate, no-transform',
+          /**
+           * ★ 自报 origin（0.85.7）：客户端拿它把 `<audio>` 指向宿主直连地址。
+           *   与 body 里的那个字段同一含义，放在头里是为了让 `<audio>` 这种
+           *   不读 body 的请求也能被诊断看到。
+           */
+          ...(hostOriginOf(req) === null ? {} : { 'x-npr-origin': hostOriginOf(req) }),
+          // ★ 自报版本（0.85.4）：客户端据此判断「这条响应来自补过头的新代码，
+          //   还是两小时前加载的旧模块」。上一轮的修复写完却没被加载，界面上
+          //   看不出任何差别 —— 这个头就是为了让那种情况一眼可辨。
+          'x-npr-host-build': HOST_BUILD,
+        };
+        /**
+         * ★ 有 `setHeader` 就逐条设，别只塞给 `writeHead(status, headers)`（0.85.2）。
+         *
+         * 两种写法在裸 `node:http` 里等价，但在宿主把 server 包过一层之后不一定：
+         * 一个对象形式的 headers 被过滤/合并时，丢掉的恰好可能是 `accept-ranges`
+         * 与 `content-range` —— 而 Chromium 判定「这条流能不能拖」只看这两个。
+         * 丢了之后 `element.seekable` 是空区间，`currentTime = t` **静默失效**，
+         * 界面表现就是「进度条拖不动、±15 秒不作用」，而播放一切正常。
+         * ★ 保留对象那条分支：路由的单元测试夹具、以及未来某个精简过的 res
+         *   实现可能没有 `setHeader`。两条路都写一遍，比让音频在一半环境里不可跳好。
+         */
+        if (typeof res.setHeader === 'function') {
+          for (const [name, value] of Object.entries(responseHeaders)) {
+            try {
+              res.setHeader(name, value);
+            } catch {
+              // 非法头名：跳过这一条，别让整条音频因为一个头打不开。
+            }
+          }
+          res.writeHead(upstream.status);
+        } else {
+          res.writeHead(upstream.status, responseHeaders);
+        }
+        res.flushHeaders?.();
+        // 取证（0.85.7）：把「客户端发了什么 / 宿主回了什么」写进文件。
+        audioTrace(
+          `${key} range=${req.headers.range ?? '(无)'} ae=${req.headers['accept-encoding'] ?? '(无)'}`
+          + ` origin=${req.headers.origin ?? '(无)'} localPort=${req.socket?.localPort ?? '?'}`
+          + ` ⇒ ${upstream.status} cr=${responseHeaders['content-range'] ?? '(无)'}`
+          + ` cl=${responseHeaders['content-length'] ?? '(无)'}`
+          + ` ar=${responseHeaders['accept-ranges'] ?? '(无)'}`
+          + ` ce=${responseHeaders['content-encoding'] ?? '(无)'}`,
+        );
+        // 一行诊断：下次「拖不动」时，先看这里是对上了还是空手。
+        log(`[音频] ${key} 客户端 Range=${req.headers.range ?? '(无)'} ⇒ 上游 ${upstream.status} range=${upstream.headers['content-range'] ?? '(无)'} accept-ranges=${upstream.headers['accept-ranges'] ?? '(补)'}`);
+        if (req.method === 'HEAD' || upstream.body === null) return res.end();
+        const stream = Readable.fromWeb(upstream.body);
+        stream.on('error', (error) => {
+          log(`[音频] ${key} 管道中断：${error.message}`);
+          res.destroy(error);
+        });
+        stream.pipe(res);
+        return undefined;
+      }
       if (rest === '/state') {
         if (method === 'GET') return sendJson(res, 200, { ok: true, states: getStates() });
         if (method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
@@ -702,6 +1062,127 @@ export function makeLibraryRoutes(handlers) {
           return sendJson(res, 200, { ok: true, id, state });
         } catch (error) {
           return sendJson(res, 400, { ok: false, error: error.message });
+        }
+      }
+
+      /**
+       * ---- POST /translate：划词翻译 -----------------------------------------
+       *
+       * 阅读器气泡上那颗「翻译」：用户选中的一句话 → 一段中文。
+       *
+       * ★ 与 `/digest/:id/...` 的对照翻译**不是一条路**：那条按「节」翻、落盘缓存、
+       *   一跑几十秒；这条要秒级回话、不落盘。混用会让「点一下翻译」变成「等一节」。
+       * ★ 缺 `translatePassage` 时回 **501 而不是 500**：夹具只喂读书链路是常态，
+       *   而这种缺失是「这个插件版本没接这条能力」，不是请求有错。
+       * ★ 只收 JSON：body 里是**用户从 PDF 里选出的原文**，可能带任意内容，
+       *   `readBody` 有 64 KB 上限，够一段选文，也挡住了「把整本书贴进来」。
+       */
+      if (rest === '/translate') {
+        if (method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+        if (typeof translatePassage !== 'function') {
+          return sendJson(res, 501, { ok: false, error: '划词翻译没有接上' });
+        }
+        if (!(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
+          return sendJson(res, 415, { ok: false, error: '需要 JSON body' });
+        }
+        let body;
+        try {
+          body = await readBody(req);
+        } catch (error) {
+          return sendJson(res, 400, { ok: false, error: error.message });
+        }
+        try {
+          const result = await translatePassage({ text: body.text, context: body.context });
+          return sendJson(res, 200, { ok: true, text: result?.text ?? '' });
+        } catch (error) {
+          // 模型侧失败（限流、超时、未配置）统一 502：请求本身没错，是上游不行。
+          return sendJson(res, 502, { ok: false, error: error?.message ?? String(error), code: error?.code ?? '' });
+        }
+      }
+
+      /**
+       * 页级按需翻译（D 档，0.70.0）：`POST /translate-page`。
+       *
+       * ★ 与 `/translate` **分开**：那边翻用户选中的一小段，这边是一页十几段、
+       *   必须按段落 id 对齐回各自的框。合并成一条的话，前端拿到译文无法判断
+       *   「哪一段漏了」，也就无从避免探针里那种「英文残留」。
+       * ★ 三种失败分开说（501 没接上 / 400 请求不对 / 502 模型侧不行）：
+       *   用户看到的都是「点了翻译没反应」，但原因完全不同。
+       */
+      if (rest === '/translate-page') {
+        if (method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+        if (typeof translatePageParagraphs !== 'function') {
+          return sendJson(res, 501, { ok: false, error: '页级翻译没有接上' });
+        }
+        if (!(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
+          return sendJson(res, 415, { ok: false, error: '需要 JSON body' });
+        }
+        let body;
+        try {
+          body = await readBody(req);
+        } catch (error) {
+          return sendJson(res, 400, { ok: false, error: error.message });
+        }
+        const paragraphs = body?.paragraphs;
+        if (!Array.isArray(paragraphs) || paragraphs.length === 0 || paragraphs.length > 40) {
+          return sendJson(res, 400, { ok: false, error: 'paragraphs 要是 1–40 条的数组' });
+        }
+        try {
+          const translations = await translatePageParagraphs({ paragraphs });
+          return sendJson(res, 200, { ok: true, translations: Array.isArray(translations) ? translations : [] });
+        } catch (error) {
+          return sendJson(res, 502, { ok: false, error: error?.message ?? String(error), code: error?.code ?? '' });
+        }
+      }
+
+      /**
+       * ---- 页译文缓存：`GET/POST /page-translation/:id` -----------------------
+       *
+       * 「逐页按需」和「整本一次翻完」共用这一份磁盘缓存：GET 一次把整本已译的页
+       * 拉回客户端（整本模式据此跳过），POST 每译完一页就写一次。
+       *
+       * ★ `op` 是服务端认的白名单（`put` / `clear`），不是通用 patch：客户端只准
+       *   写「这一页」，不准整本覆盖 —— 另一个窗口刚译完的页会被旧快照抹掉。
+       * ★ 缺 `pageTranslationStore` 时回 501，而不是 500：夹具只喂读书链路是常态，
+       *   缺的是这条能力、不是请求有错。
+       * ★ 校验类错误（`BAD_PAGE_TRANSLATION`）回 400；磁盘类错误走 `readErrorStatus`
+       *   那一套（ENOSPC ⇒ 507），不要在这里另写一份判定。
+       */
+      const pageTranslationMatch = /^\/page-translation\/([A-Za-z0-9_-]{1,64})$/.exec(rest);
+      if (pageTranslationMatch !== null) {
+        if (!pageTranslationsReady) {
+          return sendJson(res, 501, { ok: false, error: '页译文缓存没有接上' });
+        }
+        const bookId = pageTranslationMatch[1];
+        try {
+          if (method === 'GET') {
+            return sendJson(res, 200, { ok: true, pages: await pageTranslationStore.list(bookId) });
+          }
+          if (method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+          if (!(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
+            return sendJson(res, 415, { ok: false, error: '需要 JSON body' });
+          }
+          let body;
+          try {
+            body = await readBody(req, PAGE_TRANSLATION_BODY_LIMIT);
+          } catch (error) {
+            return sendJson(res, 400, { ok: false, error: error.message });
+          }
+          const op = String(body.op ?? '');
+          if (op === 'put') {
+            const record = await pageTranslationStore.putPage(bookId, body.page, body);
+            return sendJson(res, 200, { ok: true, page: record.page });
+          }
+          if (op === 'clear') {
+            const result = await pageTranslationStore.clearBook(bookId);
+            return sendJson(res, 200, { ok: true, ...result });
+          }
+          return sendJson(res, 400, { ok: false, error: `不认识的 op：${op}` });
+        } catch (error) {
+          return sendJson(res, error?.code === 'BAD_PAGE_TRANSLATION' ? 400 : readErrorStatus(error), {
+            ok: false,
+            error: error?.message ?? String(error),
+          });
         }
       }
 
@@ -885,6 +1366,12 @@ export function makeLibraryRoutes(handlers) {
               format: ebook.format,
               title: ebook.title,
               author: ebook.author,
+              /*
+               * ★ `script`（0.62.0）：阅读器用它决定「对照」按钮能不能点。
+               *   中文书一字不用翻，点开对照只会得到一句「这一节不需要对照」——
+               *   用户的原话是「这也是中文为什么也要对照」。
+               */
+              script: ebook.script,
               warnings: ebook.warnings,
               toc: ebook.toc,
               sections: sectionIndex(ebook),
@@ -900,6 +1387,119 @@ export function makeLibraryRoutes(handlers) {
           return sendJson(res, ebookErrorStatus(error), {
             ok: false, error: error?.message ?? String(error), code: error?.code ?? '',
           });
+        }
+      }
+
+      // ---- 电子书对照翻译（0.57.0）--------------------------------------
+      //
+      // 三条形态共用一个前缀：
+      //   GET  /book/:id/ebook/l10n         → 这本书已译了哪些节（很小的清单）
+      //   GET  /book/:id/ebook/l10n/:n      → 某节的**缓存**；没有就 available:false
+      //   POST /book/:id/ebook/l10n  { n }  → 真去翻这一节（可能要几十秒）
+      //
+      // ★ 为什么「读缓存」与「翻」分成两个方法：打开对照时界面要**先画已译的部分**，
+      //   而不是一刀切地转圈等模型。GET 是毫秒级的，POST 才是慢的那个。
+      // ★ POST 的失败要按**原因**分状态码：这一节没有英文（`EBOOK_NO_TEXT`）是
+      //   422 —— 用户改不了、也不该重试；模型/网络失败是 502 —— 可以重试。
+      //   两者都回 500 的话，界面只能说「翻译失败」，用户不知道该点重试还是换一节。
+      // ---- 整本预翻（0.59.0）----------------------------------------------
+      //
+      //   GET  /book/:id/ebook/l10n/prefetch           → 进度（没在跑也给一份，来自磁盘）
+      //   POST /book/:id/ebook/l10n/prefetch {action}  → 开 / 停
+      //
+      // ★ 路由**不能**等整本翻完：16 节十几分钟、400 节几小时，浏览器早超时了，
+      //   而宿主还在跑 —— 用户重试就变成「又开一个任务」。所以 POST 只负责启动并
+      //   立刻回当前快照，进度交给 1–2 秒一次的 GET。
+      // ★ `action` 必须显式：缺省当成 `start` 的话，一个拿错 body 的调用就会
+      //   悄悄花掉几十次模型调用。
+      // ★ 这个正则要放在 `l10n/(:n)` 那条**之前**：`prefetch` 不是数字，
+      //   两条本来不会互相吞掉，但顺序写反时以后加 `:n` 的容错（比如允许 `all`）
+      //   就会把这个入口整个吃掉 —— 那是一个只有翻到某本书才会发现的 bug。
+      const ebookPrefetchMatch = /^\/book\/([A-Za-z0-9_-]{1,64})\/ebook\/l10n\/prefetch$/.exec(rest);
+      if (ebookPrefetchMatch !== null) {
+        if (!ebookPrefetchReady) {
+          return sendJson(res, 501, { ok: false, error: '整本预翻没有接上（缺少 startEbookPrefetch）' });
+        }
+        if (method !== 'GET' && method !== 'POST') {
+          return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+        }
+        const book = await bookById(ebookPrefetchMatch[1]);
+        if (book === undefined) return sendJson(res, 404, { ok: false, error: '没有这本书' });
+        try {
+          if (method === 'GET') {
+            return sendJson(res, 200, { ok: true, ...(await ebookPrefetchStatus(book)) });
+          }
+          const body = await readBody(req, 16 * 1024).catch(() => ({}));
+          const action = String(body.action ?? '');
+          if (action === 'stop') {
+            const result = await stopEbookPrefetch(book.id);
+            const status = await ebookPrefetchStatus(book);
+            return sendJson(res, 200, { ok: true, ...result, ...status });
+          }
+          if (action !== 'start') {
+            return sendJson(res, 400, { ok: false, error: 'action 只能是 start 或 stop' });
+          }
+          return sendJson(res, 200, { ok: true, ...(await startEbookPrefetch(book)) });
+        } catch (error) {
+          const code = String(error?.code ?? '');
+          if (code === 'EBOOK_PREFETCH_BUSY') {
+            return sendJson(res, 409, { ok: false, error: error?.message ?? String(error), code });
+          }
+          if (code === 'EBOOK_SECTION' || code === 'EBOOK_EMPTY') {
+            return sendJson(res, ebookErrorStatus(error), {
+              ok: false, error: error?.message ?? String(error), code,
+            });
+          }
+          if (code.startsWith('EBOOK_') || code.startsWith('ZIP_') || code === 'LOCAL_MISSING') {
+            return sendJson(res, ebookErrorStatus(error), {
+              ok: false, error: error?.message ?? String(error), code,
+            });
+          }
+          return sendJson(res, 502, { ok: false, error: error?.message ?? String(error), code });
+        }
+      }
+
+      const ebookL10nMatch = /^\/book\/([A-Za-z0-9_-]{1,64})\/ebook\/l10n(?:\/([1-9]\d{0,4}))?$/.exec(rest);
+      if (ebookL10nMatch !== null) {
+        if (!ebookL10nReady) {
+          return sendJson(res, 501, { ok: false, error: '电子书对照翻译没有接上（缺少 translateEbookSection）' });
+        }
+        if (method !== 'GET' && method !== 'POST') {
+          return sendJson(res, 405, { ok: false, error: 'method not allowed' });
+        }
+        const book = await bookById(ebookL10nMatch[1]);
+        if (book === undefined) return sendJson(res, 404, { ok: false, error: '没有这本书' });
+        try {
+          if (method === 'GET') {
+            if (ebookL10nMatch[2] === undefined) {
+              if (typeof ebookTranslationIndex !== 'function') {
+                return sendJson(res, 501, { ok: false, error: '电子书对照翻译没有接上（缺少 ebookTranslationIndex）' });
+              }
+              return sendJson(res, 200, { ok: true, ...(await ebookTranslationIndex(book)) });
+            }
+            return sendJson(res, 200, { ok: true, ...(await ebookTranslationOf(book, Number(ebookL10nMatch[2]))) });
+          }
+          const body = await readBody(req, 16 * 1024).catch(() => ({}));
+          const n = Number(body.n ?? ebookL10nMatch[2]);
+          if (!Number.isInteger(n) || n < 1) return sendJson(res, 400, { ok: false, error: 'n 必须是正整数' });
+          const payload = await translateEbookSection(book, n, { force: body.force === true });
+          return sendJson(res, 200, { ok: true, ...payload });
+        } catch (error) {
+          const code = String(error?.code ?? '');
+          if (code === 'EBOOK_SECTION') {
+            return sendJson(res, 404, { ok: false, error: error?.message ?? String(error), code });
+          }
+          if (code === 'EBOOK_NO_TEXT') {
+            return sendJson(res, 422, { ok: false, error: error?.message ?? String(error), code });
+          }
+          if (code.startsWith('EBOOK_') || code.startsWith('ZIP_') || code === 'LOCAL_MISSING') {
+            return sendJson(res, ebookErrorStatus(error), {
+              ok: false, error: error?.message ?? String(error), code,
+            });
+          }
+          // 模型 / 网络 / 额度：上游的问题，可以重试。文案原样带出去 ——
+          // `ai.js` 那一侧已经把「失败码 + 建议 + 原始错误」拼成一句人话了。
+          return sendJson(res, 502, { ok: false, error: error?.message ?? String(error), code });
         }
       }
 

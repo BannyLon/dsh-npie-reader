@@ -271,7 +271,9 @@ describe('0.44.9：隐藏 —— 客户端接线', () => {
   it('★ 撤销走提示条上的按钮，而且按钮点了会先关掉提示', () => {
     assert.match(reader, /label: '撤销'/, '隐藏之后没有给撤销');
     assert.match(reader, /toast\.action/, '提示条没渲染 action');
-    assert.match(reader, /const action = toast\.action; setToast\(undefined\)/,
+    // ★ 0.72.0 起 `action` 可以是数组（灵感速记的回执同时给「撤销 / 去看看」），
+    //   所以渲染处折成数组再 map。判据守的仍是那一件事：**先关提示，再执行**。
+    assert.match(reader, /setToast\(undefined\); clearTimeout\(toastTimer\.current\); item\.onClick\(\)/,
       '点了撤销提示还挂着 —— 用户会以为没生效');
   });
 

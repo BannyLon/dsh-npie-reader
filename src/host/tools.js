@@ -102,6 +102,16 @@ export const TOOL_NAMES = {
   diaryUpdate: 'diary_update',
   diaryDelete: 'diary_delete',
   diarySearch: 'diary_search',
+  // ---- 论文（0.69.0）----------------------------------------------------
+  //
+  // ★ 「让 agent 动手」那一半：查库、导入、读摘要、找相关、搜全文。
+  // ★ 刻意**没有** `paper_delete`：删论文是不可逆的（连 PDF 一起），而模型对
+  //   「这篇看起来不重要」的判断没有用户授权。回收站那条路留给用户自己点。
+  paperList: 'paper_list',
+  paperSearch: 'paper_search',
+  paperImport: 'paper_import',
+  paperAbstract: 'paper_abstract',
+  paperRelated: 'paper_related',
 };
 
 /**
@@ -860,6 +870,160 @@ export function createToolDefinitions(service) {
         }
         lines.push('', '要读某一天的全文，用 diary_today 并带上 date。');
         return lines.join('\n');
+      },
+    }),
+
+    /* ---------------- 论文（0.69.0）--------------------------------------- */
+    defineTool({
+      name: TOOL_NAMES.paperList,
+      description: 'List papers in the reader\'s paper library (local, no network). Filter by tag / reading status / a local substring. Returns paper ids used by paper_abstract and paper_related. Note `hasFile: false` means only metadata exists — the full text has not been downloaded, so it cannot be opened in the reader.',
+      parameters: {
+        tag: { type: 'string', description: 'Exact tag name (case-insensitive).' },
+        status: { type: 'string', description: 'new | reading | done' },
+        query: { type: 'string', description: 'Local substring filter over title / authors / abstract / tags. For quoting matched text use paper_search.' },
+        limit: { type: 'number', description: 'Max papers (default 40, cap 200).' },
+      },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => text(value),
+      },
+      execute: async (args) => {
+        const page = await service.papersList({
+          tag: args.tag, status: args.status, query: args.query, limit: args.limit,
+        });
+        if (page.total === 0) return '论文库还是空的。用户可以在插件的「论文」页按 arXiv 编号 / DOI 导入，或者直接上传本地 PDF。';
+        if (page.papers.length === 0) {
+          return `库里 ${page.total} 篇，但没有符合当前条件的。换个标签或去掉筛选再试。`;
+        }
+        const lines = page.papers.map((paper) => {
+          const meta = [
+            paper.year || '',
+            paper.venue || '',
+            paper.arxivId ? `arXiv:${paper.arxivId}` : '',
+            paper.status === 'done' ? '读完' : paper.status === 'reading' ? '在读' : '未读',
+            paper.hasFile ? '有全文' : '**没有全文**',
+          ].filter(Boolean).join(' · ');
+          const flags = paper.tags.length > 0 ? ` [${paper.tags.join(', ')}]` : '';
+          return `- ${paper.id} | ${paper.title}${flags}\n  ${meta}`;
+        });
+        const head = page.matched > page.papers.length
+          ? `论文（显示 ${page.papers.length} / 命中 ${page.matched}，库里共 ${page.total}）`
+          : `论文（${page.papers.length} / 库里共 ${page.total}）`;
+        const missing = page.papers.filter((paper) => !paper.hasFile).length;
+        return [
+          `${head}：`, '', ...lines, '',
+          missing > 0 ? `★ 其中 ${missing} 篇只有元数据：要读原文得先下载全文（用户在论文页点「下载全文」，或自己上传 PDF）。` : '',
+          '读摘要用 paper_abstract；找相关的用 paper_related。',
+        ].filter((line) => line !== '').join('\n');
+      },
+    }),
+    defineTool({
+      name: TOOL_NAMES.paperSearch,
+      description: 'Full-text search INSIDE the local paper library (title / abstract / personal note / tags). Returns the paper id plus a snippet around the match. This searches what is stored locally, not the internet — to find NEW papers use paper_import, which resolves an arXiv id / DOI / title against arXiv.',
+      parameters: {
+        query: { type: 'string', description: 'Text to look for (case-insensitive substring; Chinese needs no word segmentation).', required: true },
+        limit: { type: 'number', description: 'Max hits (default 20, cap 100).' },
+      },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => text(value),
+      },
+      execute: async (args) => {
+        const query = String(args.query ?? '').trim();
+        if (query === '') return 'paper_search 需要一个查询词。';
+        const found = await service.papersSearch({ query, limit: args.limit });
+        if (found.matched === 0) return `库里没有提到「${query}」的论文（标题、摘要、笔记、标签都找过）。`;
+        const lines = found.hits.map(({ paper, snippet }) => {
+          // ★ 这里拿到的是 store 里的原始条目（`file` 对象），不是 `paper_list` 那种
+          //   `hasFile` 布尔 —— 两个形状别混用，混了下场是「有全文」的也标成无全文。
+          const head = [paper.year || '', paper.venue || '', paper.file === null ? '无全文' : ''].filter(Boolean).join(' · ');
+          return `- ${paper.id} | ${paper.title}${head ? `（${head}）` : ''}\n  ${snippet}`;
+        });
+        return [
+          `「${query}」命中 ${found.matched} 篇${found.hits.length < found.matched ? `（显示前 ${found.hits.length}）` : ''}：`,
+          '', ...lines, '', '要读某一篇的摘要用 paper_abstract。',
+        ].join('\n');
+      },
+    }),
+    defineTool({
+      name: TOOL_NAMES.paperImport,
+      description: 'Add ONE paper to the local library from an arXiv id / arXiv link / DOI / paper title, and (by default) download its open-access PDF. Returns the paper id and whether the full text actually landed. Paid/publisher PDFs cannot be downloaded — report that honestly and tell the user to upload the file themselves. Existing papers are merged, not duplicated.',
+      parameters: {
+        input: { type: 'string', description: 'arXiv id (1706.03762), arXiv/DOI URL, DOI (10.xxxx/...), or a title to search.', required: true },
+        download: { type: 'boolean', description: 'Download the open-access PDF when the metadata is known (default true). Set false to only add metadata.' },
+      },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => text(value),
+      },
+      execute: async (args) => {
+        const input = String(args.input ?? '').trim();
+        if (input === '') return 'paper_import 需要一个 arXiv 编号、DOI 或标题。';
+        const result = await service.papersImport({ input, download: args.download !== false });
+        const paper = result.paper;
+        const head = result.created ? '已导入' : '库里已有这篇，已合并元数据';
+        const lines = [
+          `${head}：${paper.title}（${paper.id}）`,
+          [paper.year || '', paper.venue || '', paper.arxivId ? `arXiv:${paper.arxivId}` : '', paper.doi ? `DOI ${paper.doi}` : '']
+            .filter(Boolean).join(' · '),
+        ];
+        if (result.downloaded) lines.push('全文已下载，现在可以直接在阅读器里打开。');
+        else if (result.downloadError) lines.push(`没有拿到全文：${result.downloadError}`);
+        else lines.push('这篇本来就有全文。');
+        return lines.join('\n');
+      },
+    }),
+    defineTool({
+      name: TOOL_NAMES.paperAbstract,
+      description: 'Read one paper\'s metadata and abstract from the local library WITHOUT opening the PDF — use it to decide relevance, summarise, compare, or build an outline from several papers. Returns authors, venue, year, tags, and the abstract text.',
+      parameters: {
+        paperId: { type: 'string', description: 'Paper id from paper_list or paper_search.', required: true },
+      },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => text(value),
+      },
+      execute: async (args) => {
+        const paper = await service.papersAbstract(String(args.paperId ?? '').trim());
+        const meta = [
+          paper.authors.join(', ') || '（没有作者信息）',
+          [paper.year || '', paper.venue || ''].filter(Boolean).join(' · '),
+          paper.arxivId ? `arXiv:${paper.arxivId}` : '',
+          paper.doi ? `DOI ${paper.doi}` : '',
+        ].filter(Boolean).join('\n');
+        if (paper.abstract === '') {
+          return [
+            `${paper.title}`, meta, '',
+            '这篇没有存摘要。可以去源上补全元数据（论文页的「补全元数据」），或者直接读 PDF —— 用户在论文页点「阅读全文」即可。',
+          ].join('\n');
+        }
+        return [`${paper.title}`, meta, '', '摘要：', paper.abstract].join('\n');
+      },
+    }),
+    defineTool({
+      name: TOOL_NAMES.paperRelated,
+      description: 'Find papers in the LOCAL library related to one paper, ranked by shared tags / arXiv categories / venue / authors. Use it to assemble reading lists or literature-review material from papers the user already saved. It is NOT a citation graph — it only uses the user\'s own tags and metadata.',
+      parameters: {
+        paperId: { type: 'string', description: 'Paper id from paper_list or paper_search.', required: true },
+        limit: { type: 'number', description: 'Max related papers (default 8, cap 50).' },
+      },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => text(value),
+      },
+      execute: async (args) => {
+        const { target, related } = await service.papersRelated({ id: String(args.paperId ?? '').trim(), limit: args.limit });
+        if (related.length === 0) {
+          return `库里没有与「${target.title}」相关的其它论文。多打几个标签（论文页的标签栏）就能建立关联 —— 这个工具按标签 / 分类 / venue / 作者重合度排序。`;
+        }
+        const lines = related.map(({ paper, shared }) => {
+          const why = [
+            shared.length > 0 ? `同标签 ${shared.join('、')}` : '',
+            [paper.year || '', paper.venue || ''].filter(Boolean).join(' · '),
+          ].filter(Boolean).join(' · ');
+          return `- ${paper.id} | ${paper.title}（${why}）`;
+        });
+        return [`与「${target.title}」相关的 ${related.length} 篇：`, '', ...lines].join('\n');
       },
     }),
   ];

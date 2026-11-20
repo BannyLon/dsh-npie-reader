@@ -90,6 +90,49 @@ describe('parseFeed', () => {
     assert.ok(parsed.entries[0].html.includes('Atom body'));
   });
 
+  /**
+   * 播客那两个字段（P0）：`<itunes:duration>` 与 `<podcast:transcript>`。
+   *
+   * ★ 判据要盯住**两个具体的错法**，而不是「字段存在」：
+   *   ① 时长三种写法（`3723` / `62:03` / `1:02:03`）都要换算成秒；
+   *   ② 第一条 transcript 是 `http:` 时必须跳过、继续看下一条，而不是直接返回 undefined。
+   *      后者会让「有 https 字幕的那一集」显示成「这期没有字幕」。
+   */
+  it('reads podcast duration in seconds and the first usable transcript', () => {
+    const PODCAST = `<?xml version="1.0"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:podcast="https://podcastindex.org/namespace/1.0">
+<channel><title>Pod</title>
+  <item>
+    <title>Ep one</title>
+    <link>https://pod.example/ep1</link>
+    <guid>ep-1</guid>
+    <enclosure url="https://cdn.example/ep1.mp3" type="audio/mpeg" length="123"/>
+    <itunes:duration>1:02:03</itunes:duration>
+    <podcast:transcript url="https://cdn.example/ep1.vtt" type="text/vtt"/>
+  </item>
+  <item>
+    <title>Ep two</title>
+    <guid>ep-2</guid>
+    <itunes:duration>not-a-time</itunes:duration>
+    <podcast:transcript url="http://cdn.example/insecure.vtt" type="text/vtt"/>
+    <podcast:transcript url="https://cdn.example/ok.srt" type="application/x-subrip"/>
+  </item>
+  <item>
+    <title>Ep three</title>
+    <guid>ep-3</guid>
+    <itunes:duration>3723</itunes:duration>
+  </item>
+</channel></rss>`;
+    const [first, second, third] = parseFeed(PODCAST, 'https://pod.example/feed.xml').entries;
+    assert.equal(first.duration, 3723, '1:02:03 → 3723 秒');
+    assert.equal(first.audio, 'https://cdn.example/ep1.mp3');
+    assert.deepEqual(first.transcript, { url: 'https://cdn.example/ep1.vtt', type: 'text/vtt' });
+    assert.equal(second.duration, undefined, '认不出的时长不写 0');
+    assert.equal(second.transcript.url, 'https://cdn.example/ok.srt', 'http 那条要被跳过，不能就此放弃');
+    assert.equal(third.duration, 3723, '纯秒数写法');
+    assert.equal(third.transcript, undefined);
+  });
+
   it('normalizes RSS 1.0 (RDF), whose <item> is a sibling of <channel>', () => {
     const parsed = parseFeed(RDF, 'https://rdf.example.org/feed.xml');
     assert.equal(parsed.title, 'RDF Feed');

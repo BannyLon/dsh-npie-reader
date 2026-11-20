@@ -88,6 +88,30 @@ export function libraryIndexPath() {
   return join(pluginDataDir(), 'books.json');
 }
 
+/**
+ * 论文库的索引文件 `<数据目录>/papers.json`。
+ *
+ * ★ 与 `data.json` **分开**：`data.json` 每次去抖都全量重写（进度、已读、正文缓存
+ *   都在里面），而论文条目带摘要与作者列表，几百篇就有几百 KB。把它塞进
+ *   `data.json` 等于让「翻一页」也顺带重写整个论文库。
+ * ★ 与书单（`lists/`）也分开：书单是**从用户目录扫描生成的**（可以随时重新生成），
+ *   论文是**用户自己攒的**（下载的 PDF、打的标签、写的笔记关联），丢了不可再生。
+ */
+export function paperIndexPath() {
+  return join(pluginDataDir(), 'papers.json');
+}
+
+/**
+ * 论文 PDF 的落盘目录 `<数据目录>/papers/`。
+ *
+ * ★ 放在数据目录而不是 `pan-cache`：这些 PDF 是**用户资产**（下载可能再也要不回来，
+ *   比如 arXiv 撤稿、会议站下线），不是可删除的缓存。缓存清理那条链路会按配额删东西，
+ *   不该有权限碰这里。
+ */
+export function papersDir() {
+  return join(pluginDataDir(), 'papers');
+}
+
 /** 网盘应用凭证（AppKey / SecretKey）与授权 token。两者都按 600 权限写。 */
 export function panAppPath() {
   return join(pluginDataDir(), 'pan-app.json');

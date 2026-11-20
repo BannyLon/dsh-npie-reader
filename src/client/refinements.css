@@ -138,6 +138,16 @@
   --npr-tab-gap-top: 3px;
   --npr-tab-track: color-mix(in srgb, var(--npr-fg) 8%, var(--npr-bg));
   --npr-tab-thumb: var(--npr-bg);
+  /* 阅读页「文章 / 字幕 / 导读」文字 tab（0.84.2）：不加底座，靠间距和下划线分组。
+     上 6 / 下 12、左右文字间距 22、行高 30 —— 比胶囊版（槽高 30、上 0 / 下 10）
+     更松，因为它管的是三页内容，不是三颗并排的按钮。 */
+  --npr-readtabs-gap: 22px;
+  /* ★ 0.84.8：6px → 12px、槽高 30 → 32。原来离播放条只有 6px，三颗文字 tab
+     视觉上被读成「播放条的第二行控件」而不是「切换整页内容的导航」；
+     加深留白 + 抬一点槽高之后，它是独立的一行，播放条才是附属。 */
+  --npr-readtabs-gap-top: 12px;
+  --npr-readtabs-gap-bottom: 12px;
+  --npr-readtabs-h: 32px;
 }
 
 /* ── 一级：有槽（RSS 阅读页的 全部/未读/收藏 / 分页 / 日记三模块 / 设置分段器；
@@ -162,6 +172,33 @@
 /* 一级筛选条自带留白：不靠 PANEL_CSS 给 `.npr-filters` 的那条 margin —— 一旦那边改了值，
    这条一级筛选条会静默贴边（左缘判据在 check-tabs 里）。 */
 .npr-root .npr-filters-primary { margin: var(--npr-tab-gap-top) var(--npr-tab-inset) 8px; }
+/**
+ * 论文阅读页的「返回摘要页」（0.71.5）。
+ *
+ * ★ 用户 2026-11-07 原话：「能不能把返回这个按钮放在侧边栏的左右边，变个颜色突出一下，
+ *   鼠标移上去有提示，返回到摘要页」。它原来夹在日历 / + / 刷新之间，同一行三颗灰图标，
+ *   点它的理由和另外三颗完全不同，却长得一模一样。
+ * ★ 现在：整宽一条、左右与下面的筛选条对齐（同一个 `--npr-tab-inset`），用强调色。
+ *   只在阅读时出现，平时不占位 —— 侧栏顶部要保持紧凑。
+ * ★ 颜色用 `color-mix` 与主题变量：夜间 / 薄荷各档下自动跟着变，不写死十六进制。
+ */
+.npr-root .npr-paper-back {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  margin: 4px var(--npr-tab-inset) 8px;
+  height: 30px; padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--npr-accent-strong) 42%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--npr-accent-strong) 10%, var(--npr-bg));
+  color: var(--npr-accent-strong);
+  font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer;
+  transition: background .14s ease, border-color .14s ease;
+}
+.npr-root .npr-paper-back:hover {
+  background: color-mix(in srgb, var(--npr-accent-strong) 18%, var(--npr-bg));
+  border-color: var(--npr-accent-strong);
+}
+.npr-root .npr-paper-back:focus-visible { outline: 2px solid var(--npr-accent-strong); outline-offset: 2px; }
+.npr-root .npr-paper-back svg { flex: none; }
 .npr-root .npr-libtabs > button,
 .npr-root .npr-filters-primary > button,
 .npr-root .npr-diary-modes > button,
@@ -563,69 +600,216 @@
 .npr-root :is(.npr-list, .npr-reader, .npr-book-stage, .npr-channel-options, .npr-settings-content, .npr-native-chat, .npr-native-chat *)::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--npr-fg) 31%, transparent); }
 .npr-root :is(.npr-list, .npr-reader, .npr-book-stage, .npr-channel-options, .npr-settings-content, .npr-native-chat, .npr-native-chat *)::-webkit-scrollbar-track { background: transparent; }
 
-/* A quiet, host-themed settings workspace with a stable side navigation. */
-.npr-settings-backdrop { background: rgba(17,17,17,.38); }
-.npr-settings-page { width: min(980px, 100%); height: min(810px, 100%); border-radius: 16px; background: var(--dsw-alias-bg-base); box-shadow: 0 22px 70px rgba(0,0,0,.20); }
-.npr-settings-head { flex: none; padding: 20px 24px; border-bottom: 1px solid var(--npr-border); }
-.npr-settings-head > div { display: flex; align-items: center; gap: 12px; }
-.npr-settings-head span { padding-right: 12px; border-right: 1px solid var(--npr-border); font-size: 10px; font-weight: 700; letter-spacing: .18em; color: var(--npr-muted); }
-.npr-settings-head strong { font-size: 17px; letter-spacing: -.025em; }
-.npr-settings-body { display: grid; grid-template-columns: 190px minmax(0,1fr); flex: 1; min-height: 0; }
-.npr-settings-tabs { display: flex; flex-direction: column; align-items: stretch; gap: 3px; padding: 23px 12px; border: 0; border-right: 1px solid var(--npr-border); background: var(--dsw-alias-bg-layer-1); }
-.npr-settings-nav-caption { padding: 0 11px 10px; color: var(--npr-muted); font-size: 11px; }
-.npr-settings-tabs button { display: flex; align-items: center; gap: 10px; padding: 10px 11px; font-size: 13px; text-align: left; border-radius: 8px; }
-.npr-settings-tabs button:hover { background: var(--npr-hover); color: var(--npr-fg); }
-.npr-settings-tabs button[aria-current=page] { background: var(--dsw-alias-bg-base); color: var(--npr-fg); box-shadow: 0 0 0 1px var(--npr-border); font-weight: 600; }
-.npr-settings-content { min-width: 0; padding: 30px clamp(22px, 4%, 42px) 40px; background: var(--dsw-alias-bg-base); }
-.npr-settings-content section { gap: 18px; }
-.npr-settings-intro { margin-bottom: 7px; }
-.npr-settings-intro h2 { margin: 0 0 4px; font-size: 24px; font-weight: 650; letter-spacing: -.035em; }
-.npr-settings-intro p { margin: 0; color: var(--npr-muted); font-size: 13px; }
-.npr-settings-card { padding: 20px; border: 1px solid var(--npr-border); border-radius: 12px; background: var(--dsw-alias-bg-base); }
-.npr-settings-card-head { margin-bottom: 18px; }
-.npr-settings-content .npr-settings-card h3 { margin: 0; font-size: 14px; font-weight: 620; letter-spacing: -.01em; }
-.npr-settings-card-head p, .npr-settings-hint { margin: 4px 0 0; color: var(--npr-muted); font-size: 12px; line-height: 1.6; }
+/* ── 插件设置（0.66.0）─────────────────────────────────────────────────────
+   这一屏原先的问题不是「缺装饰」，而是四件事：
+     ① 圆角四套并存（卡片 12 / 下拉框 7 / 分段器 8 / 主题块 8）；
+     ② 六项外观设置与四张 AI 卡片**等重平铺**，读不出「我调的是排版还是配色」；
+     ③ 下拉框与滑杆是系统原生控件，纯黑实心滑杆成了全屏最抢眼的东西；
+     ④ 左栏底部空着 300px、保存条与内容之间没有边界。
+   现在的判据只有三条：
+     · 圆角三档：面板 16 / 块 10 / 控件 8；
+     · 「分组」靠小标题 + 细线表达，不靠再加一个框 —— 一屏只留一条真边框（面板本身）；
+     · 数值与控件同排右端对齐（tabular-nums），滑杆带量程刻线。
+
+   ★ 颜色一律 `color-mix(var(--npr-fg), var(--npr-bg))`，不写死灰阶：宿主有浅色/深色
+     两套 `--dsw-alias-*`，写死的 #f5f5f5 会在深色主题里变成一块白斑。
+     **例外是「凹面」**（左栏底、输入框底）：那两个必须用黑色叠加，不能用 fg 叠加 ——
+     `fg 3%` 在深色主题里是把底色**提亮**，于是左栏从「凹」变成「凸」，
+     选中块反倒陷进去了（真机深色截图里就是这样）。黑叠加在两个主题下都变暗。
+   ★ 这四档灰**只挂在 `.npr-settings-page` 上**，不挂 `.npr-root`：它们是设置页的
+     中间灰阶，挂到根上会让阅读页也继承一套它不需要的色阶。
+   ★ `--npr-set-line` 与 `--npr-border` 不是一回事：后者是宿主给的边框令牌（深色下
+     偏亮），而设置页里的细线要能跟着**纸色**走 —— 这里用 fg 混 8–10% 算，两个主题
+     下都是「比底色深一点点」。 */
+.npr-settings-page {
+  --npr-set-line: color-mix(in srgb, var(--npr-fg) 10%, var(--npr-bg));
+  --npr-set-line-soft: color-mix(in srgb, var(--npr-fg) 6.5%, var(--npr-bg));
+  --npr-set-sunken: color-mix(in srgb, #000 5.5%, var(--npr-bg));
+  --npr-set-field: color-mix(in srgb, #000 3%, var(--npr-bg));
+  width: min(1040px, 100%); height: min(860px, 100%);
+  border: 1px solid var(--npr-set-line); border-radius: 16px;
+  background: var(--npr-bg);
+  box-shadow: 0 30px 80px -24px rgba(0,0,0,.30), 0 2px 8px rgba(0,0,0,.04);
+}
+.npr-settings-backdrop { background: color-mix(in srgb, #101014 42%, transparent); }
+
+/* 抬头：印章 + 标题 + 品牌。原先「澄境 | Limina │ 插件设置」里那条竖线把
+   「产品名」和「这一屏的名字」摆成了并列关系，两种字号还一样大。 */
+.npr-settings-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 18px 14px 20px; border-bottom: 1px solid var(--npr-set-line-soft); }
+.npr-settings-title { display: flex; align-items: center; gap: 11px; min-width: 0; }
+/* 印章用**界面无衬线**而不是宋体：宋体在 16px 下「澄」的横画只有 1px，
+   在深色底上会糊成一团灰，第一眼像「字形坏了」。无衬线 600 在 28px 的块里
+   笔画完整，也仍然是「一块墨、一个字」的形态。 */
+.npr-settings-seal { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 8px; background: var(--npr-fg); color: var(--npr-bg); font-family: system-ui, -apple-system, "PingFang SC", sans-serif; font-size: 16px; font-weight: 600; line-height: 1; }
+.npr-settings-title > div { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.npr-settings-head strong { font-size: 14px; font-weight: 600; letter-spacing: 0; line-height: 1.3; }
+.npr-settings-head .npr-settings-brand { font-size: 11px; letter-spacing: .02em; color: var(--npr-muted); }
+.npr-settings-head .npr-icon { flex: none; width: 28px; height: 28px; padding: 5px; border-radius: 7px; color: var(--npr-muted); }
+
+.npr-settings-body { display: grid; grid-template-columns: 218px minmax(0,1fr); flex: 1; min-height: 0; }
+
+/* 左栏：中间灰底 + 白色「浮起的选中块」。
+   ★ 0.66 的第一版在选中块左边画过一条 2px 墨线（`left:-12px`，想让它贴住面板边）。
+     真机截图里那条线落在**面板圆角外**，看着像一道划痕 —— 选中态已经由
+     「白块浮在灰底上 + 字重 600 + 图标不透明」三件事说清了，不需要第四个信号。 */
+.npr-settings-tabs { display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 18px 12px 14px; border: 0; border-right: 1px solid var(--npr-set-line); background: var(--npr-set-sunken); }
+.npr-settings-nav-caption { padding: 0 10px 10px; color: var(--npr-muted); font-size: 10.5px; font-weight: 500; letter-spacing: .16em; }
+.npr-settings-tabs button { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.npr-settings-tabs button svg { flex: none; opacity: .8; }
+.npr-settings-tabs button:hover { background: color-mix(in srgb, var(--npr-fg) 4.5%, transparent); color: var(--npr-fg); }
+.npr-settings-tabs button[aria-current=page] { background: var(--npr-bg); color: var(--npr-fg); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 0 0 1px var(--npr-set-line-soft); }
+.npr-settings-tabs button[aria-current=page] svg { opacity: 1; }
+.npr-settings-nav-foot { display: grid; gap: 3px; margin-top: auto; padding: 14px 10px 4px; border-top: 1px solid var(--npr-set-line-soft); color: var(--npr-muted); font-size: 10.5px; line-height: 1.5; letter-spacing: .02em; }
+.npr-settings-nav-foot strong { color: color-mix(in srgb, var(--npr-fg) 62%, var(--npr-bg)); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+.npr-settings-content { min-width: 0; padding: 32px clamp(24px, 4.2%, 44px) 40px; background: var(--npr-bg); }
+/* 正文列定宽 760：滑杆在这个宽度下每 10px 约 2.5px 的量程变化，再宽就变成
+   「拖了半屏才动一格」。这也是版式上的取舍 —— 设置项不该铺满 800px。
+   ★ 680 那一版在 1032 的面板里右侧会留下 64px 死白，每条分组细线都短一截，
+     看着像没画完；760 之后列宽正好等于内容区可用宽度，细线落在外边距上。 */
+.npr-settings-content > section { display: flex; flex-direction: column; gap: 26px; width: min(100%, 760px); }
+.npr-settings-intro { margin: 0; }
+.npr-settings-intro h2 { margin: 0 0 6px; font-size: 22px; font-weight: 600; letter-spacing: -.01em; line-height: 1.25; }
+.npr-settings-intro p { margin: 0; max-width: 46em; color: var(--npr-muted); font-size: 12.5px; line-height: 1.7; }
+
+/* ── 样张：这一屏的「证据」──
+   ★ 它不是装饰图：字号、行距、字体、版心、纸色都在这里**真渲染**。版心用 `em`
+     直接等于字数（36em = 36 个全角字），所以量出来的宽度就是正文那一栏的宽度。
+   ★ 高度给 min 156 / max 240：字号拉到 32、版心拉到 44 字时内容会变高，
+     `overflow:hidden` 兜住极端情况，但 240 装得下两行 32px/2.4 —— 正常取值不会裁字。
+   ★ 纸色取 `THEMES`（与阅读页同一份），`auto` 时不注入内联色，改用**虚线边**：
+     虚线 = 「这一档不是固定的纸，跟着宿主走」，与主题块里那枚虚线的语义同源。 */
+.npr-specimen { display: flex; flex-direction: column; gap: 14px; min-height: 156px; max-height: 240px; margin: 0; padding: 18px 22px 20px; overflow: hidden; border: 1px solid var(--npr-set-line); border-radius: 10px; background: var(--npr-bg); }
+.npr-specimen.is-auto { border-style: dashed; }
+.npr-specimen-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; font-size: 10px; line-height: 1.5; letter-spacing: .04em; opacity: .52; }
+.npr-specimen-meta span:first-child { letter-spacing: .24em; }
+.npr-specimen-meta span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.npr-specimen-body { display: flex; flex: 1; flex-direction: column; justify-content: center; min-width: 0; }
+.npr-specimen-body p { margin: 0; text-wrap: pretty; }
+.npr-specimen-tail { margin-top: .35em; opacity: .62; }
+
+/* 卡片改成「一段」而不是「一个框」：白底上再加白卡只会多出一圈灰边。
+   块与块之间用一条细线分隔，间距交给上层的 gap（26px）。 */
+.npr-settings-card { padding: 0; border: 0; border-radius: 0; background: none; }
+.npr-settings-card + .npr-settings-card { border-top: 1px solid var(--npr-set-line-soft); }
+.npr-settings-card-head { display: flex; flex-direction: column; gap: 5px; margin-bottom: 16px; }
+.npr-settings-content .npr-settings-card h3 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0; }
+.npr-settings-card-head p, .npr-settings-hint { margin: 0; color: var(--npr-muted); font-size: 12px; line-height: 1.7; }
+
+/* 分组小标题：字距拉开的 10.5px 微标 + 一条自动拉满的细线。
+   它替代了「再加一个卡片」——分组是**读**出来的，不是框出来的。 */
+.npr-set-group { margin-top: 22px; }
+.npr-set-group:first-of-type { margin-top: 0; }
+.npr-set-group-title { display: flex; align-items: center; gap: 12px; margin: 0 0 2px; color: var(--npr-muted); font-size: 10.5px; font-weight: 600; letter-spacing: .18em; }
+.npr-set-group-title::after { content: ''; flex: 1; height: 1px; background: var(--npr-set-line-soft); }
+
+/* ── 行：标签 / 控件 / 数值 三列 ──
+   ★ 行高 40px、无行分隔线（分组之间才有线）：六条横线会把一屏切成表格。
+   ★ 数值列固定 56px 并 `tabular-nums`：拖动时数字不跳宽，眼睛不用重新找位置。 */
 .npr-settings-reading-card .npr-reading-settings-fields { max-width: none; gap: 0; }
-.npr-settings-reading-card .npr-reading-setting { display: grid; grid-template-columns: 110px minmax(0,1fr) 58px; align-items: center; gap: 10px; min-height: 56px; padding: 10px 0; border-bottom: 1px solid var(--npr-border); font-size: 12px; }
-.npr-settings-reading-card .npr-reading-setting > span:first-child { color: var(--npr-muted); }
-.npr-settings-reading-card .npr-reading-setting select { grid-column: 2 / 4; height: 34px; max-width: 300px; padding: 0 10px; border: 1px solid var(--npr-border); border-radius: 7px; background: var(--npr-bg); color: var(--npr-fg); font: inherit; }
-.npr-settings-reading-card .npr-reading-setting output { grid-column: 3; grid-row: 1; text-align: right; font-size: 11px; color: var(--npr-muted); }
-.npr-settings-reading-card .npr-reading-setting input[type=range] { grid-column: 2; grid-row: 1; accent-color: var(--npr-fg); }
+.npr-settings-reading-card .npr-reading-setting { display: grid; grid-template-columns: 76px minmax(0,1fr) 56px; align-items: center; gap: 14px; min-height: 40px; padding: 7px 0; border: 0; font-size: 12.5px; }
+.npr-settings-reading-card .npr-set-label { color: color-mix(in srgb, var(--npr-fg) 78%, var(--npr-bg)); white-space: nowrap; }
+.npr-set-note { color: var(--npr-muted); font-size: 11.5px; }
+.npr-settings-reading-card .npr-set-value { justify-self: end; display: inline-flex; align-items: baseline; gap: 2px; color: var(--npr-fg); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.npr-set-value small { color: var(--npr-muted); font-size: 10px; letter-spacing: .02em; }
 .npr-settings-reading-card .npr-reading-setting-check { border: 0; }
-.npr-settings-reading-card .npr-reading-reset { margin-top: 13px; padding: 5px 0; border: 0; background: none; color: var(--npr-muted); font-size: 12px; cursor: pointer; }
+.npr-settings-reading-card .npr-reading-setting-check .npr-switch { grid-column: 3; justify-self: end; }
+
+/* 下拉框：原生箭头（一枚 9px 灰三角，且随系统缩放漂移）换成自己画的 7px 折角。
+   `appearance:none` 之后必须自己补右边 32px 的内边距，否则长字体名会压到箭头上。 */
+.npr-set-field { position: relative; display: block; min-width: 0; max-width: 320px; }
+.npr-set-field.is-select::after { content: ''; position: absolute; right: 12px; top: 50%; width: 6px; height: 6px; margin-top: -5px; border-right: 1.4px solid var(--npr-muted); border-bottom: 1.4px solid var(--npr-muted); transform: rotate(45deg); pointer-events: none; }
+.npr-set-field :is(select, input) { width: 100%; height: 34px; padding: 0 12px; border: 1px solid var(--npr-set-line); border-radius: 8px; background: var(--npr-set-field); color: var(--npr-fg); font: inherit; font-size: 12.5px; }
+.npr-set-field select { padding-right: 32px; appearance: none; -webkit-appearance: none; cursor: pointer; }
+.npr-set-field :is(select, input):focus-visible { outline: none; border-color: color-mix(in srgb, var(--npr-fg) 45%, var(--npr-bg)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--npr-fg) 7%, transparent); }
+
+/* 滑杆：轨道 3px、已填充段用墨色、滑块是**空心**圆点。
+   ★ 原先是系统控件（4px 实心黑轨 + 16px 实心黑点），一屏两条，比标题还抢眼。
+     空心点把「当前位置」交给那圈描边表达，重量落回文字这一级。
+   ★ 已填充段靠 `--npr-range-fill`（React 按当前值算好写进行内 style），
+     纯 CSS 读不到 input 的值，这是唯一不额外引一次渲染的做法。 */
+.npr-set-range { display: grid; gap: 6px; min-width: 0; }
+.npr-set-range input[type=range] { width: 100%; height: 14px; margin: 0; padding: 0; background: transparent; appearance: none; -webkit-appearance: none; cursor: pointer; }
+.npr-set-range input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 99px; background: linear-gradient(to right, var(--npr-accent-strong) 0 var(--npr-range-fill, 50%), color-mix(in srgb, var(--npr-fg) 12%, var(--npr-bg)) var(--npr-range-fill, 50%) 100%); }
+.npr-set-range input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border: 1.5px solid var(--npr-accent-strong); border-radius: 50%; background: var(--npr-bg); box-shadow: 0 1px 2px rgba(0,0,0,.10); transition: transform .12s ease; }
+.npr-set-range input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.08); }
+.npr-set-range input[type=range]:focus-visible { outline: none; }
+.npr-set-range input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px color-mix(in srgb, var(--npr-fg) 14%, transparent); }
+.npr-set-range-scale { display: flex; justify-content: space-between; padding: 0 1px; color: var(--npr-muted); font-size: 10px; font-variant-numeric: tabular-nums; opacity: .75; }
+
+/* 抬头里的「恢复默认」：与 h3 同一行、靠右。它管整张卡，所以必须和卡的标题在一起，
+   而不是掉到最后一组设置的下方（那样看着只重置最后两行）。 */
+.npr-settings-card-head.npr-settings-head-row { flex-direction: row; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.npr-settings-card-head.npr-settings-head-row > div { min-width: 0; }
+.npr-reading-reset { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+/* ★ `width:auto; max-width:none` 不是可有可无：PANEL_CSS 里给浮层写过
+   `width:100%` 与 `max-width:500px`，那条规则和这里同特异度，不清掉的话
+   卡片抬头里会多出一个 **500px 宽的透明按钮**，文字被居中到卡片中间 ——
+   真机截图里「恢复默认」会飘在标题右侧很远处（量出来的盒子是 521..1021）。 */
+.npr-settings-reading-card .npr-reading-reset { flex: none; width: auto; max-width: none; margin-top: 2px; padding: 0; border: 0; background: none; color: var(--npr-muted); font: inherit; font-size: 11.5px; cursor: pointer; }
 .npr-settings-reading-card .npr-reading-reset:hover { color: var(--npr-fg); }
 /* 设置里的分段器（版心宽度 / 默认版本 / 订阅状态）：外观与上面两处同源，
    这里只留它自己的「按内容定宽」。
    ★ 0.44.5 之前它自带走 28px / 5px / 11px、底色用 `--npr-bg-2`、选中块用
      `--dsw-alias-bg-base` —— 那是三套数字之外的第四套，只是没被圈进截图。 */
 .npr-segmented { display: inline-flex; width: max-content; max-width: 100%; }
-/* 版心宽度那三个是数字（590 / 720 / 860），按内容定宽会一枚窄一枚宽，
+/* 版心宽度是 5 个纯数字按钮（`ReadingAppearance`）。这类「一排小方块」在窄面板里
+   必须**整组换行**，不能把右侧数值列挤掉。`.npr-segmented` 默认 `flex-shrink: 0`
+   + `width: max-content`，不补这一条就永远不折行（0.84.7）。 */
+.npr-segmented.npr-width-options { flex-wrap: wrap; width: auto; }
+/* 版心宽度那几个是数字（28 / 32 / 36 …），按内容定宽会一枚窄一枚宽，
    视觉上像没对齐 —— 给一个下限，让它们等宽。 */
 .npr-segmented button { min-width: 37px; }
-.npr-settings-reading-card .npr-segmented { grid-column: 2 / 4; }
-.npr-settings-reading-card .npr-theme-setting { display: block; padding: 18px 0; }
-.npr-settings-reading-card .npr-theme-setting > span { display: block; margin-bottom: 12px; }
-.npr-theme-options { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); gap: 8px; }
-.npr-theme-options button { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 0; padding: 5px; border: 1px solid var(--npr-border); border-radius: 8px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 10px; text-align: center; cursor: pointer; }
-.npr-theme-options button[aria-pressed=true] { border-color: var(--npr-fg); color: var(--npr-fg); }
-.npr-theme-swatch { display: grid; place-items: center; height: 44px; border-radius: 5px; font-family: Georgia,serif; font-size: 15px; }
-.npr-theme-swatch-auto { background: var(--dsw-alias-bg-layer-2); color: var(--npr-fg); }
+.npr-settings-reading-card .npr-segmented { grid-column: 2 / 4; justify-self: start; }
+
+/* ── 纸色：7 枚「一小页纸」，每枚里一个「文」字 ──
+   ★ 原来是 `Aa`（Georgia）+ 10px 中文标签 —— 两种字形族挤在一枚 44px 的小块里；
+     而选中态只把边框从灰改成黑，在「深色 / 纯黑」两枚上根本看不见。
+   ★ 现在选中态画在**色块外面**（先一圈底色、再一圈墨色）：无论纸是白是黑，
+     圈都落在卡片的底色上，七枚的选中态强弱因此一致。
+   ★ 色块里放中文「文」而不是 `Aa`：这七枚选的是**中文正文的纸**，
+     拿一个拉丁字形去示意中文排版，本来就不对。 */
+.npr-theme-options { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); gap: 6px; }
+.npr-theme-options button { display: grid; gap: 6px; min-width: 0; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 10.5px; cursor: pointer; }
+.npr-theme-options button:hover { color: var(--npr-fg); }
+.npr-theme-options button[aria-pressed=true] { color: var(--npr-fg); font-weight: 600; }
+.npr-theme-swatch { display: grid; place-items: center; height: 46px; border: 1px solid var(--npr-set-line-soft); border-radius: 8px; font-family: "Songti SC", Georgia, serif; font-size: 17px; line-height: 1; transition: box-shadow .12s ease; }
+.npr-theme-options button[aria-pressed=true] .npr-theme-swatch { box-shadow: 0 0 0 2px var(--npr-bg), 0 0 0 3.5px var(--npr-fg); }
+.npr-theme-label { text-align: center; }
+/* 「跟随应用」用虚线边：虚线表示「这一档不是固定的纸，是跟着宿主走」。
+   七枚里只有它是虚线，于是它既是选项也是一个自解释的图例。 */
+.npr-theme-swatch-auto { border-style: dashed; border-color: color-mix(in srgb, var(--npr-fg) 22%, var(--npr-bg)); background: var(--npr-set-field); color: var(--npr-muted); }
+/* 0.84.8：紧凑面板里的滑杆原来从第 2 列起、右边顶着面板边缘，label 缩在左上角，
+   一条设置读起来像「两个不相干的东西」。改成整行通栏，左缘与 label 对齐 ——
+   标签和值占第一行，滑杆占第二行，这是设置项最常见的读法。 */
+.npr-reading-settings .npr-reading-setting input[type=range] { grid-column: 1 / -1; margin-top: 2px; }
 .npr-switch { position: relative; display: inline-flex; align-items: center; cursor: pointer; }
 .npr-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .npr-switch span { display: block; width: 34px; height: 20px; border-radius: 999px; background: var(--npr-border-strong); transition: background .15s; }
-.npr-switch span::after { content: ''; display: block; width: 16px; height: 16px; margin: 2px; border-radius: 50%; background: white; box-shadow: 0 1px 2px rgba(0,0,0,.18); transition: transform .15s; }
-.npr-switch input:checked + span { background: var(--npr-fg); }
+.npr-switch span::after { content: ''; display: block; width: 16px; height: 16px; margin: 2px; border-radius: 50%; background: var(--npr-bg); box-shadow: 0 1px 2px rgba(0,0,0,.18); transition: transform .15s; }
+.npr-switch input:checked + span { background: var(--npr-accent-strong); }
 .npr-switch input:checked + span::after { transform: translateX(14px); }
-.npr-switch input:focus-visible + span { outline: 1px solid var(--npr-accent); outline-offset: 2px; }
+.npr-switch input:focus-visible + span { outline: 1px solid var(--npr-accent-strong); outline-offset: 2px; }
+/* ── 卡片内部的「行列表」──
+   ★ 原先每张卡各自带 `margin-top + padding-top + border-top`，四张卡就画四条横线；
+     现在只有一层 `.npr-set-list > * + *`。多一层会在两行之间出现两条平行细线
+     （1px + 1px 的缝），看着像分页符。 */
+.npr-set-list > * + * { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--npr-set-line-soft); }
 .npr-settings-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
-.npr-settings-toggle-row p, .npr-settings-model-row p { margin: 4px 0 0; color: var(--npr-muted); font-size: 12px; line-height: 1.6; }
+.npr-settings-toggle-row p, .npr-settings-model-row p { margin: 4px 0 0; color: var(--npr-muted); font-size: 12px; line-height: 1.7; }
 /* 卡片里的二级标题（h4）：比 h3 小一档，用在同一张卡内部再分小节时。 */
-.npr-settings-content .npr-settings-card h4 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -.01em; }
+.npr-settings-content .npr-settings-card h4 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0; }
 /* 「翻译用哪个模型」：说明在左、下拉框在右。窄容器下换行堆叠，别把 select 压成一条缝。 */
-.npr-settings-model-row { display: grid; grid-template-columns: minmax(0,1fr) minmax(190px,280px); align-items: center; gap: 16px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--npr-border); }
-.npr-ai-model { width: 100%; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--npr-border); border-radius: 7px; background: var(--npr-bg); color: var(--npr-fg); font: inherit; font-size: 12px; }
+.npr-settings-model-row { display: grid; grid-template-columns: minmax(0,1fr) minmax(190px,280px); align-items: center; gap: 16px; }
+.npr-settings-model-row .npr-set-field { max-width: none; }
+.npr-ai-model { width: 100%; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--npr-set-line); border-radius: 8px; background: var(--npr-set-field); color: var(--npr-fg); font: inherit; font-size: 12px; }
 .npr-ai-model:disabled { opacity: .55; }
 .npr-settings-source-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+/* 「服务地址 / API Key」那一块（订阅管理、朗读共用）原来用宿主 hover 令牌当底色，
+   在设置页里显得像一张**套在卡片里的卡片**。改成「凹面」：与环境同一套中间灰，
+   只靠一条细边和一点内边距把它从正文里分出来。 */
+.npr-settings-page .npr-service { margin: 0; padding: 14px 16px; border: 1px solid var(--npr-set-line-soft); border-radius: 10px; background: var(--npr-set-sunken); }
+.npr-settings-page .npr-service-lead, .npr-settings-page .npr-service-note { font-size: 11.5px; }
 .npr-settings-source-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .npr-settings-source-actions button { display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 9px; border: 1px solid var(--npr-border); border-radius: 7px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 11px; cursor: pointer; }
 .npr-settings-source-actions button:hover { background: var(--npr-hover); }
@@ -637,14 +821,12 @@
 .npr-opml-import .npr-btn { width: max-content; }
 .npr-opml-results { max-height: 200px; overflow: auto; }
 .npr-opml-results label { display: block; padding: 5px; font-size: 12px; }
-/* Audio dock: the <audio> element carries the layout, this only spaces it. */
-.npr-article-audio { display: block; }
 /* Prompt manager: the list is the card body, so it owns the top border only once. */
 .npr-prompt-manager { display: grid; gap: 4px; }
 .npr-prompt-list { display: grid; }
 .npr-prompt-list > p { margin: 0; padding: 18px 2px; color: var(--npr-muted); font-size: 12px; }
 .npr-settings-about-brand { display: flex; gap: 14px; align-items: center; }
-.npr-settings-about-brand > span { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; background: var(--npr-fg); color: var(--npr-bg); font-size: 21px; font-family: Georgia,serif; }
+.npr-settings-about-brand > span { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 10px; background: var(--npr-fg); color: var(--npr-bg); font-family: system-ui, -apple-system, "PingFang SC", sans-serif; font-size: 21px; font-weight: 600; line-height: 1; }
 .npr-settings-about-brand p, .npr-settings-about-card > p { margin: 4px 0 0; font-size: 12px; color: var(--npr-muted); }
 /* slogan 是「关于」卡片的抬头句，不是正文：中文一行、英文一行，比下面那段说明更淡更松。
    特异性要比上一行 `.npr-settings-about-card > p` 高，否则 slogan 会被压成 12px 灰色说明文字。
@@ -656,8 +838,14 @@
 .npr-settings-links { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
 .npr-settings-links a { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 11px; border: 1px solid var(--npr-border); border-radius: 8px; color: var(--npr-fg); font-size: 12px; text-decoration: none; }
 .npr-settings-links a:hover { background: var(--npr-hover); text-decoration: none; }
-.npr-settings-footer { flex: none; min-height: 62px; padding: 12px 23px; background: var(--dsw-alias-bg-base); }
-.npr-settings-footer button { min-width: 86px; height: 34px; background: var(--npr-fg); color: var(--npr-bg); font-size: 12px; }
+/* 保存条与内容之间必须有一条线：原先它只是一块同色白带，内容滚到它下面时
+   看起来像被裁掉，而不是「到底了」。按钮宽度改回内容宽（86px 是给两个字留的，
+   四个字时反而挤），并把「保存中…」的宽度变化吃掉 —— 否则点一下按钮会缩。 */
+.npr-settings-footer { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 60px; padding: 12px 22px; border-top: 1px solid var(--npr-set-line-soft); background: var(--npr-bg); }
+.npr-settings-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--npr-muted); font-size: 11.5px; }
+.npr-settings-footer button { flex: none; min-width: 92px; height: 34px; padding: 0 16px; border: 0; border-radius: 8px; background: var(--npr-fg); color: var(--npr-bg); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.npr-settings-footer button:hover:not(:disabled) { background: color-mix(in srgb, var(--npr-fg) 88%, var(--npr-bg)); }
+.npr-settings-footer button:disabled { opacity: .45; cursor: default; box-shadow: none; }
 
 /* Manage feeds as a searchable list, with actions only where they are useful. */
 .npr-subscriptions { display: block !important; }
@@ -758,13 +946,14 @@
 }
 @container (max-width: 700px) {
   .npr-settings-body { grid-template-columns: 1fr; grid-template-rows: auto minmax(0,1fr); }
-  .npr-settings-tabs { flex-direction: row; gap: 4px; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--npr-border); overflow-x: auto; }
-  .npr-settings-nav-caption { display: none; }
-  .npr-settings-tabs button { white-space: nowrap; padding: 8px; }
-  .npr-settings-content { padding: 22px; }
+  .npr-settings-tabs { flex-direction: row; align-items: center; gap: 2px; padding: 8px 10px; border-right: 0; border-bottom: 1px solid var(--npr-set-line-soft); overflow-x: auto; }
+  .npr-settings-nav-caption, .npr-settings-nav-foot { display: none; }
+  .npr-settings-tabs button { flex: none; height: 32px; padding: 0 10px; white-space: nowrap; }
+  .npr-settings-content { padding: 24px 22px 32px; }
   .npr-theme-options { grid-template-columns: repeat(4,minmax(0,1fr)); }
   /* 窄容器下「说明 + 下拉框」两列会把 select 压成一条缝，改成上下堆叠。 */
   .npr-settings-model-row { grid-template-columns: minmax(0,1fr); }
+  .npr-specimen { max-height: none; }
 }
 @container (max-width: 460px) {
   .npr-workarea.has-companion > .npr-layout { grid-template-columns: minmax(0,1fr); }
@@ -1019,6 +1208,13 @@
 /* 「扫描版·无文字层」：用**普通灰**而不是告警色 —— 它不是错误，书照样能读，
    只是目录与解读不可用。用告警色会和「暂不支持阅读」混成同一档严重程度。 */
 .npr-bookrow-scan { color: var(--npr-faint); border-bottom: 1px dashed var(--npr-border-strong); cursor: help; }
+/* 「同名 N 本」（0.71.6，跨源重复书提示）。
+   ★ 与「扫描版」同一档视觉（灰 + 虚下划线 + `cursor: help`）：两者都是「一句待确认的
+     观察」，不是错误、也不是动作。做成实心胶囊会让它看起来和来源徽章同级 ——
+     而来源是**身份**，这只是一种**可能的巧合**。
+   ★ 用 `nowrap`：`同名 1 本` 在 320px 侧栏里被拆成两行时，第二行只剩一个「本」字。
+   ★ 虚下划线而不是边框：它必须能挤进元信息行而不改变行高（那一行已经有 6 个 span）。 */
+.npr-bookrow-dup { color: var(--npr-faint); border-bottom: 1px dashed var(--npr-border-strong); cursor: help; white-space: nowrap; }
 .npr-bookrow-plain .npr-bookrow-title { font-weight: 500; }
 .npr-bookrow-badge { padding: 1px 6px; border: 1px solid var(--npr-border-strong); border-radius: 999px; font-size: 10px; line-height: 1.5; }
 /* 来源徽章（0.20.4）：「这本书从哪份书单来」。
@@ -1168,9 +1364,12 @@
 /* 每一格：圆形图标。`margin` 负半宽把它的圆心对到定位原点上。
    ★ 用 `margin` 而不是 `translate(-50%, -50%)`：`transform` 已经被位移与缩放占满了。 */
 .npr-book-fab-slot { position: absolute; left: 0; top: 0; z-index: 1; display: inline-flex; align-items: center; justify-content: center; width: var(--npr-fab-size, 38px); height: var(--npr-fab-size, 38px); margin: calc(var(--npr-fab-size, 38px) / -2) 0 0 calc(var(--npr-fab-size, 38px) / -2); padding: 0; border: 1px solid color-mix(in srgb, var(--npr-fg) 14%, transparent); border-radius: 50%; background: color-mix(in srgb, var(--npr-bg) 94%, transparent); backdrop-filter: blur(14px) saturate(1.5); -webkit-backdrop-filter: blur(14px) saturate(1.5); color: var(--npr-fg); box-shadow: 0 6px 16px rgb(0 0 0 / 14%); cursor: pointer; opacity: 0; visibility: hidden; pointer-events: none; transform: translate(0, 0) scale(.6); transition: transform .28s cubic-bezier(.34, 1.32, .5, 1), opacity .16s ease, visibility .16s ease, background .14s ease, color .14s ease; }
-/* 展开：**只有 `.is-open` 一条入口**。贴着按钮的那格先出来（`6 - i` 越小越早），
-   整列看起来像被从按钮里抽出来。 */
-.npr-book-fab.is-open .npr-book-fab-slot { opacity: 1; visibility: visible; pointer-events: auto; transform: translate(var(--npr-fab-x, 0px), var(--npr-fab-y, 0px)) scale(1); transition-delay: calc((6 - var(--npr-fab-i, 0)) * 20ms); }
+/* 展开：**只有 `.is-open` 一条入口**。贴着按钮的那格先出来（差值越小越早），
+   整列看起来像被从按钮里抽出来。
+   ★ 这个常量按**页面**给，不写死在这里：PDF 阅读器 7 槽，电子书 9 槽，共用同一条
+     规则。写死一个数，总有一边的第一格延迟是负的（0.76.1 加「语速」槽时踩过）。
+     `.npr-book-fab-list` 上用 `--npr-fab-last` 传「槽位数 − 2」，不传则按 7 槽算。 */
+.npr-book-fab.is-open .npr-book-fab-slot { opacity: 1; visibility: visible; pointer-events: auto; transform: translate(var(--npr-fab-x, 0px), var(--npr-fab-y, 0px)) scale(1); transition-delay: calc((var(--npr-fab-last, 6) - var(--npr-fab-i, 0)) * 20ms); }
 /* 收起时**倒序**：最上面那格先动，延迟跟着倒过来，否则外圈几格会在最后 100ms 一起消失。 */
 .npr-book-fab:not(.is-open) .npr-book-fab-slot { transition-delay: calc(var(--npr-fab-i, 0) * 12ms); }
 .npr-book-fab-slot:hover { background: var(--npr-hover); }
@@ -1217,6 +1416,37 @@
 /* 选中：双层 box-shadow 画一圈「底色 + 强调色」，比 2px 边框稳 —— 换档时不会因为
    边框变化让四个色块**尺寸跳动**（那会让整行跟着抖一下）。 */
 .npr-book-swatch[aria-checked="true"] { box-shadow: 0 0 0 2px var(--npr-bg), 0 0 0 4px var(--npr-accent-strong); }
+
+/* ---- 读法菜单（0.65.0）：原文 / 对照 / 译文 ----
+   ★ 复用「配色」那张面板的壳子（`.npr-book-palette`）与定位基准
+     （`.npr-book-pill-tint`）：两者都是**同一颗按钮下面**展开的同类东西，
+     壳子不一样，用户会觉得是两个功能各写各的。
+   ★ 比配色面板宽 44px：这里每行有两行字（读法 + 一句说明），208px 会把说明
+     挤成三行 —— 三行说明读起来像三个小段落，扫不动。 */
+.npr-book-palette.is-mode { width: 252px; gap: 4px; padding: 10px; }
+.npr-book-mode-item { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 9px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background .13s ease; }
+.npr-book-mode-item:hover { background: var(--npr-hover); }
+/* 选中项靠**底色 + 实心点**两处一起说：只给底色的话，深色纸面（夜读）上几乎看不见；
+   只给圆点的话，扫一眼分不出哪一行是当前那一行。 */
+.npr-book-mode-item[aria-checked="true"] { background: color-mix(in srgb, var(--npr-accent-strong) 11%, transparent); }
+/* ★ 圆点与说明**不**用 `--npr-muted` / `--npr-border-strong`：这两个变量跟着**应用**
+   主题走，而这颗按钮浮在**书页**主题上 —— 书页选「深色」时 `--npr-bg` / `--npr-fg`
+   被 `THEME_COLORS` 换掉了、那两个没换，于是白天下会看到「深底 + 深灰字」。
+   按 `--npr-fg` 混透明就等于「本主题的次级文字」，四套纸色下都成立
+   （与 `.npr-ebook-zh` 用的是同一条判据）。 */
+.npr-book-mode-dot { flex: 0 0 auto; width: 10px; height: 10px; margin-top: 3px; border: 1px solid color-mix(in srgb, var(--npr-fg) 34%, transparent); border-radius: 999px; }
+/* 实心点用 `inset` 环把中间挖空一圈是刻意的：外圈强调色 + 内圈纸色，比纯色圆点
+   在「浅色纸」和「夜间纸」上都看得清（纯色圆点在黑底上只是一个暗块）。 */
+.npr-book-mode-item[aria-checked="true"] .npr-book-mode-dot { border-color: var(--npr-accent-strong); background: var(--npr-accent-strong); box-shadow: inset 0 0 0 2px var(--npr-bg); }
+.npr-book-mode-text { display: grid; gap: 1px; min-width: 0; }
+.npr-book-mode-name { color: var(--npr-fg); font-size: 12px; line-height: 1.5; }
+.npr-book-mode-item[aria-checked="true"] .npr-book-mode-name { font-weight: 600; }
+.npr-book-mode-desc { color: color-mix(in srgb, var(--npr-fg) 58%, transparent); font-size: 10.5px; line-height: 1.55; }
+
+/* 划词气泡：全中文模式下「划线 / 笔记」不可用（偏移锚在原文上），老老实实灰掉。
+   一颗看着能点、点了没动静的按钮，比灰按钮更像「坏了」。 */
+.npr-book-quotebar button:disabled { opacity: .4; cursor: not-allowed; }
+.npr-book-quotebar button:disabled:hover { background: transparent; }
 
 /* ---- 书页配色：护眼 / 夜间（`<div class="npr-book" data-tint="…">`）----
    ★ 只能**整层 filter**：电子书是一张 pdf.js 画出来的位图，改 CSS 背景色对已经画好
@@ -1399,6 +1629,18 @@
    让位的，现在两条都不在书页上面了（顶部只剩一条 10px 的拖动条，元信息行在正常流里），
    留着它只会在书页上方空出一条谁都不用的白带 —— 一屏少两行正文，且没有任何理由。 */
 .npr-book-stage { flex: 1; min-width: 0; min-height: 0; overflow: auto; scrollbar-gutter: stable; display: flex; justify-content: flex-start; align-items: flex-start; padding: 14px 16px 16px; background: color-mix(in srgb, var(--npr-fg) 6%, var(--npr-bg)); }
+
+/* 单页翻译胶囊的落脚层（0.78.1）：stage 的**兄弟**，不滚动。
+   ★ 用户 2026-11-14：「改成钉在阅读区中心（不随页面滚动）」。上一版胶囊画在书页里，
+     而 stage 是 `overflow: auto` 的滚动容器 —— 它是「这一页的正中」，页面一滚就跟着走；
+     页面比窗口高时甚至滚出视野，等两分钟看不到任何进度。
+   ★ 定位基准就是这一层（`inset: 0` 铺满 stage 的盒子），所以胶囊的
+     `left/top: 50%` 等于阅读区中心，与书页滚到哪里无关。
+   ★ `pointer-events: none` 是硬要求：这层铺满整个阅读区，开着就会挡住书页的拖选、
+     链接与划词气泡；只有胶囊自己（`.npr-book-translation-status`）把它打开。
+   ★ z-index 44：书页各层 ≤3、浮动按钮 40、整本进度条 45、确认卡 60。
+     选 44 是让浮动按钮压住胶囊的边角 —— 反过来（挡住翻页按钮）更糟。 */
+.npr-book-pins { position: absolute; inset: 0; z-index: 44; pointer-events: none; }
 
 
 /* 快捷键提示：只在宽处出现（窄面板下这一行本来就挤）。 */
@@ -2023,6 +2265,11 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
   color: var(--npr-fg); font: inherit; font-size: 11.5px; line-height: 1.65;
 }
 .npr-mark-quote:hover { color: var(--npr-accent-strong); }
+/* 失配提示不画成红色报错：划线和笔记都还在，只是这一版正文里定不了位。 */
+.npr-mark-mismatch {
+  margin: 0; padding-left: 7px; border-left: 2px solid var(--npr-mark-color, #f2c200);
+  font-size: 10.5px; line-height: 1.6; color: var(--npr-muted);
+}
 .npr-mark-foot { display: flex; align-items: center; gap: 4px; }
 .npr-mark-page { flex: 0 0 auto; color: var(--npr-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .npr-mark-tones { display: flex; align-items: center; gap: 3px; margin-left: 2px; }
@@ -2433,6 +2680,355 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
   overflow-x: auto;
 }
 
+/* ---- 电子书的中英对照（0.57.0）----
+   ★ 译文与原文**同宽、同字体、只降一档字号和明度**，不加底色块：
+     底色会把每一段切成一个个「卡片」，一屏十几个色块，读原文时会一直被打断。
+     对照要的是「读起来像同一个人写的两段」，不是「两张贴纸」。
+   ★ 译文**不缩进**，但留 2em 的左内边距 —— 正好与原文的首行缩进对齐。
+     两者左边界一致，视觉上才是一条竖线往下排；若译文也缩进，它会比原文更靠右，
+     整页看起来是歪的。
+   ★ 颜色用 `color-mix` 而不是写死灰：`--npr-fg` 在四套主题（纸/暗/黑/护眼）里
+     都是「本主题的正文色」，按比例混透明就等于「本主题的次级文字」。
+     写死 `#8a8a8a` 在米色纸上偏冷、在黑底上几乎消失。 */
+.npr-ebook-zh {
+  color: color-mix(in srgb, var(--npr-fg) 68%, transparent);
+  font-size: .93em;
+  text-indent: 0;
+}
+/* 段落的译文（独立一行）。
+   ★ **缩进规则必须与 `.npr-ebook-p` 完全一致**：首行缩进 2em、续行顶格。
+     早先这里写的是「整块 `padding-left: 2em`」，本意是让译文与原文的**首行**
+     对齐，实际效果相反 —— 英文续行是顶格的（贴左边距），中文每一行都退后两字，
+     整块看过去就是「中文比英文窄一截、不齐」。用户的原话：「中英段落没有对齐」。
+     所以这里不能有任何整块级的左内边距或左边框，否则左边界又会被推走。
+   ★ 上下留白刻意不对称：上 0.22em 表示「归上一段」，下 0.95em 才是段落间隔。 */
+.npr-ebook-zh-block {
+  margin: .22em 0 .95em;
+  padding-left: 0;
+  text-indent: 2em;
+  line-height: 1.72;
+}
+/* 列表项的译文（在 `<li>` 内部）。项目符号已占了缩进位，这里不再首行缩进。 */
+.npr-ebook-li > .npr-ebook-zh {
+  display: block;
+  margin: .1em 0 0;
+  line-height: 1.66;
+}
+/* 标题的译名：比正文小、比译文大一档，字重跟着标题走 ——
+   它得看起来像「这个标题的另一种说法」，而不是「标题下面的一段正文」。 */
+.npr-ebook-zh-head {
+  font-size: .84em;
+  font-weight: 600;
+  line-height: 1.5;
+  margin: -.25em 0 1.1em;
+  padding-left: 0;
+  /* 标题不缩进（与 `.npr-ebook-h1/h2/h3` 的 `text-indent: 0` 同一条规则）。 */
+  text-indent: 0;
+}
+/* ★ 标题的**译名**站在标题与正文之间，会把原来那条「标题后的第一段不缩进」
+   （`.npr-ebook-h1 + .npr-ebook-p`）打断 —— 于是打开对照后正文第一段会突然
+   多缩两个字，看起来像「对齐坏了」。这里把同一条规则补到译名之后。 */
+.npr-ebook-zh-head + .npr-ebook-p { text-indent: 0; }
+/* 引用块（`q`）的译文要跟着引用块的缩进走，否则它会退回页面左边距。 */
+.npr-ebook-quote + .npr-ebook-zh-block {
+  padding-left: 1.15em;
+  text-indent: 0;
+}
+/* 本节对照的状态条（正在翻 / 没得翻 / 失败 / 缺段）。
+   ★ 贴在正文最上方而不是盖在中间：它会随内容滚动走，读的时候不挡字。 */
+.npr-ebook-zh-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 0 0 1.15em;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--npr-fg) 5%, transparent);
+  color: var(--npr-muted);
+  font-size: .78em;
+  line-height: 1.65;
+  text-indent: 0;
+}
+.npr-ebook-zh-note button {
+  padding: 1px 10px;
+  border: 1px solid var(--npr-border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--npr-fg);
+  font-size: inherit;
+  cursor: pointer;
+}
+.npr-ebook-zh-note button:hover { background: var(--npr-hover); }
+/* 失败用强调色描边，而不是整块变红：红底在深色主题上刺眼，
+   而这条提示只是「这一节没成」，不该压过正文。 */
+.npr-ebook-zh-note.is-error {
+  background: color-mix(in srgb, var(--npr-accent-strong) 8%, transparent);
+  color: color-mix(in srgb, var(--npr-fg) 82%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--npr-accent-strong) 30%, transparent);
+}
+
+/* ---- 澄境阅读助手（0.60.0）----
+   ★ 两种形态，各有各的落点：
+     · **入口**是左栏顶部那颗图标按钮（`.npr-ra-trigger`），跟着 `.npr-sidebar-toolbar`
+       的布局走，不自己定位；
+     · **窗口**是居中的一张卡片（`.npr-ra-window`），带一层很轻的遮罩。
+   ★ 窗口居中而不是从右下角浮出：它列的是「几本书」，是一个**列表**，而列表需要
+     眼睛左右扫；右下角那种小卡片只装得下一行状态，装不下「还有哪几本没译」。
+   ★ 遮罩只压到 0.28 而不是 0.45：助手是「看一眼、点一下、关掉」的东西，
+     把背后的书单压成全黑，用户会以为整个面板被接管了。
+   ★ 所有颜色走主题变量，不写死白/灰：四套纸色（纸 / 暗 / 黑 / 护眼）下，
+     这张窗口得是「这张纸上的一个对话框」，不是一块贴上去的塑料板。 */
+.npr-ra-trigger { position: relative; }
+/* 窗口开着时这颗是「选中」态：底色 + 强调色，和「经过」的 hover 分开（两件不同的事）。 */
+.npr-ra-trigger.is-on { color: var(--npr-accent-strong); background: color-mix(in srgb, var(--npr-accent-strong) 12%, transparent); }
+/* 失效态（非「在读」页签）：**必须看得见地灰**，并且 hover 也不许亮起来 ——
+   一个“点了没反应但看起来能点”的按钮比一个灰按钮更让人困惑。 */
+.npr-root .npr-sidebar-toolbar .npr-icon:disabled { opacity: .34; cursor: not-allowed; }
+.npr-root .npr-sidebar-toolbar .npr-icon:disabled:hover { color: var(--npr-faint); background: transparent; }
+/* 关着窗口时的「还在跑」提示：一颗 6px 的点，比在按钮上写百分比可靠 ——
+   工具栏那排图标等宽不等字，写数字会把整排挤歪。 */
+.npr-ra-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--npr-accent-strong);
+  box-shadow: 0 0 0 2px var(--npr-bg);
+  animation: npr-ra-pulse 1.8s ease-in-out infinite;
+}
+/* 停在半路（stopped / failed）：不闪，只是一颗灰点 —— 它没在推进，别再演「正在工作」。 */
+.npr-ra-dot.is-idle {
+  background: color-mix(in srgb, var(--npr-muted) 78%, transparent);
+  animation: none;
+}
+@keyframes npr-ra-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .npr-ra-dot { animation: none; }
+}
+
+/* 遮罩。`z-index` 取 72：比设置页（70）高一层 —— 助手是从书架点开的，
+   而设置页是从同一个工具栏点开的，两者不该互相盖住；也低于提示气泡（90）。 */
+.npr-ra-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 72;
+  background: rgb(0 0 0 / 20%);
+  animation: npr-ra-fade .14s ease-out;
+}
+@keyframes npr-ra-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.npr-ra-window {
+  position: fixed;
+  z-index: 73;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  /* ★ 宽度写死上限、而不是 `width: 100%`：这个窗口的内容是「封面 + 书名 + 进度」，
+     行太长反而不好扫；窄窗口时它跟着缩，但不低于 320px 才不会把「翻译全本」挤断。
+     0.61.0 从 520 加到 560：一行里多了封面和「还剩约 2.3 小时」，520 下书名会被挤到
+     只剩十来个字，「译文名著文库 076[法]雨果-九三年…」这种标题全成了省略号。 */
+  width: min(560px, calc(100vw - 40px));
+  min-width: min(320px, calc(100vw - 40px));
+  max-height: min(580px, calc(100vh - 56px));
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--npr-fg) 12%, transparent);
+  border-radius: 14px;
+  background: var(--npr-bg);
+  color: var(--npr-fg);
+  box-shadow: 0 24px 64px rgb(0 0 0 / 26%), 0 1px 0 rgb(255 255 255 / 22%) inset;
+  animation: npr-ra-rise .18s cubic-bezier(.3, 1.2, .6, 1);
+}
+@keyframes npr-ra-rise {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 8px)) scale(.985); }
+  to { opacity: 1; transform: translate(-50%, -50%); }
+}
+
+.npr-ra-head {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 15px 16px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--npr-fg) 9%, transparent);
+}
+.npr-ra-head-text { flex: 1 1 auto; min-width: 0; }
+.npr-ra-name { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: .01em; }
+.npr-ra-caption {
+  margin: 3px 0 0;
+  color: var(--npr-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.npr-ra-close { flex: none; }
+
+.npr-ra-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 16px 8px;
+}
+/* 一行 = 一本书。`.is-stopped` / `.is-failed` 只改进度条的颜色（见下），
+   行本身不做整块变色 —— 那会让「有一本停在半路」看起来像「这一行坏了」。 */
+.npr-ra-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--npr-fg) 7%, transparent);
+}
+.npr-ra-row:last-of-type { border-bottom: 0; }
+.npr-ra-row-main { flex: 1 1 auto; min-width: 0; display: grid; gap: 4px; }
+.npr-ra-row-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.npr-ra-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.npr-ra-tag {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--npr-fg) 7%, transparent);
+  color: var(--npr-faint);
+  font-size: 9.5px;
+  letter-spacing: .06em;
+  line-height: 15px;
+}
+.npr-ra-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--npr-muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.npr-ra-track {
+  height: 3px;
+  margin-top: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--npr-fg) 10%, transparent);
+}
+.npr-ra-track > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--npr-accent-strong);
+  /* 轮询 1.5 秒一跳，没有补间就是「啪啪」跳格。 */
+  transition: width .4s ease;
+}
+/* 停下来 / 中断 / 已译完：还是一条进度，但不再是「正在推进」。
+   ★ `.is-done` 也算进来：一条 100% 的强调色进度条和「正在跑的那本」长得一样，
+     列表里就会同时出现两条橙线 —— 而这一屏只有一个问题：「哪一本在跑」。 */
+.npr-ra-row.is-stopped .npr-ra-track > i,
+.npr-ra-row.is-failed .npr-ra-track > i,
+/* `partial`（0.64.0）：跑完了但有节没成。它和「停了」一样是**没在推进**的状态，
+   进度条不该还是强调色 —— 那会让人以为还在后台跑。 */
+.npr-ra-row.is-partial .npr-ra-track > i,
+.npr-ra-row.is-done .npr-ra-track > i {
+  background: color-mix(in srgb, var(--npr-muted) 75%, transparent);
+}
+.npr-ra-row-action { flex: none; }
+
+/* 「翻译全本」：**不是**实心主按钮。它要花钱、要跑几十分钟，一次误触的代价太大，
+   安静的描边让人多看一眼再点（与正文里那颗「对照」同一判据）。 */
+.npr-ra-action {
+  min-width: 74px;
+  padding: 5px 11px;
+  border: 1px solid color-mix(in srgb, var(--npr-fg) 16%, transparent);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--npr-fg);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background .14s ease, border-color .14s ease, color .14s ease;
+}
+.npr-ra-action:hover:not(:disabled) { background: var(--npr-hover); }
+.npr-ra-action:disabled { opacity: .42; cursor: default; }
+/* 在跑时那颗是「翻译中」——给它强调色描边，让「哪一本正在跑」一眼看得出来。 */
+.npr-ra-action.is-stop {
+  border-color: color-mix(in srgb, var(--npr-accent-strong) 45%, transparent);
+  color: var(--npr-accent-strong);
+}
+/* 已译完：灰掉但不消失 —— 它回答的是「这本要不要再翻一次」，答案是「不用」。 */
+.npr-ra-action.is-done { border-style: dashed; }
+
+/* 封面列（0.61.0）：与书架行**同一个组件**（`BookCover` → `.npr-diary-cover`），
+   所以同一本书在两处长得一样。宽度是唯一要改的那个数：40px 比书架的 36px 略大，
+   因为这里一行只有三件事，留得出这点地方；再宽 8px 就会把
+   《译文名著文库 076[法]雨果-九三年（叶尊译，上海译文…）》这种长书名压成半截。 */
+.npr-ra-cover { flex: 0 0 auto; align-self: flex-start; width: 40px; margin-top: 1px; }
+.npr-ra-cover .npr-diary-cover { aspect-ratio: 2 / 3; box-shadow: 0 0 0 1px color-mix(in srgb, var(--npr-fg) 12%, transparent); }
+.npr-ra-cover .npr-diary-cover-glyph { font-size: 16px; }
+.npr-ra-cover .npr-diary-cover-caption { display: none; }
+
+/* 空态：上下留够边距，让「这个页签还没有电子书」落在窗口中间偏上，
+   而不是被压在列表起始位置显得像一条错误行。 */
+.npr-ra-empty {
+  margin: 26px 4px 30px;
+  color: var(--npr-muted);
+  font-size: 11.5px;
+  line-height: 1.9;
+  text-align: center;
+}
+.npr-ra-error {
+  margin: 8px 0 4px;
+  color: color-mix(in srgb, var(--npr-accent-strong) 86%, var(--npr-fg));
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.npr-ra-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 16px 13px;
+  border-top: 1px solid color-mix(in srgb, var(--npr-fg) 9%, transparent);
+  background: color-mix(in srgb, var(--npr-fg) 3%, transparent);
+}
+.npr-ra-foot-note {
+  flex: 1 1 auto;
+  margin: 0;
+  color: var(--npr-faint);
+  font-size: 10px;
+  line-height: 1.6;
+}
+.npr-ra-stopall {
+  flex: none;
+  padding: 4px 13px;
+  border: 1px solid var(--npr-border-strong);
+  border-radius: 999px;
+  background: var(--npr-bg);
+  color: var(--npr-fg);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.npr-ra-stopall:hover:not(:disabled) { background: var(--npr-hover); }
+.npr-ra-stopall:disabled { opacity: .45; cursor: default; }
+
+/* ★ 这一块（0.60.0）只留上面那条窗口样式：第一版做成了阅读页右下角的小浮层
+   （`npr-tx-*`），用户看到后改成「左栏顶部的助手窗口」，那些行随之删掉。
+   留着它们的话，`check-classes` 会报「定义了但没人用」——那正是这条守卫的价值。 */
+
+
 /* ---- 页脚：位置 + 进度 ----
    ★ 一条 2px 的进度条贴在**最底边**：读者不需要读数字就知道「还剩多少」。
      `tabular-nums` 让「第 9 节」翻到「第 10 节」时数字不跳位。 */
@@ -2719,6 +3315,35 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-root .npr-diary-ai { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; height: 30px; padding: 0 12px; border: 1px solid var(--npr-border-strong); border-radius: 9px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; cursor: pointer; }
 .npr-root .npr-diary-ai:hover:not(:disabled) { border-color: var(--npr-accent); }
 .npr-root .npr-diary-ai:disabled { opacity: .45; cursor: not-allowed; }
+/* 「删这一天」（0.75.0）。
+   ★ 幽灵按钮（无底、无描边），hover 才泛红。两条理由都是硬的：
+     ① 一屏只留一个主按钮 —— AI 整理是那个，删除是次级；
+     ② 但**入口必须常显**：藏在 hover 里的删除入口等于没有入口（用户 2026-09 定的）。
+   ★ 不给它和 AI 按钮一样描边：两个描边按钮并排会被读成「一对同级动作」，
+     而「整理这一天」与「删掉这一天」的重量差一个数量级。 */
+.npr-root .npr-diary-wipe { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; height: 28px; padding: 0 9px; border: 0; border-radius: 8px; background: transparent; color: var(--npr-faint); font: inherit; font-size: 12px; cursor: pointer; }
+.npr-root .npr-diary-wipe:hover { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent); color: var(--dsw-alias-state-error-primary); }
+/* 确认框的内容（0.75.0）：一句合计 + 逐条清单 + 一句「文件去哪了」。 */
+.npr-wipe-lead { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--npr-muted); font-variant-numeric: tabular-nums; }
+.npr-wipe-flag { margin-left: 8px; padding: 1px 6px; border-radius: 999px; background: color-mix(in srgb, var(--npr-fg) 8%, transparent); font-size: 11px; }
+/* 清单最多 240px 就自己滚：一天可以有几十条，框不能被撑到屏幕外 ——
+   而「逐条列出」这件事不能因为条数多就退化成「共 N 条」。 */
+.npr-wipe-list { margin: 0; padding: 4px; max-height: 240px; overflow: auto; list-style: none; border-radius: 9px; background: color-mix(in srgb, var(--npr-fg) 3%, transparent); }
+.npr-wipe-list li { display: flex; align-items: baseline; gap: 8px; padding: 5px 7px; border-radius: 6px; font-size: 12.5px; line-height: 1.5; }
+.npr-wipe-list li + li { border-top: 1px solid color-mix(in srgb, var(--npr-fg) 6%, transparent); }
+.npr-wipe-when { flex: 0 0 auto; font-variant-numeric: tabular-nums; color: var(--npr-faint); font-size: 11.5px; }
+.npr-wipe-kind { flex: 0 0 auto; color: var(--npr-muted); font-size: 11px; }
+/* 摘要单行省略：确认框是用来「认出是哪一条」的，不是用来读全文的。 */
+.npr-wipe-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--npr-fg); }
+.npr-wipe-note { margin: 0; font-size: 11.5px; line-height: 1.7; color: var(--npr-muted); }
+.npr-wipe-note code { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--npr-fg) 8%, transparent); font-size: 11px; }
+.npr-wipe-error { margin: 0; font-size: 12px; line-height: 1.6; color: var(--dsw-alias-state-error-primary); }
+/* 破坏性动作那颗按钮：实心红。取消留在它左边，形状仍是次要的。
+   ★ 选择器带 `.npr-root` 才能压住 `.npr-modal-actions button` 那条基础样式
+     （0,2,0 > 0,1,1）—— 否则红了字却没有红底。 */
+.npr-root .npr-wipe-go { color: #fff; background: var(--dsw-alias-state-error-primary); border-color: transparent; font-weight: 600; }
+.npr-root .npr-wipe-go:hover:not(:disabled) { filter: brightness(.94); }
+.npr-root .npr-wipe-go:disabled { opacity: .5; cursor: default; }
 
 /* 正文的**宽度约束**：一行 70 个汉字没人读得下去。
    ★ 用 `var(--npr-diary-sheet-w)` 而不是 `40em`：`40em` 量的是**这个元素自己**的
@@ -3265,6 +3890,31 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-write-rich .ProseMirror code { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--npr-fg) 7%, transparent); font-size: .92em; }
 .npr-write-rich .ProseMirror pre { margin: .7em 0; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--npr-fg) 6%, transparent); overflow: auto; }
 .npr-write-rich .ProseMirror pre code { padding: 0; background: transparent; font-size: .9em; }
+/* 写作区里的图（0.74.0）。
+   ★ 症状：写入口里贴一张截图 / 打开一条带图的灵感，那张图按**固有像素**撑满整块稿纸
+     （1031px 宽的截图就是 1031px 宽），横向溢出成滚动条、纵向把写作区顶到 300px 以上，
+     底下那一行字被挤出可视区 —— 而同一张图在便签墙上是正常的（`.npr-diary-body img`
+     那一条 0.73.1 就修过了）。**缺的从来不是 `max-width`，是这里压根没有 img 规则**。
+   ★ 只写 `max-width` 不够：宽图被压到 100% 之后，高度仍等于等比缩放后的高度
+     （3:2 的截图在 800px 宽里约 530px 高），照样把稿纸占满。两条必须一起限。
+   ★ `height: auto` 不能省 —— 只给 `max-height` 时 UA 会按盒子高度拉伸图片
+     （与 `.npr-diary-body img` 同一条理由）。
+   ★ 240px 对着容器来：`.ProseMirror` 自己 `max-height: 320px`，留出 80px
+     才看得见图下面那一行字，不然贴完图看不出「光标落在哪」。
+   ★ 不用 `object-fit: cover` 裁切：写作时看到的必须是整张图，
+     裁掉一半会让人以为「粘坏了」，然后去重贴一张。
+   ★ 预览态（⌘E）共用同一条：预览和写是两个视图，一张图在两边尺寸不同
+     会让人以为「预览把它压小了」。 */
+.npr-write-rich .ProseMirror img,
+.npr-write-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 240px;
+  width: auto;
+  height: auto;
+  margin: .45em 0;
+  border-radius: 6px;
+}
 /* 选中态与光标：不引入品牌色描边，只让选区自己说话。 */
 .npr-write-rich .ProseMirror ::selection { background: color-mix(in srgb, var(--npr-accent) 26%, transparent); }
 .npr-write-rich .ProseMirror-gapcursor::after { border-top-color: var(--npr-fg); }
@@ -3435,6 +4085,19 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-diary-body blockquote { margin: 0 0 .7em; padding-left: 10px; border-left: 2px solid var(--npr-border-strong); color: var(--npr-muted); }
 .npr-diary-body code { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--npr-fg) 8%, transparent); font-size: .92em; }
 .npr-diary-body a { color: var(--npr-fg); text-decoration: underline; text-underline-offset: 2px; }
+/* 贴进来的图（0.73.1）。★ 这条不是「好看一点」，是**防撑破布局**：
+   便签墙是 `grid-template-columns: repeat(auto-fill, minmax(258px, 1fr))`，而 `1fr`
+   轨道的 `min-width` 默认是 `auto` —— 内容能把轨道撑开。一张 4K 截图贴进灵感，
+   那张纸会被撑到图的原生宽度，整行跟着变宽、右边的纸被推出可视区。
+   ★ `height: auto` 不能省：只写 `max-width` 时，浏览器仍可能按图片固有尺寸参与
+   布局计算，图被压扁或留出一条空白。
+   ★ `display: block` 也是必需的：行内元素（img 默认）会带基线空隙，相邻两行之间
+   出现一条说不清来历的缝。 */
+.npr-diary-body img { display: block; max-width: 100%; height: auto; margin: .5em 0; border-radius: 6px; }
+/* 三行截断里的图给一个固定高度：`-webkit-box` 的 clamp 数是按**行**算的，
+   一张 800px 高的图会占满整块，「只露三行」这句话就失效了，卡片也高得离谱。
+   `object-fit: cover` 让它在那个高度里铺满，而不是被压成一条。 */
+.npr-diary-clamp img { max-height: 132px; width: 100%; object-fit: cover; }
 .npr-diary-body-plain { white-space: pre-wrap; }
 
 /* ★★ 一条记录默认只露出**三行**（用户 2026-10-27：「每条内容最多显示三行，如果内容
@@ -3822,6 +4485,25 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-quick-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .npr-quick-foot .npr-diary-save { margin-left: auto; }
 .npr-quick-error { margin: 0; font-size: 11px; line-height: 1.7; color: var(--dsw-alias-state-error-primary); }
+/* 恢复提示行（0.72.0）。★ 草稿被**自动**填进输入框时必须解释「这是哪来的」：
+   不解释的话用户第一反应是「谁写的这句」，而下一步往往是把它删掉 ——
+   那就等于没做草稿。淡底而不是描边：描边在这一屏里是「可点的一块」的意思。 */
+.npr-quick-restored { display: flex; align-items: center; gap: 6px; margin: 0; padding: 6px 8px; border-radius: 8px; background: var(--npr-hover); font-size: 11px; line-height: 1.6; color: var(--npr-muted); }
+.npr-quick-restored > svg { flex: 0 0 auto; color: var(--npr-faint); }
+.npr-quick-restored > span { flex: 1; min-width: 0; }
+/* 「清空」是**文字按钮**、不是主按钮：这一屏的主按钮只有「记下来」一颗。 */
+.npr-quick-discard { flex: 0 0 auto; padding: 1px 6px; font: inherit; font-size: 11px; font-weight: 600; color: var(--npr-accent-strong); background: transparent; border: 0; border-radius: 5px; cursor: pointer; }
+.npr-quick-discard:hover { background: var(--npr-border-strong); }
+/* 标签候选行（0.72.0）。只在打着 `#` 时出现、选完就消失 —— 它是输入框的下拉，
+   不是「浮层里的第二排控件」。★ 换行而不是横向滚动：候选最多 6 个、
+   都是短词，藏起来一半比换一行更难找。★ 顺序是「最近用过的在前」（/tags 已按
+   last 倒序），所以不用在这里再排一次。 */
+.npr-quick-tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.npr-quick-tag { padding: 2px 8px; font: inherit; font-size: 11.5px; font-weight: 600; color: var(--npr-fg); background: var(--npr-bg-2); border: 1px solid var(--npr-border-strong); border-radius: 999px; cursor: pointer; }
+.npr-quick-tag:hover { background: var(--npr-hover); }
+/* 高亮用「边框变主色」而不是整块填色：填色会被读成「这个标签已经选中了」。 */
+.npr-quick-tag.is-active { border-color: var(--npr-accent); color: var(--npr-accent-strong); }
+.npr-quick-tags .npr-quick-hint { margin-left: auto; }
 
 /* 窄面板：日历与写入口都要能用（`@container` 与全文件同一套断点）。
    ★ 只改**一个变量**，工具栏与滚动区同时收窄 —— 上一版两边各写一个数，必然漂。 */
@@ -3832,3 +4514,1368 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
   .npr-diary-source-tag { max-width: 100%; }
 }
 
+
+/* ══ 便签墙（0.64.0）═════════════════════════════════════════════════════
+   灵感模块从「一天一条流水」改成「一面纸片」。
+
+   ★ 为什么是墙而不是更好的列表：一条灵感的使用场景是「想起来看一眼、想记就
+     再贴一张」。流水行的排法回答的是「今天几点写了什么」（核对用），而墙上
+     一张纸、一行字、一个颜色回答的是「这几天我在想什么」。
+   ★ 纸色只从 `--note-hue` 这一支走，深浅两个主题都由 `color-mix` 混出底色：
+     写死 `#fbe3a1` 这类浅色，在深色主题下就是六块发光的板子。
+   ★ 这里所有选择器都带类名（`.npr-note[data-tone=…]`），不复用 `[data-tone]`
+     这个裸属性：划线（yellow/green/blue/pink）与日历点（1–5）已经占了同一个
+     属性名，裸写会一改改三处。 */
+
+/* 墙面与写字卡共用一条宽度 —— 两块的左边缘必须落在同一条竖线上。
+   600px 是「读一篇稿子」的宽度；三列纸片在那个宽度里每格只剩 190px，
+   一句话被折成四行，墙会退化成竖着排的卡片列表。 */
+.npr-diary-reader[data-wall="yes"] { --npr-diary-sheet-w: 920px; }
+/* 写字卡自己就是墙上的第一张纸，底下那条分界线（「写作坞 / 记录区」的分界）
+   在纸面之外再画一条，会把它读成一张表单。 */
+.npr-diary-dock[data-wall="yes"] { border-bottom: 0; padding-bottom: 2px; }
+/* 写字卡与墙之间留一口气。原来靠 dock 的 8px + 滚动区的 14px 就够（那是"分界线两侧"的距离），
+   现在两者之间没有线，只剩两块纸挨着 —— 8px 看着像同一块板被切了一刀。 */
+.npr-diary-reader[data-wall="yes"] .npr-diary-scroll { padding-top: 20px; }
+
+/* ── 色板：色名 → 一个基色 ────────────────────────────────────────────────
+   只定义一个 `--note-hue`，底色 / 描边 / 选环全部由它混出来。
+   ★ 六个色都是**中等明度**（不是最浅那档）：混 30% 到白底上是纸，混 30% 到
+     黑底上是沉下去的一片 —— 同一支色在两个主题下都还认得出是黄/粉/蓝。
+   ★ 30% 这个数是出图量出来的：17% 在浅色主题下六张纸几乎全是白的（只剩描边
+     一点色），深色主题下反倒刚好 —— 说明「混多少」不能按一个主题定，
+     取两支底色的中间值，两边都不至于看不见、也不至于发荧光。 */
+.npr-note[data-tone="amber"], .npr-write[data-wall="yes"][data-tone="amber"], .npr-write-tone[data-tone="amber"] { --note-hue: #d9a441; }
+.npr-note[data-tone="rose"], .npr-write[data-wall="yes"][data-tone="rose"], .npr-write-tone[data-tone="rose"] { --note-hue: #d98b9c; }
+.npr-note[data-tone="sky"], .npr-write[data-wall="yes"][data-tone="sky"], .npr-write-tone[data-tone="sky"] { --note-hue: #6f9fd8; }
+.npr-note[data-tone="mint"], .npr-write[data-wall="yes"][data-tone="mint"], .npr-write-tone[data-tone="mint"] { --note-hue: #5fb3a1; }
+.npr-note[data-tone="lilac"], .npr-write[data-wall="yes"][data-tone="lilac"], .npr-write-tone[data-tone="lilac"] { --note-hue: #9b8ad0; }
+.npr-note[data-tone="cream"], .npr-write[data-wall="yes"][data-tone="cream"], .npr-write-tone[data-tone="cream"] { --note-hue: #b9a982; }
+
+/* ── 写字卡 ──────────────────────────────────────────────────────────────
+   ★ 它是**一张纸**，不是表单：有底色、有圆角、没有外描边。焦点靠底色提一档
+     表达（`:focus-within`），不再加一圈品牌色 outline。 */
+.npr-write[data-wall="yes"] {
+  padding: 13px 15px 10px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--note-hue) 30%, var(--npr-bg));
+  transition: background .16s ease-out;
+}
+.npr-write[data-wall="yes"]:focus-within { background: color-mix(in srgb, var(--note-hue) 36%, var(--npr-bg)); }
+/* 三行半的起点：卡片不能空成一块板（0.44.4 那次把 140px 收到 96px 是同一个理由），
+   也不能高到把下面的墙推出首屏。 */
+.npr-write[data-wall="yes"] .npr-write-input { min-height: 64px; }
+/* 工具条上方那条线改成「纸的折痕」：主题边框色压在黄底上是一条发灰的脏线。 */
+.npr-write[data-wall="yes"] .npr-write-tools { border-top-color: color-mix(in srgb, var(--note-hue) 42%, transparent); }
+/* 字数提示靠右站，与「贴到墙上」贴在一起 —— 中间那段空白由 `flex: 1` 撑开，
+   色板因此落在最左边。与参考图同一套顺序：纸色 | 空白 | 字数 · 快捷键 | 按钮。 */
+.npr-write[data-wall="yes"] .npr-write-hint { text-align: right; }
+/* 主按钮在纸上是**深底浅字的胶囊**（与全项目「fg/bg 这一对对比度最大」同一条），
+   不用品牌色：品牌色是一支浅薄荷绿，压白字实测约 2:1。 */
+.npr-write[data-wall="yes"] .npr-diary-save { height: 29px; border-radius: 999px; padding: 0 15px; }
+
+/* 色板：六个圆点。选中的那个套一圈「纸色外环 + 背景色垫圈」，
+   而不是把圆点放大 —— 变大会让这一排出现一个突兀的洞。 */
+.npr-write-tones { display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto; }
+.npr-root .npr-write-tone {
+  width: 15px; height: 15px; padding: 0; border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--note-hue) 62%, var(--npr-fg));
+  background: color-mix(in srgb, var(--note-hue) 72%, var(--npr-bg));
+  cursor: pointer;
+}
+.npr-root .npr-write-tone:hover:not(:disabled) { border-color: color-mix(in srgb, var(--note-hue) 88%, var(--npr-fg)); }
+.npr-root .npr-write-tone[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--note-hue) 20%, var(--npr-bg)),
+              0 0 0 3.5px color-mix(in srgb, var(--note-hue) 78%, var(--npr-fg));
+}
+.npr-root .npr-write-tone:focus-visible { outline: 2px solid var(--npr-accent); outline-offset: 3px; }
+.npr-root .npr-write-tone:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ── 墙 ──────────────────────────────────────────────────────────────────
+   `auto-fill` + `minmax(258px, 1fr)`：920px 下正好三列（892 ÷ 3 ≈ 297），
+   窗口窄成两列、再窄一列，不需要为每个断点各写一条。
+   ★ 212px 会排成**四**列 —— 每格比一张便签还窄，一句话折成五行，
+     墙看起来像一张密集的表格，反而比原来的流水行更难扫。
+   ★ `align-items: start` 是必需的：默认的 `stretch` 会把同一行里矮的便签
+     拉到与最高的那张等高，纸片立刻变成一排等高的表单格。 */
+.npr-wall {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(258px, 1fr));
+  gap: 14px;
+  align-items: start;
+  padding-bottom: 22px;
+}
+
+/* 一张纸。 */
+.npr-note {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* ★ 网格项默认 `min-width: auto` —— 内容比轨道宽时，轨道会被**撑开**而不是裁掉。
+     一张大图贴进来，那张纸会把整行撑到图的原生宽度（右侧的纸被推出可视区）。
+     `min-width: 0` 让「纸」不再被内容撑大，宽出来的部分交给里面的 `img`
+     自己按 `max-width: 100%` 收（0.73.1）。 */
+  min-width: 0;
+  min-height: 116px;
+  padding: 13px 15px 10px;
+  border-radius: 13px;
+  border: 1px solid color-mix(in srgb, var(--note-hue) 34%, var(--npr-bg));
+  background: color-mix(in srgb, var(--note-hue) 30%, var(--npr-bg));
+  transition: background .14s ease-out, box-shadow .14s ease-out, transform .14s ease-out;
+}
+/* 悬停只抬 1px + 一点影：这是「纸被指尖碰了一下」，不是「一个可点的卡片」。
+   ★ 深色主题下影子几乎看不见，所以位移与底色各提一档，两个主题都有回应。 */
+.npr-note:hover { background: color-mix(in srgb, var(--note-hue) 36%, var(--npr-bg)); box-shadow: 0 4px 14px rgba(0, 0, 0, .07); transform: translateY(-1px); }
+/* 从侧栏时间轴点进来的那一条：一圈纸色描边。与流水行那条「左侧竖线」同一件事，
+   但纸片上没有左边可画 —— 竖线会盖住圆角。 */
+.npr-note.is-focus { box-shadow: 0 0 0 2px color-mix(in srgb, var(--note-hue) 70%, var(--npr-fg)); }
+
+.npr-note-head { display: flex; align-items: center; gap: 6px; min-height: 15px; }
+/* 分类小字：#标签。11px + 字距 + 全大写的写法只在西文里成立，中文不需要大写，
+   只靠「小一号 + 半透明 + 字距」把它压成一行眉注。 */
+.npr-note-label {
+  min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: 10.5px; letter-spacing: .06em;
+  color: color-mix(in srgb, var(--npr-fg) 52%, var(--npr-bg));
+}
+.npr-note-grow { flex: 1; min-width: 0; }
+/* 出处：一枚 12px 的图标。便签上没有地方放「引自《书名》」那么长的字，
+   所以这里只留形状（书 / 文章），点开才是那张出处卡。 */
+.npr-root .npr-note-origin {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; padding: 0; border: 0; border-radius: 6px;
+  background: transparent; color: color-mix(in srgb, var(--npr-fg) 48%, var(--npr-bg));
+  cursor: pointer;
+}
+.npr-root .npr-note-origin:hover { background: color-mix(in srgb, var(--note-hue) 26%, transparent); color: var(--npr-fg); }
+
+/* 正文：便签上只露六行。三行是流水行的规矩（一屏要放下 8 条），
+   纸片本来就只该有一两句话，六行已经足够看见「这张写的是什么」。 */
+.npr-note .npr-diary-body { margin: 0; font-size: 14px; line-height: 1.62; }
+.npr-wall .npr-diary-clamp { -webkit-line-clamp: 6; line-clamp: 6; }
+/* 纸上的 markdown 不该比纸更响：标题/列表在这里只当普通段落读。 */
+.npr-note .npr-diary-body h1, .npr-note .npr-diary-body h2, .npr-note .npr-diary-body h3 { margin: 0 0 .3em; font-size: 14px; font-weight: 600; line-height: 1.62; }
+.npr-note .npr-diary-body ul, .npr-note .npr-diary-body ol { margin: 0 0 .3em; padding-left: 1.1em; }
+.npr-note .npr-diary-body blockquote { margin: 0 0 .3em; padding-left: 8px; border-left-color: color-mix(in srgb, var(--note-hue) 60%, transparent); }
+
+/* 脚：时间在左，动作在右。`margin-top: auto` 把这一行按到纸的最下沿 ——
+   短句子的纸片因此也是「上下留白均匀」的，而不是字贴着底边。 */
+.npr-note-foot { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 2px; }
+.npr-note-when { font-size: 11px; color: color-mix(in srgb, var(--npr-fg) 46%, var(--npr-bg)); font-variant-numeric: tabular-nums; }
+.npr-note-acts { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; opacity: 0; transition: opacity .12s ease-out; }
+/* 动作只在「指着它 / 键盘停在这儿」时现身：常驻一颗垃圾桶，纸片就成了待办。 */
+.npr-note:hover .npr-note-acts, .npr-note:focus-within .npr-note-acts { opacity: 1; }
+.npr-root .npr-note-open {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px;
+  background: transparent; color: color-mix(in srgb, var(--npr-fg) 52%, var(--npr-bg));
+  cursor: pointer;
+}
+.npr-root .npr-note-open:hover { background: color-mix(in srgb, var(--note-hue) 28%, transparent); color: var(--npr-fg); }
+.npr-root .npr-note .npr-diary-action { height: 22px; padding: 0 5px; }
+
+/* ========================================================================== */
+/* 论文（第四个主视图）                                                        */
+/* ========================================================================== */
+/*
+ * 这一块只新增类，不改任何既有规则：论文页仍走 `.npr-workarea > .npr-layout`
+ * 那套三列骨架（左栏 / 1px 分隔 / 主区），所以窗口拖动、窄屏折行、沉浸态
+ * 全部继承书架的行为，不需要在这里再写一遍。
+ *
+ * 颜色一律用语义变量（`--npr-bg` / `--npr-fg` / `--npr-muted` / `--npr-border`），
+ * 因为这一页会在亮色、纸张、夜间三套主题下都出现 —— 写死 hex 的那一版在夜间
+ * 会变成一条白得刺眼的侧栏（书架早期踩过）。
+ */
+
+.npr-paper-search { padding: 6px 10px 4px; flex: 0 0 auto; }
+.npr-paper-search input {
+  width: 100%; height: 28px; padding: 0 9px; box-sizing: border-box;
+  border: 1px solid var(--npr-border); border-radius: 7px;
+  background: var(--npr-bg-2); color: var(--npr-fg); font: inherit; font-size: 12px;
+}
+.npr-paper-search input:focus { outline: 1px solid var(--npr-accent); outline-offset: 0; }
+
+/* 标签条：横向可滚，不折行 —— 折行会把列表往下顶，而列表高度是固定的。 */
+.npr-paper-tagbar {
+  display: flex; gap: 4px; padding: 2px 10px 6px; overflow-x: auto; flex: 0 0 auto;
+  scrollbar-width: none;
+}
+.npr-paper-tagbar::-webkit-scrollbar { display: none; }
+.npr-paper-tagbar button {
+  flex: 0 0 auto; height: 22px; padding: 0 8px; border: 1px solid transparent; border-radius: 999px;
+  background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; cursor: pointer; white-space: nowrap;
+}
+.npr-paper-tagbar button:hover { background: var(--npr-hover); color: var(--npr-fg); }
+.npr-paper-tagbar button[aria-pressed=true] {
+  background: var(--npr-tab-thumb); color: var(--npr-fg); border-color: var(--npr-border);
+}
+
+.npr-paper-list { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 2px 6px 16px; }
+
+/* 论文列表行：**`div` 里两个 `button`**（2026-11-13）。
+   ★ 不能是一个 `button` 装下全部：读完那一行右侧多了一颗「重新阅读」，而
+     `<button>` 里放 `<button>` 是非法 HTML，浏览器会把它拆开且各版本拆法不同。
+   ★ 行本身负责底色 / hover / 选中，主按钮负责文字与点击 —— 于是「点行 = 选中速读卡」
+     与「点按钮 = 重新阅读」是两件互不侵吞的事（外层 pointer 事件会先吃掉内层的 click）。 */
+.npr-paper-row {
+  position: relative;
+  display: flex; align-items: flex-start; gap: 6px; width: 100%;
+  padding: 9px 10px; margin-bottom: 2px; border: 1px solid transparent; border-radius: 8px;
+  background: transparent;
+}
+/* ★ 压暗只给「读完」那一行看：它整行不可点（`disabled`），唯一的入口是右边那颗
+   「重新阅读」。**不动整个盒子的 `opacity`** —— 那会把那颗按钮一起压低对比度，
+   而它恰恰是这一行仅剩的入口。所以只把标题 / 元信息 / 徽章的墨色压下去。 */
+.npr-paper-row.is-dim .npr-paper-row-title { color: var(--npr-muted); font-weight: 400; }
+.npr-paper-row.is-dim .npr-paper-row-meta,
+.npr-paper-row.is-dim .npr-paper-badge { opacity: .6; }
+.npr-paper-row.is-dim .npr-paper-row-main { cursor: default; }
+/* 压暗那一行不给 hover 高亮：给了就等于说「这里能点」。 */
+.npr-paper-row:not(.is-dim):hover { background: var(--npr-hover); }
+/* ★ 选中态要**一眼看得出来**（用户 2026-11-13：「侧边栏选中的论文视觉明显一些，
+   与未选中的有一个视觉上的明显区分」）。改之前它与 `:hover` 是同一种浅灰，
+   鼠标停在哪一行就分不清哪一行是选中的。现在三件事一起变：
+   底色偏强调色、边框描出来、左边一条 3px 竖条。 */
+.npr-paper-row.is-active {
+  background: color-mix(in srgb, var(--npr-accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--npr-accent) 55%, transparent);
+}
+.npr-paper-row.is-active::before {
+  content: ''; position: absolute; left: -1px; top: 7px; bottom: 7px; width: 3px;
+  border-radius: 3px; background: var(--npr-accent-strong);
+}
+.npr-paper-row.is-active .npr-paper-row-title { font-weight: 600; color: var(--npr-accent-strong); }
+.npr-paper-row-main {
+  flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px;
+  text-align: left; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer;
+}
+.npr-paper-row-main:focus-visible { outline: 2px solid var(--npr-accent-strong); outline-offset: 3px; border-radius: 6px; }
+.npr-paper-row-action {
+  /* ★ 显式 `width: auto`：它进的是 flex 行，一旦哪天被挪进 grid 列，`width: 100%`
+     会让这颗小胶囊变成整列宽的横条。 */
+  flex: none; width: auto; align-self: center; white-space: nowrap;
+  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--npr-border);
+  background: transparent; color: var(--npr-fg); font-size: 11px; line-height: 18px; cursor: pointer;
+}
+.npr-paper-row-action:hover { border-color: var(--npr-accent); background: var(--npr-hover); }
+.npr-paper-row-title {
+  font-size: 13px; line-height: 1.4; color: var(--npr-fg);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+/* ★ 选中态的字重与墨色在上面 `.is-active` 那一组里一起写（0.77.2），
+   这里不再重复一条 `font-weight: 600` —— 同一个效果两处声明，改一处就漂。 */
+.npr-paper-row-meta {
+  font-size: 11px; color: var(--npr-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.npr-paper-row-foot { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-top: 1px; }
+
+.npr-paper-badge { font-size: 10px; padding: 0 5px; border-radius: 4px; line-height: 15px; color: var(--npr-muted); background: var(--npr-hover); }
+.npr-paper-badge.is-reading { color: var(--npr-accent-strong); background: color-mix(in srgb, var(--npr-accent) 16%, transparent); }
+.npr-paper-badge.is-done { color: var(--npr-muted); background: color-mix(in srgb, var(--npr-fg) 8%, transparent); }
+/* ★ 这里曾经还有一条 `npr-paper-progress` 的规则：进度是独立一段字。2026-11-13 起
+   进度并进徽章（「在读 · 1/33 页」，与电子书同一套），那个类名与它的样式一起删掉了
+   —— 留着就是一个永远不会再出现的空规则。 */
+.npr-paper-nofile { font-size: 10px; color: var(--npr-faint); }
+.npr-paper-nofile::before { content: '· '; }
+
+.npr-paper-tag, .npr-paper-cat {
+  display: inline-flex; align-items: center; gap: 3px; font-size: 10px; line-height: 16px;
+  padding: 0 6px; border-radius: 999px; color: var(--npr-muted);
+  background: color-mix(in srgb, var(--npr-fg) 7%, transparent);
+}
+.npr-paper-tag.is-editable { padding-right: 2px; }
+.npr-paper-tag.is-editable button {
+  width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%;
+  background: transparent; color: var(--npr-faint); font-size: 12px; line-height: 1; cursor: pointer;
+}
+.npr-paper-tag.is-editable button:hover { color: var(--npr-fg); background: var(--npr-hover); }
+.npr-paper-cat { font-family: var(--npr-mono, ui-monospace, monospace); }
+
+.npr-paper-main { min-width: 0; overflow: auto; padding: 28px clamp(18px, 4vw, 56px) 64px; }
+/* 说明页与 RSS / 书架**共用** `.npr-welcome` 那套版式，垂直留白也要对得上。
+   书架用的是 `clamp(48px,14vh,160px) auto 48px`；这里容器自带 28px 上内边距，
+   所以把 welcome 的 margin 减掉同样一截，两者加起来仍是 48~160px。
+   ★ 原来写成 `margin: 0 auto` 是为了给三行小字让位 —— 换成正式说明页之后，
+     大标题会贴着容器顶，和另外两个 tab 一眼就不像同一套东西。 */
+.npr-paper-main .npr-welcome { margin: clamp(20px, 10vh, 132px) auto 48px; }
+
+.npr-paper-card { max-width: 760px; margin: 0 auto; }
+.npr-paper-card h1 { font-size: 22px; line-height: 1.35; margin: 0 0 10px; color: var(--npr-fg); }
+.npr-paper-authors { margin: 0 0 4px; font-size: 13px; color: var(--npr-fg); opacity: .82; }
+.npr-paper-venue { margin: 0 0 16px; font-size: 12px; color: var(--npr-muted); }
+.npr-paper-card h2 { font-size: 12px; letter-spacing: .04em; color: var(--npr-muted); margin: 22px 0 8px; font-weight: 600; }
+
+.npr-paper-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+.npr-paper-primary, .npr-paper-ghost {
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px;
+  border-radius: 7px; font: inherit; font-size: 12px; cursor: pointer; text-decoration: none;
+  border: 1px solid var(--npr-border); background: var(--npr-bg-2); color: var(--npr-fg);
+}
+/* ★ 0.84.8：实心按钮一律用 `--npr-accent-strong`，不用 `--npr-accent`。
+   浅色主题下 accent 是 #6C87FF，白字压上去只有 3.43:1（勉强够图形元素的 3:1，
+   但远低于文字的 4.5:1）；strong 是 #3D58E0，白字 5.72:1。深色主题两者同为
+   #3D58E0，改这里不会变。hover 再压深 14%，而不是回到那个偏浅的 accent。 */
+.npr-paper-primary { border-color: transparent; background: var(--npr-accent-strong); color: #fff; }
+.npr-paper-primary:hover { background: color-mix(in srgb, var(--npr-accent-strong) 86%, #000); }
+
+/* ── 主操作按钮：识别字幕 / 生成导读 ──
+   ★ 0.84.8：这两颗是耗时或花钱的动作，之前都穿灰底 `.npr-btn`，和旁边「再试一次」
+     这种次要动作长得完全一样 —— 一屏里没有主次，用户不知道该点哪个。
+     实心品牌色是唯一的主路径信号，次要动作继续用灰底。 */
+.npr-btn.npr-btn-primary { background: var(--npr-accent-strong); border-color: transparent; color: #fff; }
+.npr-btn.npr-btn-primary:hover { background: color-mix(in srgb, var(--npr-accent-strong) 86%, #000); }
+.npr-btn.npr-btn-primary:disabled { opacity: .55; }
+.npr-paper-ghost:hover { background: var(--npr-hover); }
+.npr-paper-primary:disabled, .npr-paper-ghost:disabled { opacity: .5; cursor: default; }
+
+.npr-paper-notice {
+  margin: 0 0 6px; padding: 9px 12px; border-radius: 8px; font-size: 12px; line-height: 1.6;
+  color: var(--npr-muted); background: color-mix(in srgb, var(--npr-fg) 5%, transparent);
+}
+.npr-paper-notice.is-ok { color: var(--npr-muted); }
+
+.npr-paper-abstract p { margin: 0; font-size: 14px; line-height: 1.85; color: var(--npr-fg); }
+/* 标签 / arXiv 分类这两块的外壳。
+   ★ 间距交给里面的 h2（`.npr-paper-card h2` 自带 22px 上边距），外壳再加一层
+     会把两块之间撑出 40 多像素的空白 —— 速读卡本来就靠紧凑才好扫。
+   ★ 这个类名曾经只在 JSX 里出现、CSS 里没有定义（`check-classes.mjs` 会红）。 */
+.npr-paper-tags { margin: 0; }
+.npr-paper-taglist { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.npr-paper-taglist input {
+  height: 24px; min-width: 120px; padding: 0 8px; border: 1px dashed var(--npr-border);
+  border-radius: 999px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 11px;
+}
+.npr-paper-taglist input:focus { outline: none; border-style: solid; border-color: var(--npr-accent); }
+
+.npr-paper-empty, .npr-paper-error { padding: 14px 12px; font-size: 12px; line-height: 1.7; color: var(--npr-muted); }
+.npr-paper-error { color: #c0392b; }
+
+/* ---- 对话框 ---- */
+.npr-paper-modal {
+  position: fixed; inset: 0; z-index: 60; display: flex; align-items: flex-start; justify-content: center;
+  padding: 8vh 16px 16px; background: color-mix(in srgb, var(--npr-fg) 32%, transparent);
+}
+.npr-paper-modal-card {
+  width: min(640px, 100%); max-height: 76vh; overflow: auto; padding: 14px 16px 16px;
+  border-radius: 12px; border: 1px solid var(--npr-border); background: var(--npr-bg-2);
+  box-shadow: 0 18px 48px rgba(0,0,0,.28);
+}
+.npr-paper-modal-head { display: flex; align-items: center; justify-content: space-between; }
+.npr-paper-modal-head strong { font-size: 13px; color: var(--npr-fg); }
+.npr-paper-modal-hint { margin: 6px 0 10px; font-size: 12px; line-height: 1.6; color: var(--npr-muted); }
+.npr-paper-modal-input { display: flex; gap: 8px; }
+.npr-paper-modal-input input {
+  flex: 1 1 auto; height: 32px; padding: 0 10px; border: 1px solid var(--npr-border);
+  border-radius: 8px; background: var(--npr-bg); color: var(--npr-fg); font: inherit; font-size: 12px;
+}
+.npr-paper-modal-input input:focus { outline: 1px solid var(--npr-accent); }
+
+/* 伴读「+」打开的论文快捷提示词面板（0.77.1）。
+   `PromptManager` 原本只住在设置页，标题字号靠
+   `.npr-settings-content .npr-settings-card h3` 那条**带作用域**的规则；
+   挪进这个浮层后作用域不匹配，h3 会退回 UA 默认的 1.17em 粗体 ——
+   比浮层自己的标题还大。这里补同口径的一条。 */
+.npr-root .npr-prompts-sheet h3 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0; }
+.npr-root .npr-prompts-sheet .npr-settings-source-head { margin-bottom: 10px; }
+
+.npr-paper-results { list-style: none; margin: 12px 0 0; padding: 0; }
+.npr-paper-results li {
+  display: flex; align-items: center; gap: 12px; padding: 9px 2px;
+  border-top: 1px solid var(--npr-border);
+}
+.npr-paper-result-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.npr-paper-result-title { font-size: 12.5px; line-height: 1.45; color: var(--npr-fg); }
+.npr-paper-result-meta { font-size: 11px; color: var(--npr-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- 阅读页 ---- */
+/* ★ 0.68.1 删掉了这两条规则（全屏裸容器 + 固定定位的返回按钮，类名字面量见
+   CHANGELOG 0.68.1）。它们存在的前提是「论文阅读另起一棵树」，而那棵树
+   脱离了 `.npr-workarea > .npr-layout` 骨架 ⇒ 左栏消失、书页缩成一小张、
+   240% 时正文溢出窗口、FAB 画到面板外。现在阅读页与书架共用
+   `.npr-reader.npr-reader-book`，返回入口挪到左栏工具栏的图标行里。
+   ★ 这里**不要**把删掉的两个类名带点写出来：`check-classes.mjs` 收集「定义」
+     时不剥注释，写出来就会重新被算成「定义了但没人用」。 */
+
+@media (max-width: 720px) {
+  .npr-paper-main { padding: 20px 16px 56px; }
+  .npr-paper-card h1 { font-size: 19px; }
+}
+
+/* ==== 页内链接热区（0.68.0） ================================================
+   PDF 里的链接（参考文献编号、DOI、目录条目）必须能点，但**不能改变页面的样子**：
+   画布是位图，热区是压在上面的一层透明盒子，只有 hover 时给一点淡色提示。
+
+   ★ 容器 `pointer-events: none`、热区自己 `auto`：容器若可点，整页都拖不动选区。
+   ★ z-index 1：在画布与文字层之上、划线层（2）之下。链接的 click 要能拿到，
+     但划过线的色块仍要盖在它上面（那是数据，不是装饰）。
+   ★ 透明背景 + 1px 虚线条：不描边的话用户根本不知道哪里能点，而 PDF 里的链接
+     不一定有下划线（很多论文只把编号涂蓝，甚至完全不上色）。 */
+.npr-book-links { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.npr-book-link {
+  position: absolute; display: block; pointer-events: auto; box-sizing: border-box;
+  padding: 0; border: 0; background: transparent; cursor: pointer;
+  border-radius: 2px;
+}
+.npr-book-link:hover,
+.npr-book-link:focus-visible {
+  background: color-mix(in srgb, var(--npr-accent) 16%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--npr-accent) 55%, transparent);
+  outline-offset: 0;
+}
+.npr-book-link.is-jump { cursor: alias; }
+
+/* ==== 划词翻译的结果浮层（0.68.0） ==========================================
+   钉在阅读区底部：`.npr-book-view` 是**不滚动**的定位基准，所以翻页不会把它带走。
+
+   ★ 宽度用 `min(720px, 92%)` 并居中：一行译文最长 ~40 字最舒服，再宽就是一条
+     从左扫到右的长文，读起来比原文还累。
+   ★ 高度上限 42% 且内部滚动：一张公式推导能翻出十几行，不能让它把书页压没
+     —— 用户要看的是「这句原文旁边那句中文」，不是让译文接管整屏。 */
+.npr-book-translate {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+  z-index: 6; width: min(720px, 92%); max-height: 42%;
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 12px 11px;
+  border: 1px solid var(--npr-border-strong);
+  border-radius: 10px;
+  background: var(--npr-bg);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 22%);
+  font-size: 12.5px;
+}
+.npr-book-translate-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--npr-muted);
+}
+.npr-book-translate-actions { display: flex; align-items: center; gap: 2px; }
+.npr-book-translate-actions button {
+  height: 22px; padding: 0 8px; border: 1px solid var(--npr-border); border-radius: 6px;
+  background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; cursor: pointer;
+}
+.npr-book-translate-actions button:hover { color: var(--npr-fg); background: var(--npr-hover); }
+.npr-book-translate-source {
+  margin: 0; padding-left: 8px; border-left: 2px solid var(--npr-border-strong);
+  font-size: 11.5px; line-height: 1.5; color: var(--npr-muted); font-style: italic;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.npr-book-translate-body {
+  margin: 0; overflow: auto; line-height: 1.7; color: var(--npr-fg);
+  white-space: pre-wrap; word-break: break-word;
+}
+.npr-book-translate-body.is-muted { color: var(--npr-muted); }
+.npr-book-translate-body.is-error { color: var(--npr-danger, #d9534f); }
+
+@media (max-width: 720px) {
+  .npr-book-translate { width: 94%; max-height: 50%; }
+}
+
+/* ==== 速读卡里的 BibTeX（0.69.0） ==========================================
+   自动复制之外再摊一段出来：桌面端剪贴板被拒时，这里是唯一能把引用拿走的出口。
+   ★ `user-select: text` 必须显式给 —— 阅读区为了划线复制，祖先上可能有
+     `user-select: none`，不覆盖的话用户连选都选不中这段等宽文本。
+   ★ 横向滚动而不是折行：.bib 的字段一折行，贴进 LaTeX 时容易带上多余空格。 */
+.npr-paper-bibtex {
+  margin: 0 0 16px; padding: 10px 12px 12px;
+  border: 1px solid var(--npr-border); border-radius: 8px;
+  background: var(--npr-bg-2);
+}
+.npr-paper-bibtex-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.npr-paper-bibtex-head h2 { margin: 0; font-size: 12px; font-weight: 600; color: var(--npr-muted); }
+.npr-paper-bibtex-head button {
+  border: 0; background: transparent; color: var(--npr-muted);
+  font: inherit; font-size: 11.5px; cursor: pointer; user-select: text;
+}
+.npr-paper-bibtex-head button:hover { color: var(--npr-fg); }
+.npr-paper-bibtex pre {
+  margin: 8px 0 0; padding: 0; overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px; line-height: 1.65; color: var(--npr-fg);
+  white-space: pre; user-select: text;
+}
+
+/* ==== 左栏「+」下拉：三种添加途径（0.69.1） ================================
+   原来导入 / 搜 arXiv / 上传三颗图标并排，用户得先猜哪个是干什么的。现在合成
+   一颗「+」，点开是一张三行的菜单 —— 每行写清「做什么」和「给什么东西」。
+
+   ★ `.npr-paper-add` 必须是 `position: relative`：菜单用绝对定位挂在它下面，
+     而不是挂在 `data-window-drag` 那行工具栏上（那行是窗口拖拽区，定位基准会
+     随滚动/布局变化，且菜单会被 drag band 的命中判定影响）。
+   ★ 菜单复用 `PANEL_CSS` 里现成的 `.npr-menu`（边框/圆角/阴影/hover 一套），
+     这里只覆盖定位与每行内部的两行排版。选择器带 `.npr-root` 是为了压过
+     `.npr-menu` 的 `right: 0`（两者同特异度时靠注入顺序，不如显式提高稳）。
+   ★ `z-index: 30`：要盖住下面的筛选条和标签条（它们没有 z-index，但会按文档
+     顺序画在后面）。 */
+.npr-paper-add { position: relative; display: inline-flex; flex: 0 0 auto; }
+.npr-root .npr-sidebar-toolbar .npr-icon.is-on {
+  color: var(--npr-fg); background: var(--npr-hover);
+}
+.npr-root .npr-paper-addmenu {
+  top: 32px; left: 0; right: auto; z-index: 30;
+  min-width: 232px; padding: 5px;
+}
+.npr-root .npr-paper-addmenu button { align-items: flex-start; padding: 8px 9px; }
+.npr-root .npr-paper-addmenu button svg { flex: 0 0 auto; margin-top: 2px; color: var(--npr-muted); }
+.npr-root .npr-paper-addmenu button:hover svg { color: var(--npr-fg); }
+.npr-paper-additem { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.npr-paper-additem b { font-weight: 600; font-size: 12.5px; color: var(--npr-fg); }
+.npr-paper-additem small {
+  font-size: 10.5px; line-height: 1.4; color: var(--npr-muted);
+  white-space: normal;
+}
+
+/* ==== 页级按需翻译覆盖层（D 档 0.70.0 → 0.71.2） =========================
+   画布是 pdf.js 画的位图，公式、图、表格都在上面。要「逐段替换、保留公式与版面」，
+   按每段的原文框盖一块**纸色**，再把中文铺上去：段落框的位置不变，只换框里的字。
+
+   ★ 0.71.1 修掉底色：写死 `#fff` 是错的 —— 纸色由 `.npr-book-tint` 用 multiply
+     压在画布上，译文层 z-index 2 在它之上 ⇒ 米黄/护眼档里每段都是一条纯白
+     补丁；夜间档的反相只作用于 canvas，译文层反而变成一块白手电筒。现在底色、
+     字色都跟 `data-tint` 走（对应 agentero `page-overlay.tsx` 的 light/dark tone）。
+
+   ★ 0.71.2 撤销 0.71.1 那个「框内交给浏览器流式排版」的改动。它换来的是**排版
+     判据失效**：浏览器自己断行时没人知道「放不放得下」，`fits` 就成了摆设，
+     放不下的段照样铺满并溢到下一段 ⇒ 两段中文叠在一起（用户截图里的乱码）。
+     上游的做法是逐字绝对定位 + `filter(fits)`：字的位置就是 motif 算出来的位置，
+     放不下的整段不画、保留原文像素。这里改回上游形态。
+
+   ★ 容器 `pointer-events: none`：选区、链接点击、划线照常落到下面那几层。 */
+.npr-book { --npr-translation-paper: #fff; --npr-translation-ink: #16181c; }
+.npr-book[data-tint="sepia"] { --npr-translation-paper: #f7ecd6; }
+.npr-book[data-tint="mint"] { --npr-translation-paper: #e6f3e9; }
+.npr-book[data-tint="night"] { --npr-translation-paper: #16181c; --npr-translation-ink: #e6e8ea; }
+.npr-book-translation { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+/* ★ 只画「放得下」的段（上游 page-overlay 的 filter(fits)）。所以这里可以放心
+   `overflow: hidden`：段内每一行都由 motif 算过行宽与框底，正常不会溢出；
+   真有 1px 的字身探出，也宁可裁掉一点，也不能压到下一段英文上。 */
+.npr-book-translation-block {
+  position: absolute; box-sizing: border-box; overflow: hidden;
+  background: var(--npr-translation-paper);
+}
+/* 逐字绝对定位：left / top / font-size 由 motif 的排版给出（行宽、1.5 倍行距、
+   首行缩进、避头尾都已算过）。这里只摆字，不再让浏览器重新断行 —— 浏览器一旦
+   重排，`fits` 就失效了。`font-kerning: none` 让单字宽度等于度量宽度。 */
+.npr-book-translation-block > span {
+  position: absolute; line-height: 1; white-space: pre;
+  font-kerning: none;
+  color: var(--npr-translation-ink);
+}
+/* 翻译状态胶囊（0.70.0 → 0.78.0 加进度条与操作 → 0.78.1 换定位基准）。
+   ★ 0.78.0 从「一行字」变成「一行字 + 一条 3px 的不确定态进度条」，并且
+     **挪到阅读区正中**（用户 2026-11-13 指定）：翻译一页要一分多到两三分钟，
+     贴底的那条太容易被忽略，人一直在等一个看不见的东西。
+   ★ 0.78.1 它不再跟着书页走：由 `PaperTranslateLayer` 用 portal 画进
+     `.npr-book-pins`（stage 的兄弟，不滚动）。`left/top: 50%` 因此锚的是
+     **阅读区**而不是这一页 —— 页面滚到哪儿，它都在正中。
+     拿不到 pocket（服务端渲染 / 首帧）时退回画在书页里，同样居中，不会消失。
+   ★ 这里**故意不给百分比** —— 一页只发一次模型请求，模型不回流中途进度，
+     任何数字都是编的；一条会动的条 + 已等待秒数，才是这一页真实的进度信息。
+   ★ `pointer-events: auto`：0.70.0 起它是 `none`（纯展示）。现在上面有「暂停 /
+     关闭」两颗按钮，`none` 会让它们彻底点不动 —— 这是本文件里出现过的
+     同类坑（`.npr-fab-last` 的 drag 层），所以这里写清楚「为什么改」。
+     父层 `.npr-book-translation` 与 `.npr-book-pins` 都是 `none`，靠这一句翻回来。 */
+.npr-book-translation-status {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: grid; gap: 6px; width: max-content; min-width: 238px;
+  max-width: min(430px, 84%); padding: 8px 10px 9px 13px; border-radius: 12px;
+  border: 1px solid var(--npr-border-strong);
+  background: color-mix(in srgb, var(--npr-bg) 96%, transparent);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  color: var(--npr-muted);
+  box-shadow: 0 12px 34px rgb(0 0 0 / 22%);
+  font-size: 11.5px; line-height: 1.45; text-align: left;
+  pointer-events: auto;
+}
+.npr-book-translation-status-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.npr-book-translation-status-text { min-width: 0; }
+/* 秒数用等宽数字：不等宽的话每跳一秒整行就左右抖一下。 */
+.npr-book-wait-sec { flex: none; margin-left: auto; color: var(--npr-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+/* 「暂停 / 重试」与关闭。★ `width: auto` 必须写：PANEL_CSS 给裸 `button` 兜了
+   `width: 100%`，在 flex 行里会把两颗按钮各撑成一整行宽。 */
+.npr-book-translation-acts { flex: none; display: inline-flex; align-items: center; gap: 3px; }
+.npr-book-translation-op {
+  width: auto; padding: 3px 9px; border-radius: 999px; font: inherit; font-size: 11px;
+  border: 1px solid color-mix(in srgb, var(--npr-fg) 18%, transparent);
+  background: transparent; color: var(--npr-fg); cursor: pointer;
+}
+.npr-book-translation-op:hover { background: var(--npr-hover); }
+.npr-book-translation-x {
+  display: grid; place-items: center; width: 20px; height: 20px; padding: 0;
+  border: 0; border-radius: 50%; background: transparent; color: var(--npr-faint); cursor: pointer;
+}
+.npr-book-translation-x:hover { background: var(--npr-hover); color: var(--npr-fg); }
+/* 不确定态进度条。
+   ★ 高度 3px 而不是 2px：2px 在 Retina 上缩成一条几乎看不见的灰线，
+     看上去像「胶囊下面多了一条分隔线」，而不是「有什么东西在动」。
+   ★ `min-width: 218px` 长在胶囊上（见上）：跟着文字宽度走的条只有一截拇指长，
+     读者无法从它的长度判断这是「进度」还是「装饰」。 */
+.npr-book-translation-track {
+  position: relative; display: block; height: 3px; overflow: hidden; border-radius: 999px;
+  background: color-mix(in srgb, var(--npr-fg) 13%, transparent);
+}
+.npr-book-translation-track > i {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 18%; border-radius: inherit;
+  /* 右端渐隐：静止一帧时看着像「拖着尾巴的亮条」而不是「已完成 20%」。
+     假进度最坏的形态不是不动，而是**看着像真的百分比**。 */
+  background: linear-gradient(90deg, var(--npr-accent-strong),
+    color-mix(in srgb, var(--npr-accent-strong) 42%, transparent));
+  animation: npr-translate-slide 1.5s ease-in-out infinite alternate;
+}
+/* 不确定态，但**任何一帧都有 ≥18% 的可见亮条**。
+   ★ 上一版是「38% 宽 + translateX(-100% → 263%)」：亮条会整个滑出条外。
+     静止截图（以及用户第一眼）撞在边界上时，看到的就是一条空轨 ——
+     截图验证时发现的正是这一刻：菜单里那条像分隔线，胶囊里那条像没画出来。
+   ★ 用 left/width 而不是 transform：只有一个 3px 的条，每帧重排的代价可以忽略，
+     换来的是「永远看得见在动」。 */
+@keyframes npr-translate-slide {
+  0% { left: 0; width: 18%; }
+  100% { left: 76%; width: 24%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .npr-book-translation-track > i { animation-duration: 3.2s; }
+}
+.npr-book-translation-status.is-error { color: var(--npr-danger, #d9534f); }
+
+/* 整本翻译进度条（0.71.0）。
+   ★ 挂在 `.npr-book-view`（不滚动的定位基准）上，不是滚动的 stage —— 后者会
+     让进度条跟着书页一起滚走。z-index 45 在划线/链接层之上、FAB(40) 之下偏上，
+     保证它在翻译态的白底块之上还能点得到「停止 / 清除译文」。
+   ★ 文字用省略号而不是换行：一页页跑的时候文案长度会变，换行会让整条胶囊
+     每翻一页抖一下。 */
+.npr-book-whole-job {
+  position: absolute; z-index: 45; top: 10px; right: 14px;
+  display: flex; align-items: center; gap: 8px; max-width: min(520px, calc(100% - 28px));
+  padding: 5px 7px 5px 12px; border: 1px solid var(--npr-border-strong); border-radius: 999px;
+  background: color-mix(in srgb, var(--npr-bg) 92%, transparent);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 16%);
+  color: var(--npr-fg); font-size: 11px; line-height: 1.5;
+}
+.npr-book-whole-job-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 整本的进度条（0.78.0）：`done / total` 是真实百分比 —— 每一页都是明确里程碑，
+   与单页那条不确定动画不是一回事，这里不需要「编数字」。
+   ★ 定宽 + `flex:none`：让它在文字被省略号压缩时保持同一个长度，
+     否则每翻一页条会跟着文字一起伸缩。 */
+.npr-book-whole-job-track {
+  flex: none; width: 64px; height: 3px; overflow: hidden; border-radius: 999px;
+  background: color-mix(in srgb, var(--npr-fg) 12%, transparent);
+}
+.npr-book-whole-job-track > i {
+  display: block; height: 100%; border-radius: inherit;
+  background: var(--npr-accent-strong);
+  /* 一页一跳，不补间会「啪啪」跳格。 */
+  transition: width .35s ease;
+}
+/* 停下来的那两种：条不再是强调色 —— 一条亮橙色的条会让人以为还在跑。 */
+.npr-book-whole-job.is-stopped .npr-book-whole-job-track > i,
+.npr-book-whole-job.is-failed .npr-book-whole-job-track > i {
+  background: color-mix(in srgb, var(--npr-muted) 75%, transparent);
+}
+.npr-book-whole-job button {
+  flex: none; padding: 2px 8px; border: 1px solid var(--npr-border); border-radius: 999px;
+  background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; cursor: pointer;
+}
+.npr-book-whole-job button:hover { color: var(--npr-fg); background: var(--npr-hover); }
+.npr-book-whole-job button.is-armed {
+  color: var(--npr-danger, #d9534f); border-color: var(--npr-danger, #d9534f);
+}
+.npr-book-whole-job.is-failed .npr-book-whole-job-text { color: var(--npr-danger, #d9534f); }
+
+/* 翻译下拉（0.71.0）：一颗胶囊里放「本页 / 全本 / 清除」三条途径。
+   ★ 定位基准是 `.npr-book-translate-wrap`（这一颗按钮的父节点），不是整颗胶囊 ——
+     挂在胶囊上会从整排按钮的中间掉下来，看起来不像「这个按钮的菜单」。
+   ★ 与配色面板同一个陷阱：胶囊有 backdrop-filter ⇒ 自己创建栈上下文，菜单的
+     z-index 只在胶囊内部有效；靠 `.npr-book-chrome{z-index:30}` 压住后面的元信息行。 */
+.npr-book-translate-wrap { position: relative; display: inline-flex; }
+.npr-book-translate-menu {
+  position: absolute; z-index: 50; top: calc(100% + 8px); right: 0;
+  display: grid; gap: 2px; width: 236px; padding: 6px;
+  border: 1px solid var(--npr-border-strong); border-radius: 12px;
+  background: var(--npr-bg); box-shadow: 0 14px 34px rgb(0 0 0 / 24%);
+}
+.npr-book-translate-menu button {
+  display: flex; align-items: flex-start; gap: 8px; width: 100%; min-width: 0;
+  padding: 7px 8px; border: 0; border-radius: 8px; background: transparent;
+  color: var(--npr-fg); font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.npr-book-translate-menu button:hover:not(:disabled) { background: var(--npr-hover); }
+.npr-book-translate-menu button:disabled { opacity: .45; cursor: default; }
+.npr-book-translate-menu button.is-on { color: var(--npr-accent-strong); }
+.npr-book-translate-menu button.is-armed { color: var(--npr-danger, #d9534f); }
+.npr-book-translate-menu button > svg { flex: none; margin-top: 2px; }
+.npr-book-translate-menu button > span { display: grid; gap: 2px; min-width: 0; }
+/* 翻译中那一项里的不确定进度条（0.78.0）。
+   ★ 与页面底部那条胶囊**同一套动画**（`npr-translate-slide`）：两处说的是同一件事，
+     长得不一样的进度条会让人以为是两个任务。
+   ★ `width: 100%` 显式写出来：菜单项是个 flex 行，块级元素不写宽度会塌成 0。 */
+.npr-book-translate-track {
+  position: relative; display: block; width: 100%; height: 3px; margin-top: 5px;
+  overflow: hidden; border-radius: 999px;
+  background: color-mix(in srgb, var(--npr-fg) 13%, transparent);
+}
+.npr-book-translate-track > i {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 18%; border-radius: inherit;
+  background: linear-gradient(90deg, var(--npr-accent-strong),
+    color-mix(in srgb, var(--npr-accent-strong) 42%, transparent));
+  animation: npr-translate-slide 1.5s ease-in-out infinite alternate;
+}
+/* 翻译中那一项：不再是「可点的菜单项」的观感，但也不该整行淡到读不清 ——
+   它是这一屏唯一还在变的东西，字要看得见。
+   ★ 淡到 `--npr-muted` 而不是靠 `opacity`：0.62 的半透明深色字看着仍然很黑，
+     截图里根本分不出它和下面两项的区别（"灰掉"如果看不出来就等于没灰）。
+   ★ 光标保持 default：禁用态最容易漏的就是这个 —— 手型光标会让用户一直去点。 */
+.npr-book-translate-menu button.is-busy { cursor: default; }
+.npr-book-translate-menu button.is-busy:disabled { opacity: 1; color: var(--npr-muted); }
+.npr-book-translate-menu button.is-busy:disabled small { color: var(--npr-faint); }
+.npr-book-translate-menu small { color: var(--npr-muted); font-size: 10.5px; font-weight: 400; line-height: 1.4; }
+/* 「本机已存 N 页译文」：不是菜单项（点不动），只是把「翻译过就有记录」这件事
+   说出来 —— 0.71.0–0.71.2 缓存一页都没落盘，界面上毫无迹象，用户只能反复重翻。 */
+.npr-book-translate-note {
+  margin: 4px 2px 0; padding: 6px 8px 2px;
+  border-top: 1px solid var(--npr-border);
+  color: var(--npr-muted); font-size: 10.5px; line-height: 1.5;
+}
+/* 窄面板里胶囊只剩图标：菜单项的文字不能被那条 `.npr-book-pill-item > span` 误伤，
+   这里把菜单自己的 span 显式还原（更特异的选择器）。 */
+@container (max-width: 700px) { .npr-book-translate-menu button > span { display: grid; } }
+
+/* ── 「翻译全本」确认卡（0.78.0）───────────────────────────────────────────
+   ★ 之前这颗按钮点下去直接开跑。它要花几十次模型调用、可能跑一小时，而界面
+     连「要多久」都不说 —— 用户只能赌一把。这张卡就是「把赌注变成知情同意」。
+   ★ 三块信息的权重是刻意排的：**时长**最显眼（那是用户唯一算不出来的数），
+     页数是三个等宽数字（辅助核对），三条说明最轻（读不读都不影响决策）。
+   ★ 遮罩用 `position: absolute; inset: 0` 而**不是**全屏 `fixed`：定位基准是
+     `.npr-book-view`（不滚动的那层），与「配色面板」「整本进度条」同一个。
+     用 fixed 的话，阅读器在分栏视图里只占半个窗口，遮罩会盖住另一个面板，
+     而且居中位置也会偏到整个屏幕中心去。
+ */
+.npr-wtc-backdrop {
+  position: absolute; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+  background: color-mix(in srgb, var(--npr-fg) 24%, transparent);
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+}
+.npr-wtc {
+  display: grid; gap: 14px; width: min(430px, 100%);
+  padding: 18px 18px 15px;
+  border: 1px solid var(--npr-border-strong); border-radius: 16px;
+  background: var(--npr-bg); color: var(--npr-fg);
+  box-shadow: 0 24px 60px rgb(0 0 0 / 30%);
+}
+.npr-wtc-head { display: flex; gap: 11px; align-items: flex-start; }
+/* 左侧那枚图标：只给一层 14% 的强调色底，不做渐变也不做描边 —— 与设置页
+   分组微标同一套观感，卡片里不该再出现第二个「卡片」。 */
+.npr-wtc-glyph {
+  flex: none; display: grid; place-items: center; width: 34px; height: 34px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--npr-accent-strong) 14%, transparent);
+  color: var(--npr-accent-strong);
+}
+.npr-wtc-heading { display: grid; gap: 4px; min-width: 0; }
+.npr-wtc-heading h3 { margin: 0; font-size: 14.5px; font-weight: 650; line-height: 1.35; }
+.npr-wtc-heading p { margin: 0; color: var(--npr-muted); font-size: 11.5px; line-height: 1.6; }
+/* 三栏数字用 1px 的 gap 当分隔线（背景色透出来）：比给每格画边框少两条规则，
+   也不会出现「外框 1px、中缝 2px」这种粗细不匀。 */
+.npr-wtc-stats {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 0;
+  border: 1px solid var(--npr-border); border-radius: 11px; overflow: hidden;
+  background: var(--npr-border);
+}
+.npr-wtc-stats > div { display: grid; gap: 3px; padding: 9px 10px; background: var(--npr-bg); }
+.npr-wtc-stats dt { color: var(--npr-faint); font-size: 10px; letter-spacing: .04em; }
+.npr-wtc-stats dd {
+  margin: 0; font-size: 16px; font-weight: 600; line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+.npr-wtc-stats dd.is-accent { color: var(--npr-accent-strong); }
+.npr-wtc-eta {
+  display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; margin: 0;
+  padding: 10px 12px; border-radius: 11px;
+  background: color-mix(in srgb, var(--npr-fg) 4%, transparent);
+}
+.npr-wtc-eta > svg { flex: none; align-self: center; color: var(--npr-muted); }
+.npr-wtc-eta strong { font-size: 13px; font-weight: 620; }
+/* 这句话是「这个数字可信到什么程度」的声明，必须跟着时长一起出现：
+   实测与估算混成一句，用户会拿估算当承诺。 */
+.npr-wtc-eta small {
+  flex: 1 1 100%; padding-left: 21px;
+  color: var(--npr-muted); font-size: 10.5px; line-height: 1.5;
+}
+.npr-wtc-eta.is-done { background: color-mix(in srgb, var(--npr-accent-strong) 9%, transparent); }
+.npr-wtc-notes { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.npr-wtc-notes li {
+  display: flex; gap: 7px; align-items: flex-start;
+  color: var(--npr-muted); font-size: 11px; line-height: 1.55;
+}
+.npr-wtc-notes li > svg { flex: none; margin-top: 2px; color: var(--npr-faint); }
+.npr-wtc-foot { display: flex; justify-content: flex-end; gap: 8px; padding-top: 2px; }
+/* ★ `width: auto` 必须写：PANEL_CSS 给裸 `button` 兜了 `width: 100%`，
+   在 flex 行里会把两颗按钮各撑成一整行宽（「试听」那条 250px 空条的老坑）。 */
+.npr-wtc-cancel, .npr-wtc-go {
+  width: auto; font: inherit; font-size: 12px; border-radius: 9px; cursor: pointer;
+}
+.npr-wtc-cancel {
+  padding: 7px 14px; border: 1px solid var(--npr-border-strong);
+  background: transparent; color: var(--npr-muted);
+}
+.npr-wtc-cancel:hover { background: var(--npr-hover); color: var(--npr-fg); }
+.npr-wtc-go {
+  padding: 7px 16px; border: 0; font-weight: 600;
+  background: var(--npr-accent-strong); color: var(--npr-bg);
+}
+.npr-wtc-go:hover:not(:disabled) { filter: brightness(1.06); }
+.npr-wtc-go:disabled { opacity: .45; cursor: default; }
+
+/* ── 「朗读」设置屏（0.76.2 重排）─────────────────────────────────────────
+   ★ 0.76.1 把声音与语速塞进了一个 `.npr-service` 灰盒，与 Key、状态、缓存说明、
+     多音字同层：八件事一样重，且灰盒套在白卡上 —— 正是本文件里批评过的
+     「卡片套卡片」。用户在截图里说的「太丑」，看的是这一层。
+   ★ 现在不再有盒子。分组靠 `.npr-set-group`（微标 + 自动拉满的细线），
+     控件全部复用设置页既有那一套：
+       · 下拉 → `.npr-set-field.is-select`（自绘折角，不用原生三角）
+       · 分段 → `.npr-segmented`（灰槽 + 白色浮起块）
+       · 开关 → `.npr-switch`
+     语速原来是 `--npr-accent-strong` 橙色实心块，是这一屏唯一的橙块，
+     与墨色的「保存设置」抢注意力；现在与「版心宽度」那组分段器同源。
+   ★ 长解释收进 `<details>`：可见的只有「通没通 / 多少钱 / 怎么选」。 */
+
+.npr-speech .npr-set-group { margin-top: 20px; }
+.npr-speech .npr-set-group:first-of-type { margin-top: 0; }
+
+/* 分组微标右侧的状态：比标题轻一档，压在细线前面。
+   ★ 状态点用「空心 / 实心」而不是红绿：设置页没有语义色，两个主题下
+     空心描边与实心墨点在纸色上都读得出来。
+   ★ **点只给状态**（`.is-on` / `.is-off`）。纯说明性文字（「文章 · 电子书共用」）
+     不带点 —— 第一版给所有 state 都画了点，截图里那行像一枚没勾选的单选。 */
+.npr-speech-state {
+  flex: none; display: inline-flex; align-items: center; gap: 5px;
+  color: var(--npr-muted); font-size: 10.5px; font-weight: 500; letter-spacing: .02em;
+}
+.npr-speech-state.is-on,
+.npr-speech-state.is-off { gap: 6px; }
+.npr-speech-state.is-off::before,
+.npr-speech-state.is-on::before {
+  content: ''; width: 5px; height: 5px; border-radius: 50%; flex: none;
+  border: 1.2px solid color-mix(in srgb, var(--npr-fg) 30%, var(--npr-bg));
+}
+.npr-speech-state.is-on { color: var(--npr-fg); }
+.npr-speech-state.is-on::before { border: 0; background: var(--npr-fg); }
+
+/* Key 行：输入框吃掉剩余宽度，两个按钮各自定宽。
+   ★ `flex-wrap` 给窄窗口留的：设置页在侧栏展开时内容区只剩 ~500px，
+     不换行的话「测 Key」会被顶出卡片。 */
+.npr-speech-keyrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.npr-speech-keyrow .npr-speech-key { flex: 1 1 240px; max-width: none; min-width: 0; }
+
+/* 主按钮：与 `.npr-settings-footer button` 同一套数字（34 / 8 / 12.5 / 600 / 墨底纸字）。
+   ★ 必须写 `.npr-speech .npr-speech-save` 两级：PANEL_CSS 里有裸 button 的
+     `width:100%` 兜底，单类选择器会被它压过去。 */
+/* ★ `width: auto` 不是可有可无：PANEL_CSS 给裸 button 留了 `width: 100%` 兜底，
+   在 grid 列里（内容列是 `minmax(0,…)`）它会被拉成一条跟下拉一样长的横条 ——
+   第一版截图里「试听」就是一条 250px 的空条，文字飘在中间。 */
+.npr-speech .npr-speech-save {
+  flex: none; width: auto; height: 34px; padding: 0 14px; border: 0; border-radius: 8px;
+  background: var(--npr-fg); color: var(--npr-bg);
+  font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0,0,0,.12);
+}
+.npr-speech .npr-speech-save:hover:not(:disabled) { background: color-mix(in srgb, var(--npr-fg) 88%, var(--npr-bg)); }
+/* 次按钮：只有一条边。设置页里除页脚外没有第二颗主按钮。 */
+.npr-speech .npr-speech-test {
+  flex: none; justify-self: start; width: auto; height: 34px; padding: 0 12px;
+  border: 1px solid var(--npr-set-line); border-radius: 8px; background: transparent;
+  color: var(--npr-fg); font: inherit; font-size: 12px; cursor: pointer;
+}
+.npr-speech .npr-speech-test:hover:not(:disabled) { background: var(--npr-hover); }
+.npr-speech .npr-speech-save:disabled,
+.npr-speech .npr-speech-test:disabled { opacity: .42; cursor: default; box-shadow: none; }
+.npr-speech .npr-speech-save:focus-visible,
+.npr-speech .npr-speech-test:focus-visible { outline: 2px solid var(--npr-fg); outline-offset: 2px; }
+
+/* 一行元信息：掩码 / 模型 / 单价，右边挂两个文字动作。 */
+.npr-speech-meta {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px;
+  margin: 9px 0 0; color: var(--npr-muted); font-size: 11.5px; line-height: 1.6;
+}
+.npr-speech-meta code {
+  padding: 1px 5px; border-radius: 4px; background: var(--npr-set-sunken);
+  color: color-mix(in srgb, var(--npr-fg) 82%, var(--npr-bg)); font-size: 11px;
+}
+/* ★ `width: auto` 同样必需：`.npr-linkish` 也会落到 `button` 上，被 PANEL_CSS 的
+   `width: 100%` 撑满 → 它挤不进第一行，整个「清空」被挤到下一行右侧孤悬。 */
+.npr-speech-meta .npr-linkish { width: auto; font-size: 11.5px; }
+/* 「清空」是破坏性动作，不能和「去控制台拿 Key」同色并排 —— 两个橙色下划线挨在
+   一起，看起来像两个并列的推荐链接。改成灰字、hover 才显墨色。 */
+.npr-speech-meta .npr-linkish.is-danger { color: var(--npr-muted); text-decoration: none; }
+.npr-speech-meta .npr-linkish.is-danger:hover { color: var(--npr-fg); text-decoration: underline; }
+
+/* 偏好行：标签 / 控件 / 附属 三列。
+   ★ 标签列 64，比阅读体验卡的 76 窄 —— 那边是「字号 / 行距 / 版心」三四字，
+     这里只有「声音 / 语速」两字。同宽会把控件整体右推 12px，两屏切过去
+     控件左缘对不上，看着像没对齐。
+   ★ 控件列封顶 420 而不是 `1fr`：铺满 760 会让下拉长到 700px、右侧的
+     「试听」被推到屏边，中间留一大片空 —— 下拉和试听是一组，得挨着。
+     第三列吃掉剩余宽度但内容左对齐，于是 `试听` / `1×` 紧跟控件。 */
+.npr-speech-row {
+  display: grid; grid-template-columns: 64px minmax(0,420px) minmax(0,1fr);
+  align-items: center; gap: 12px; min-height: 40px;
+}
+.npr-speech-label { color: color-mix(in srgb, var(--npr-fg) 78%, var(--npr-bg)); font-size: 12.5px; white-space: nowrap; }
+.npr-speech-row .npr-set-field { max-width: none; }
+.npr-speech-row .npr-segmented { justify-self: start; }
+/* 语速行的控件列按**内容**定宽：分段器只有 200px 宽，用上面那个 420 的列宽
+   会在它右侧留 220px 空档，把 `1×` 推到远处，看着像和分段器无关。 */
+.npr-speech-row-rate { grid-template-columns: 64px auto minmax(0,1fr); }
+.npr-speech-value { justify-self: start; color: var(--npr-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* 没有语音可选时，说明文字占据控件那两列 */
+.npr-speech-wide { grid-column: 2 / 4; }
+
+/* 长解释：默认收起。
+   ★ 不用原生 marker（Chrome 那个三角在 11.5px 下像个多余的符号），换一枚
+     6px 折角，展开时转 90°。 */
+.npr-speech-more { margin-top: 10px; }
+.npr-speech-more > summary {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--npr-muted); font-size: 11.5px; line-height: 1.6;
+  list-style: none; cursor: pointer;
+}
+.npr-speech-more > summary::-webkit-details-marker { display: none; }
+.npr-speech-more > summary::before {
+  content: ''; width: 5px; height: 5px; flex: none;
+  border-right: 1.2px solid currentColor; border-bottom: 1.2px solid currentColor;
+  transform: rotate(-45deg); transition: transform .15s ease;
+}
+.npr-speech-more[open] > summary::before { transform: rotate(45deg); }
+.npr-speech-more > summary:hover { color: var(--npr-fg); }
+.npr-speech-more > p { margin: 8px 0 0; color: var(--npr-muted); font-size: 11.5px; line-height: 1.7; }
+.npr-speech-more > p + p { margin-top: 6px; }
+
+/* 词表：一枚词一张小签，`原词 → 替换词`。19 条铺成三行，比一整段逗号串好扫。 */
+.npr-speech-words { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
+.npr-speech-words li {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px;
+  border: 1px solid var(--npr-set-line-soft); border-radius: 6px;
+  background: var(--npr-set-field); color: var(--npr-muted); font-size: 11px; line-height: 1.5;
+}
+.npr-speech-words b { color: var(--npr-fg); font-weight: 500; }
+.npr-speech-words span { opacity: .5; }
+
+/* 多音字那一行：说明在左、开关在右。开关与首行文字对齐而不是垂直居中 ——
+   说明有三行，居中的开关会飘到段落腰部。
+   ★ 说明限宽 540：这一行左侧没有控件挤着，不限宽会一直铺到开关跟前，
+     一行六十来个字，读起来是「一条横线」而不是一段话。 */
+.npr-speech .npr-settings-toggle-row { align-items: flex-start; gap: 18px; }
+.npr-speech .npr-speech-toggle-note { margin: 0; max-width: 540px; }
+.npr-speech .npr-settings-toggle-row .npr-switch { flex: none; margin-top: 1px; }
+
+/* 操作反馈：与 Key 那条共用一种形态，不新造一条横幅。 */
+.npr-speech-probe { margin: 9px 0 0; color: var(--npr-muted); font-size: 11.5px; line-height: 1.6; }
+
+/* ===== 单集播放条与字幕（P0） ==========================================
+   ★ 所有按钮都要写 `width: auto`：PANEL_CSS 给裸 `button` 兜了 `width: 100%`，
+     而这一条是给「整行按钮」准备的。不覆盖的话，播放条里的每个按钮都会占满
+     一整行 —— 界面上会出现三行巨大的「−15 / 播放 / +15」。 */
+.npr-audio { margin: 0 0 18px; }
+.npr-audio audio { display: none; }
+/* ---- 进度条：一条轨道 + 品牌色圆点 --------------------------------------
+   ★ 用原生 range：方向键 / 读屏 / 点轨道跳转都是白拿的。自绘 div 要各写一遍，
+     而「键盘拖不动」这种缺陷在鼠标验收里永远看不到。
+   ★ 「已播 / 未播」用两段 linear-gradient 画在轨道上：::-webkit-slider-runnable-track
+     的 background 支持渐变，比给 input 套伪元素稳（后者在某些版本里不生效）。 */
+.npr-audio-track { padding: 0 4px 5px; }
+/* 命中区 22px、可视轨道仍是 4px（0.85.0）：一小时的节目要横拖很远，16px 高的
+   可拖区在触控板上很容易「上下飘出去」，松手时 pointerup 就落到别的元素上了。
+   只加高 input，不改 track/thumb —— 看起来一模一样，拖起来宽容得多。 */
+.npr-audio-range { display: block; width: 100%; height: 22px; margin: 0; padding: 0; background: transparent; -webkit-appearance: none; appearance: none; cursor: pointer; }
+.npr-audio-range::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--npr-accent) 0 var(--npr-progress, 0%), color-mix(in srgb, var(--npr-border) 78%, var(--npr-fg)) var(--npr-progress, 0%) 100%); }
+.npr-audio-range::-webkit-slider-thumb { -webkit-appearance: none; width: 13px; height: 13px; margin-top: -4.5px; border: 2px solid var(--npr-bg-2); border-radius: 50%; background: var(--npr-accent); box-shadow: 0 1px 3px rgb(0 0 0 / 22%); }
+.npr-audio-range:focus-visible { outline: 2px solid var(--npr-accent); outline-offset: 4px; border-radius: 9px; }
+/* ---- 控制区 -------------------------------------------------------------
+   ★ 按钮全部 `width: auto`：PANEL_CSS 给裸 `button` 兜了 `width: 100%`，
+     不覆盖的话每个按钮都会占满整行（界面上是三条巨大的横条）。 */
+.npr-audio-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.npr-audio-btn { display: inline-flex; flex: none; align-items: center; justify-content: center; width: auto; height: 30px; min-width: 30px; padding: 0 9px; border: 1px solid var(--npr-border); border-radius: 999px; background: var(--npr-bg); color: var(--npr-fg); font: inherit; font-size: 11.5px; font-variant-numeric: tabular-nums; cursor: pointer; transition: background .15s ease, border-color .15s ease, color .15s ease; }
+.npr-audio-btn:hover { border-color: var(--npr-border-strong); background: var(--npr-hover); }
+/* 主按钮：实心圆。整套控件里只有它该是实心的 —— 一屏只留一个主按钮。 */
+.npr-audio-play { width: 38px; height: 38px; min-width: 38px; padding: 0; border: 0; border-radius: 50%; background: var(--npr-accent-strong); color: #fff; }
+.npr-audio-play:hover { background: color-mix(in srgb, var(--npr-accent-strong) 86%, #000); }
+/* 三角形的光学重心偏左：右移 1px 才在圆里看着居中（对称的矩形图标不需要）。 */
+.npr-audio-play svg { margin-left: 1px; }
+/* ±15 秒：字号小一档。它比「播放」次要，但**不能**做小到点不准 ——
+   34px 宽是最小可点尺寸（与播放按钮同一套手感）。 */
+.npr-audio-skip { min-width: 34px; padding: 0 7px; font-size: 11px; }
+.npr-audio-time { color: var(--npr-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* 右端整组：「倍速 + 双语 + 原文」作为一个弹性项，整体靠右、内部不换行。
+   ★ 不要拆成多项、各自靠 `margin-left:auto` 抢空间 —— 面板一窄就只有最后一项
+     被挤到第二行左侧，看起来像一个掉队的标签。整组换行才看得过去。 */
+.npr-audio-end { display: flex; flex: none; align-items: center; gap: 10px; margin-left: auto; white-space: nowrap; }
+.npr-audio-rate { display: inline-flex; align-items: center; }
+.npr-audio-rate select { width: auto; padding: 4px 9px; border: 1px solid var(--npr-border); border-radius: 999px; background: var(--npr-bg); color: var(--npr-fg); font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; cursor: pointer; transition: border-color .15s ease; }
+.npr-audio-rate select:hover { border-color: var(--npr-border-strong); }
+.npr-audio-src { color: var(--npr-muted); font-size: 11.5px; text-decoration: none; white-space: nowrap; }
+.npr-audio-src:hover { color: var(--npr-fg); }
+.npr-audio-error { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; color: var(--npr-muted); font-size: 12px; }
+/* ★ 时长未读到（`preload="metadata"` 的那一两百毫秒，或源本身不给时长）：轨道在、
+   但拖不动。视觉上必须看得出来 —— 一根看起来能拖、拖了却没反应的轨道，比明说
+   「暂时不可拖」更伤信任。0.85.1。 */
+.npr-audio-range:disabled { cursor: default; }
+.npr-audio-range:disabled::-webkit-slider-runnable-track { background: color-mix(in srgb, var(--npr-border) 72%, var(--npr-bg)); }
+.npr-audio-range:disabled::-webkit-slider-thumb { background: color-mix(in srgb, var(--npr-border) 88%, var(--npr-muted)); box-shadow: none; }
+/* 跳转失败的解释条（不可 seek 的源）。与 `.npr-audio-error` 分开：那不是错误，
+   是这一集的服务器能力受限，播放本身是好的。 */
+.npr-audio-hint { margin-top: 8px; color: var(--npr-muted); font-size: 12px; line-height: 1.55; }
+
+/*
+ * 跳转失败时的诊断行（0.85.6，临时）。
+ *
+ * 要「能一眼读完且能截图」：等宽、允许换行、数字不被折断。颜色用 muted —— 它是
+ * 给排查用的，不该比错误提示更抢眼；但也不能太淡，否则截图看不清就白做了。
+ */
+.npr-audio-diag { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 8px; color: var(--npr-muted); font-size: 11px; line-height: 1.6; }
+.npr-audio-diag > span { color: var(--npr-fg); opacity: .7; letter-spacing: .04em; }
+.npr-audio-diag code { padding: 1px 6px; border: 1px solid var(--npr-border); border-radius: 6px; background: var(--npr-bg-2); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+
+/* 字幕面板：折叠时只留一条标题行，展开时正文区自己滚（不抢正文的滚动条）。 */
+.npr-tr { margin: 0 0 22px; border: 1px solid var(--npr-border); border-radius: 12px; background: var(--npr-bg-2); }
+/* 头部允许换行：420px 时「字幕 + 段数 + 两个按钮」挤在一行会把标题压成竖排。 */
+.npr-tr-head { display: flex; flex-wrap: wrap; row-gap: 6px; align-items: center; gap: 8px; padding: 8px 10px; }
+.npr-tr-toggle { display: flex; flex: 1 1 150px; align-items: baseline; gap: 8px; width: auto; min-width: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+/* 标题不折行：中文标题折成「字 / 幕」两行时，看起来像一个错位的图标。 */
+.npr-tr-title { flex: none; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+/* 元信息占剩余宽度，超出截断 —— 它的信息量随宽度变化，而标题不能。 */
+.npr-tr-meta { min-width: 0; overflow: hidden; color: var(--npr-faint); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.npr-tr-now, .npr-tr-refresh { width: auto; flex: none; padding: 3px 8px; border: 1px solid var(--npr-border); border-radius: 6px; background: var(--npr-bg); color: var(--npr-muted); font: inherit; font-size: 11.5px; cursor: pointer; }
+.npr-tr-now { border-color: var(--npr-accent); color: var(--npr-accent-strong); }
+/* 自动跟随被用户滚轮打断时，这颗按钮改成中性色：它此刻的语义是「恢复跟随」，
+   不再是「回到正在播的一段」。颜色区分是为了让「已经暂停」这件事自己说出来。 */
+.npr-tr-now.is-paused { border-color: var(--npr-border); color: var(--npr-muted); }
+.npr-tr-list { display: grid; gap: 3px; max-height: 46vh; overflow: auto; padding: 8px; border-top: 1px solid var(--npr-border); }
+/* 列表末尾的留白（0.86.1）。高度由组件按「可视高 − 最后一段高」算出来写在行内，
+   这里只负责两件事：别被 grid 压扁、别抢点击（它不是内容，点它不该跳段）。 */
+.npr-tr-list > .npr-tr-tail { pointer-events: none; }
+.npr-tr-line { display: grid; grid-template-columns: 46px 1fr; gap: 10px; width: 100%; padding: 7px 9px; border: 0; border-radius: 8px; background: none; color: var(--npr-fg); font: inherit; font-size: 13px; line-height: 1.7; text-align: left; cursor: pointer; }
+.npr-tr-line:hover { background: var(--npr-hover); }
+/* 当前段：淡品牌色底 + 左侧细线。
+   ★ 不用半透明遮罩：它会盖掉正文底色，浅色主题下变成一块灰。
+   ★ 底色只给 10%：再重一点整段会像「选中状态」，而它其实只是「播到这里」——
+     用户还得能一眼扫到上下文的文字。 */
+.npr-tr-line.is-current { background: color-mix(in srgb, var(--npr-accent) 10%, var(--npr-bg-2)); box-shadow: inset 2px 0 0 var(--npr-accent); }
+.npr-tr-stamp { padding-top: 2px; color: var(--npr-faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.npr-tr-line.is-current .npr-tr-stamp { color: var(--npr-accent-strong); }
+.npr-tr-text { min-width: 0; }
+/* 字幕中文层。中文在上、英文在下：听的时候眼睛要能扫到中文，英文留着核对。
+   英文用小一号、淡一档 —— 两者等重的话，一段文字会变成两段。 */
+.npr-tr-zh-text { display: block; color: var(--npr-fg); }
+.npr-tr-en-text { display: block; margin-top: 2px; color: var(--npr-faint); font-size: 12px; line-height: 1.55; }
+/* 「译成中文 / 显示原文」是面板头部的**次级**动作，不该抢过「回到正在播的一段」。
+   做成胶囊而不是方块按钮：它在行内，方角会看起来像第二个主按钮。 */
+.npr-tr-zh { display: inline-flex; flex: none; align-items: center; gap: 4px; width: auto; padding: 3px 9px; border: 1px solid var(--npr-border); border-radius: 999px; background: var(--npr-bg); color: var(--npr-muted); font: inherit; font-size: 11.5px; cursor: pointer; }
+.npr-tr-zh:hover { border-color: var(--npr-accent); color: var(--npr-fg); }
+.npr-tr-zh[aria-pressed="true"] { border-color: var(--npr-accent); background: var(--npr-hover); color: var(--npr-accent-strong); }
+.npr-tr-progress { flex: none; color: var(--npr-accent-strong); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.npr-tr-hint { margin: 0; padding: 2px 12px 10px; color: var(--npr-muted); font-size: 12px; line-height: 1.7; }
+.npr-tr-empty { display: grid; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--npr-border); }
+.npr-tr-empty p { margin: 0; font-size: 12.5px; line-height: 1.7; }
+.npr-tr-empty .npr-btn { width: max-content; }
+/* ── 本机识别（0.82.0）─────────────────────────────────────────────────
+   两个新元素：进度条与「刚识别出的句子」。
+   ★ 进度条高度写死 4px 并留出圆角：它夹在两行 12px 文字中间，按内容撑高会把
+     空态整块顶下去，点一下按钮面板就跳一次。
+   ★ 预览用 `-webkit-line-clamp` 截止两行：识别的句子会一直刷新，不封顶的话
+     面板高度会随文字变长而抖。 */
+.npr-tr-bar { position: relative; height: 4px; margin: 0 12px 8px; border-radius: 999px; background: var(--npr-border); overflow: hidden; }
+.npr-tr-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--npr-accent); transition: width .3s ease; }
+/* 解码阶段没有百分比可报（片数要解码完才知道）。来回走一段，表示「在干活、不确定进度」；
+   写死 0% 或不给条都会被读成「卡住了」。 */
+.npr-tr-bar.is-busy > span { width: 34%; animation: npr-tr-slide 1.2s ease-in-out infinite; }
+@keyframes npr-tr-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+.npr-tr-preview {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  margin: 0; padding: 0 12px 4px; color: var(--npr-fg); font-size: 12.5px; line-height: 1.7; opacity: .78;
+}
+
+/* ── 收听视图（0.81.0）────────────────────────────────────────────────
+   字幕不再和正文挤在一条竖排里：切过去之后，除了「播放条 + 字幕」，
+   article 里其余直接子元素（标题、正文、生成提示）全部让位。
+   ★ 用 CSS 隐而不是条件渲染：条件渲染会把播放条从兄弟树里摘掉，
+     `<audio>` 随之卸载 —— 正听着的那一集位置就回到 0 秒了。 */
+.npr-article[data-listen="true"] > *:not([data-listen-keep]) { display: none; }
+
+/* ★ 0.84.6：收听头只负责「这是个头」，不写任何排版数值。
+   元信息行与 h1 的字体/字号/颜色/间距全部归 PANEL_CSS 里那两条共用规则；
+   以前这里另写 11.5px / faint / gap 8 / margin 0，切 tab 时整块都变样。
+   同名类写两套 = 前一份静默失效，所以这里一条都不留。 */
+.npr-listen-head { display: block; margin: 0; }
+/* 独立页里字幕列表吃掉剩余高度。
+   ★ 0.85.9 起这只是一帧的兜底：真正的高度由 `TranscriptPanel` 量出来后写在行内
+     `max-height` 上（窗口高度 − 列表上方那一截）。原来写死的 `calc(100vh - 330px)`
+     假设「字幕上方固定占 330px」，而收听视图里标题 + 播放条 + tab 实测 500px 以上
+     ⇒ 盒子比窗口还高，当前段被折到底部看不见（现场就是这张图）。 */
+.npr-tr.is-standalone .npr-tr-list { max-height: max(280px, calc(100vh - 240px)); }
+.npr-tr-toggle.is-static { cursor: default; }
+.npr-tr-toggle.is-static:hover { background: none; }
+
+/* 阅读页三选一（0.84.2）：文章 / 字幕 / 导读。
+   ★ 用户拿「播放条在上、下划线 tab 在下」的截图做参考：旧版是灰色胶囊底座 +
+     白色滑块，夹在标题和播放条中间，既像另一组播放控件、又离它控制的内容太远。
+     现在播放条先出现，tab 是一排**没有底座的文字**，选中项用一条 2px 下划线。
+   ★ 只画一条线，不画卡片：带边框的 tab 会被当成「可点的卡片」，而这里三选一
+     的语义是「换一页内容」，下划线才是阅读器里最省力的写法。
+   ★ PANEL_CSS 给裸 button 兜了 width:100%，这里必须显式 width:auto，
+     否则三个文字 tab 会各自撑成整列宽的横条。
+   ★ 颜色只走主题变量与 color-mix，深浅两套自动跟随，不新增固定色值。 */
+.npr-readtabs {
+  display: flex;
+  align-items: stretch;
+  gap: var(--npr-readtabs-gap);
+  margin: var(--npr-readtabs-gap-top) 0 var(--npr-readtabs-gap-bottom);
+  padding: 0;
+  border-bottom: 1px solid var(--npr-border);
+}
+.npr-root .npr-readtabs button {
+  position: relative;
+  display: inline-flex; align-items: center;
+  width: auto; height: var(--npr-readtabs-h);
+  padding: 0 1px;
+  border: 0; border-radius: 0;
+  background: transparent; color: var(--npr-muted);
+  font: inherit; font-size: var(--npr-tab-font); font-weight: 500;
+  white-space: nowrap; cursor: pointer;
+  transition: color .15s ease;
+}
+/* 下划线画在伪元素上、压住容器那条 1px 分隔线（bottom:-1px）：
+   若改画在 button 自己的 border-bottom 上，选中项会比未选中矮 2px，
+   三个文字的基线就错位了。伪元素不占布局，基线始终对齐。 */
+.npr-root .npr-readtabs button::after {
+  content: '';
+  position: absolute; left: 0; right: 0; bottom: -1px;
+  height: 2px; background: transparent;
+}
+.npr-root .npr-readtabs button:hover { background: transparent; color: var(--npr-fg); }
+.npr-root .npr-readtabs button[aria-pressed=true] { color: var(--npr-accent-strong); font-weight: 600; }
+.npr-root .npr-readtabs button[aria-pressed=true]::after { background: var(--npr-accent-strong); }
+.npr-root .npr-readtabs button:focus-visible { outline: 2px solid var(--npr-accent-strong); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .npr-root .npr-readtabs button { transition: none; }
+}
+
+/* 两块面板都在 DOM 里，靠容器上的 data-read-tab 二选一显隐。
+   ★ 不能改成条件渲染：TranscriptPanel 订阅着 audioController，卸一次就得重新接一次。
+   ★ 默认全藏 + 逐值放行：以后加第四个 tab 时，新面板不写规则就看不见，
+     而不是「忘了藏」多出一块 —— 白名单比黑名单安全。 */
+.npr-article[data-read-tab] .npr-readpanel { display: none; }
+.npr-article[data-read-tab="digest"] .npr-readpanel[data-read-panel="digest"] { display: block; }
+.npr-article[data-read-tab="transcript"] .npr-readpanel[data-read-panel="transcript"] { display: block; }
+
+/* 语言三态：原文 / 双语 / 中文。用属性上色，不用三套类名 —— 少一处要同步的地方。 */
+.npr-tr-zh[data-lang="both"] { border-color: var(--npr-accent); color: var(--npr-accent-strong); }
+.npr-tr-zh[data-lang="zh"] { border-color: var(--npr-accent); background: var(--npr-accent); color: #fff; }
+
+/* 缓冲中：图标转起来。点播放之后没有任何回执，是「点了没反应」的主因之一。 */
+.npr-audio-play.is-buffering svg { animation: npr-spin 1s linear infinite; }
+@keyframes npr-spin { to { transform: rotate(360deg); } }
+
+/* 播放条的包层：让它在「文章 / 收听」两种视图里是**同一个节点**。
+   直接挂在 article 下、而前面又少了 h1 时，React 会按位置把它当成另一个元素、
+   卸载重建 —— 声音就断了。`flow-root` 顺手管住内部 margin 不塌陷。 */
+.npr-dock-slot { display: flow-root; min-width: 0; }
+.npr-listen-body { min-width: 0; }
+
+/* ── 收听视图视觉打磨（0.83.0）─────────────────────────────────────────
+   目标只有一句：让「现在播到哪一句」一眼可见，其余信息主动退到后面。
+   三条自我约束：
+     ① 全部走现有色变量 + color-mix，深浅两套主题自动跟随，不新增固定色值；
+     ② **不动 padding / margin / 字号**：这三样一变，换段时列表就会抖一下，
+        而「跟随高亮」最忌讳的就是越跟越跳；
+     ③ 当前段的识别不许只靠底色 —— 底色在浅色主题里几乎看不见，
+        叠一层「左轨 + 正文满亮度 + 其余降一档」才是三种主题都成立的口径。 */
+
+/* 时间戳：从「表格里的一列数字」变成可点的跳转入口。
+   ▶ 只在 hover 时长出来；常态下它不该抢正文的注意力。 */
+.npr-tr-stamp { position: relative; transition: color .15s ease; }
+.npr-tr-line:hover .npr-tr-stamp { color: var(--npr-accent-strong); }
+.npr-tr-line:hover .npr-tr-stamp::before {
+  content: "▶";
+  position: absolute;
+  left: -9px;
+  font-size: 7px;
+  line-height: 2;
+  color: var(--npr-accent);
+}
+
+/* 非当前段正文降一档，当前段满亮度：扫读时有明确的「主句」。 */
+.npr-tr-line .npr-tr-text,
+.npr-tr-line .npr-tr-zh-text { color: color-mix(in srgb, var(--npr-fg) 84%, var(--npr-bg-2)); transition: color .18s ease; }
+.npr-tr-line:hover .npr-tr-text,
+.npr-tr-line:hover .npr-tr-zh-text { color: var(--npr-fg); }
+.npr-tr-line.is-current .npr-tr-text,
+.npr-tr-line.is-current .npr-tr-zh-text { color: var(--npr-fg); }
+
+/* 当前段底色收一档，识别交给左轨。inset 阴影在圆角容器里会被裁成断头线，
+   所以左轨改用伪元素：能圆角、能渐隐。 */
+.npr-tr-line { position: relative; }
+/* 当前段底色：不用「整块铺色」，用从左侧漏进来的一道渐变。
+   铺色在深色主题里会变成一块棕色卡片（双语行还很高），看起来像「被选中」；
+   而从播放边漏光的渐变只指向「正在播这里」，且深浅两套主题都成立。 */
+.npr-tr-line.is-current {
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--npr-accent) 13%, transparent) 0,
+    transparent 52%);
+  box-shadow: none;
+}
+.npr-tr-line.is-current::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(to bottom, var(--npr-accent), var(--npr-accent) 72%, transparent);
+}
+
+/* 识别进度按「片」画，不画百分比。
+   一集 54 分钟 = 11 片，用户真正想知道的是「还剩几片」；百分比在小数点后动，
+   盯着看反而觉得没进展。片数很多时按比例合并成最多 40 格。 */
+.npr-tr-ticks { display: flex; gap: 2px; margin: 2px 12px 10px; }
+.npr-tr-ticks > span {
+  flex: 1 1 0;
+  min-width: 2px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--npr-border);
+  transition: background .25s ease;
+}
+.npr-tr-ticks > span.is-done { background: var(--npr-accent); }
+.npr-tr-ticks > span.is-active {
+  background: color-mix(in srgb, var(--npr-accent) 45%, var(--npr-border));
+  animation: npr-tick-pulse 1.5s ease-in-out infinite;
+}
+@keyframes npr-tick-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .42; } }
+@media (prefers-reduced-motion: reduce) {
+  .npr-tr-ticks > span.is-active { animation: none; }
+}
+
+/* 播放键：给圆钮一点内高光与按下的回弹。原来只有一个纯色圆，
+   在浅色主题里和背景反差不足，看不出「这里是主按钮」。 */
+.npr-audio-play { box-shadow: inset 0 1px 0 rgb(255 255 255 / 18%), 0 1px 2px rgb(0 0 0 / 14%); transition: background .15s ease, transform .12s ease; }
+.npr-audio-play:active { transform: scale(.94); }
+.npr-audio-range::-webkit-slider-thumb { transition: transform .12s ease; }
+.npr-audio-range:hover::-webkit-slider-thumb { transform: scale(1.12); }
+
+/* ── AI 导读 + 字幕与识别设置（0.84.0）───────────────────────────────────
+   导读是「先扫一遍再决定听哪段」的入口，所以它要**像一张目录页**：
+   左边一列可点的时间戳，右边一句标题 + 一两条要点，行距比正文紧。
+   三条自我约束：
+     ① 只用现有色变量 + color-mix（深浅两套主题自动跟随，不新增固定色值）；
+     ② 不用「带边框的卡片」包每一条 —— 那个形状会被当成按钮（0.44 的教训），
+        分隔交给行距与一条极淡的横线；
+     ③ 时间戳按钮常态低调、hover 才亮：它必须可点，但不该抢走标题的注意力。 */
+
+.npr-dig {
+  margin: 0 0 18px;
+  padding: 16px 18px 18px;
+  border: 1px solid var(--npr-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--npr-bg) 92%, var(--npr-fg));
+}
+.npr-dig.is-compact { margin-bottom: 12px; padding: 12px 14px; }
+
+.npr-dig-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.npr-dig-title {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--npr-muted);
+}
+.npr-dig-title svg { color: var(--npr-accent); }
+.npr-dig-meta { font-size: 11.5px; color: var(--npr-faint); }
+/* 这颗按钮在最右边，且明确 `width: auto`：面板基样式给裸 button 兜了 100% 宽，
+   不写就会变成一条横贯整行的灰条。 */
+.npr-dig-again {
+  margin-left: auto; width: auto; padding: 3px 9px;
+  font-size: 11.5px; color: var(--npr-muted);
+  background: transparent; border: 1px solid transparent; border-radius: 999px;
+  cursor: pointer; transition: color .15s ease, border-color .15s ease;
+}
+.npr-dig-again:hover { color: var(--npr-fg); border-color: var(--npr-border); }
+
+.npr-dig-body { margin-top: 10px; }
+.npr-dig-lead { margin: 0 0 10px; font-size: 13px; line-height: 1.75; color: var(--npr-muted); }
+.npr-dig-hint { margin: -2px 0 10px; font-size: 12px; line-height: 1.6; color: var(--npr-accent-strong); }
+.npr-dig-name { margin: 0 0 6px; font-size: 15px; font-weight: 600; letter-spacing: .01em; }
+.npr-dig-summary { margin: 0 0 14px; font-size: 13.5px; line-height: 1.85; color: color-mix(in srgb, var(--npr-fg) 90%, var(--npr-bg)); }
+
+/* 一条来回收的细线：这次调用没有可观测进度，画百分比只会是假的。 */
+.npr-dig-busy { position: relative; height: 2px; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--npr-fg) 8%, transparent); }
+.npr-dig-busy span {
+  position: absolute; inset: 0; width: 38%; border-radius: 999px;
+  background: linear-gradient(90deg, transparent, var(--npr-accent), transparent);
+  animation: npr-dig-sweep 1.4s ease-in-out infinite;
+}
+@keyframes npr-dig-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+.npr-dig-chapters { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.npr-dig-chapter {
+  display: grid; grid-template-columns: 58px 1fr; gap: 12px; align-items: start;
+  padding: 9px 0;
+  border-top: 1px solid color-mix(in srgb, var(--npr-fg) 6%, transparent);
+}
+.npr-dig-chapter:first-child { border-top: 0; padding-top: 2px; }
+
+.npr-dig-at {
+  width: auto; padding: 1px 6px; margin-top: 1px;
+  /* 24px 是最小可点尺寸：时间戳是导读里唯一的跳转入口，19px 太容易点空（0.84.7）。 */
+  min-height: 24px;
+  font-size: 11.5px; font-variant-numeric: tabular-nums; letter-spacing: .02em;
+  color: var(--npr-muted); background: transparent; border: 1px solid transparent; border-radius: 6px;
+  cursor: pointer; transition: color .15s ease, background .15s ease, border-color .15s ease;
+}
+.npr-dig-at::before { content: "▶"; font-size: 7px; margin-right: 5px; opacity: 0; transition: opacity .15s ease; }
+.npr-dig-at:hover { color: var(--npr-accent-strong); background: color-mix(in srgb, var(--npr-accent) 10%, transparent); border-color: color-mix(in srgb, var(--npr-accent) 26%, transparent); }
+.npr-dig-at:hover::before { opacity: 1; }
+.npr-dig-at.is-flat { cursor: default; color: var(--npr-faint); }
+.npr-dig-at.is-quote { margin-right: 8px; }
+
+.npr-dig-text h4 { margin: 0 0 3px; font-size: 13px; font-weight: 600; line-height: 1.6; }
+.npr-dig-text ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.npr-dig-text li { position: relative; padding-left: 12px; font-size: 12.5px; line-height: 1.72; color: var(--npr-muted); }
+.npr-dig-text li::before { content: "·"; position: absolute; left: 2px; color: var(--npr-faint); }
+
+.npr-dig-quotes { margin-top: 14px; padding-left: 12px; border-left: 2px solid color-mix(in srgb, var(--npr-accent) 34%, transparent); }
+.npr-dig-label { display: block; margin-bottom: 4px; font-size: 11px; letter-spacing: .06em; color: var(--npr-faint); }
+.npr-dig-quote { margin: 0 0 6px; font-size: 12.5px; line-height: 1.75; color: color-mix(in srgb, var(--npr-fg) 88%, var(--npr-bg)); }
+.npr-dig-people { margin: 12px 0 0; font-size: 12px; color: var(--npr-muted); }
+.npr-dig-people .npr-dig-label { display: inline; margin-right: 8px; }
+
+/* 渲染在字幕面板上方时，两者之间要能看出是两块东西。 */
+.npr-listen-body .npr-dig + .npr-tr { margin-top: 4px; }
+
+/* 设置页「字幕与识别」里的环境清单：一行一件事，过得去的用 ✓。
+   `data-ok="no"` 降一档但**不标红**：缺模型是待办，不是错误（标红会让人以为坏了）。 */
+.npr-cap-facts {
+  list-style: none; margin: 2px 0 10px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 7px;
+  border-radius: 10px; background: color-mix(in srgb, var(--npr-fg) 4%, transparent);
+  font-size: 12.5px; line-height: 1.6;
+}
+.npr-cap-facts li { display: flex; align-items: flex-start; gap: 8px; color: var(--npr-fg); }
+.npr-cap-facts li svg { flex: none; margin-top: 2px; color: var(--npr-accent); }
+.npr-cap-facts li[data-ok="no"] { color: var(--npr-muted); }
+.npr-cap-facts li[data-ok="no"] svg { color: var(--npr-faint); }
+
+/* 添加订阅时的「会订到哪个 feed」：一行小字，成功时低调、失败时用危险色。 */
+.npr-addfeed-resolve { display: block; font-size: 12px; line-height: 1.6; color: var(--npr-muted); word-break: break-all; }
+/* ★ 不用 `--npr-danger`：这个仓库**没有定义**它（只有几处带 `#d9534f` 兜底的旧引用）。
+   写一个没有定义的变量，颜色会静默落回 `inherit` —— 失败提示和成功提示一个颜色。 */
+.npr-addfeed-resolve.is-error { color: var(--dsw-alias-state-error-primary); }
+
+@media (prefers-reduced-motion: reduce) {
+  .npr-dig-busy span { animation: none; width: 100%; opacity: .5; }
+  .npr-dig-at, .npr-dig-again { transition: none; }
+}

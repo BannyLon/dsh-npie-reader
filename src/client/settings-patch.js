@@ -28,8 +28,16 @@
  *   ★ 它进这张表还有第二个理由：`getSettings()` 根本不把它交给渲染进程
  *     （见 `service.js`），所以设置弹窗那份快照里它永远是 `''` —— 一旦被提交回去，
  *     就等于**每次点保存都清空一次 Key**，而界面会显示「设置已保存」。
+ * - `ebookReadMode`：电子书的读法（原文 / 对照 / 译文，0.65.0）。写者是**阅读器**
+ *   工具条那颗按钮（`saveSettings({ ebookReadMode })`），不是设置页 ——
+ *   这一屏从来没有渲染过它。留在 patch 里就等于「用打开设置时那份旧快照
+ *   把用户刚在读的书里选的读法盖回去」，而界面只会说「设置已保存」。
+ *   ★ 与 `bookSources` 是同一条判据：**谁在写，就由谁独占**。
+ * - `asrApiKey`：云端识别的 Key（0.84.0）。写者是 `saveAsrConfig`。
+ *   ★ 与 `speechApiKey` 完全同一条理由：`getSettings()` 不把它交给渲染进程，
+ *     所以设置页那份快照里它是空的 —— 提交回去就是「每点一次保存清空一次 Key」。
  */
-export const LIVE_WRITTEN_SETTINGS = Object.freeze(['bookSources', 'libraryListIds', 'speechApiKey']);
+export const LIVE_WRITTEN_SETTINGS = Object.freeze(['bookSources', 'libraryListIds', 'speechApiKey', 'ebookReadMode', 'asrApiKey']);
 
 /**
  * 交给宿主 `saveSettings` 的 patch：整份 settings 去掉别人在写的字段。

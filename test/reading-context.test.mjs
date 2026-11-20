@@ -3,7 +3,8 @@ import { describe, it } from 'node:test';
 import { ARTICLE_CONTEXT_LIMIT, articleContext, articleImages } from '../src/host/article-context.js';
 import { chooseReadingContextVersion } from '../src/host/reading-context-version.js';
 import {
-  BOOK_PAGE_TEXT_LIMIT, bookReadingContext, readingMaterial, readingScopeInstruction,
+  BOOK_PAGE_TEXT_LIMIT, PAPER_META_LIMITS, bookReadingContext, readingMaterial, readingScopeInstruction,
+  sanitizePaperMeta,
 } from '../src/reading-scope.js';
 
 describe('articleContext', () => {
@@ -227,6 +228,88 @@ describe('bookReadingContext（电子书当前页）', () => {
     assert.equal(naive({ text: '' }), '');
     assert.notEqual(naive({ text: '' }), page(''));
     assert.match(page(''), /《干法》第 12 页/);
+  });
+});
+
+/**
+ * 论文与电子书共用同一个构造函数，但**身份必须真的分叉**。
+ *
+ * ★ 这一组的存在理由是一句用户提问（2026-11-12）：「论文阅读里的 AI 伴读是不是
+ *   独立的，为什么显示的内容还是电子书阅读的一样」。答案是不独立 —— 整条阅读器
+ *   都是 `BookReader`。既然共用，那至少要让**模型**知道它在读论文，否则它按书的
+ *   套路讲「这一段在说什么」，而不是「这一页在整篇论证里承担什么」。
+ */
+describe('bookReadingContext（论文：同一页面，不同身份）', () => {
+  const paper = (extra = {}) => bookReadingContext({
+    kind: 'paper', title: 'DeepSeek-VL', page: 1, pages: 33, text: 'Abstract We present…', ...extra,
+  });
+
+  it('明说读的是一篇论文，不是一本电子书', () => {
+    const text = paper();
+    assert.match(text, /读一篇论文/);
+    assert.doesNotMatch(text, /读一本电子书/);
+  });
+
+  it('带上作者、发表处与年份', () => {
+    const text = paper({ meta: { authors: 'Haoyu Lu, Wen Liu', venue: 'arXiv', year: 2024 } });
+    assert.match(text, /作者：Haoyu Lu, Wen Liu。/);
+    assert.match(text, /发表：arXiv · 2024。/);
+  });
+
+  it('摘要作为背景带上，并注明不是本轮处理对象', () => {
+    const text = paper({ meta: { abstract: 'We present DeepSeek-VL…' } });
+    assert.match(text, /摘要（作者原文，只作背景，不是本轮的处理对象）/);
+    assert.match(text, /We present DeepSeek-VL…/);
+  });
+
+  it('★ 缺字段就少一行，不写「未知」占位', () => {
+    // 占位句会被模型当事实读 —— 它会照着「作者未知」回答用户。
+    const text = paper({ meta: {} });
+    assert.doesNotMatch(text, /未知/);
+    assert.doesNotMatch(text, /作者：/);
+    assert.doesNotMatch(text, /摘要（作者原文/);
+    assert.match(text, /《DeepSeek-VL》第 1 页（共 33 页）/);
+  });
+
+  it('★ 摘要超长时截断并留可见标记（一篇预印本不能顶掉整页正文）', () => {
+    const text = paper({ meta: { abstract: '字'.repeat(PAPER_META_LIMITS.abstract + 50) } });
+    assert.match(text, /（摘要已截断）/);
+  });
+
+  it('★ 扫描页不说「论断要证据」：已经说了看不到，再要求它看证据是自相矛盾', () => {
+    const text = paper({ text: '', meta: {} });
+    assert.match(text, /没有可提取的文字/);
+    assert.doesNotMatch(text, /论断需要实验证据支撑/);
+  });
+
+  it('★ 反向对照：kind 缺省时行为与旧版逐字一致（不许悄悄把书变成论文）', () => {
+    const legacy = bookReadingContext({ title: '干法', page: 12, pages: 225, text: '推荐序二' });
+    assert.match(legacy, /读一本电子书/);
+    assert.doesNotMatch(legacy, /论文/);
+    // 旧调用方不会传 kind/meta，输出里也就不该多出任何一段。
+    assert.equal(legacy, bookReadingContext({ kind: 'book', title: '干法', page: 12, pages: 225, text: '推荐序二', meta: null }));
+  });
+});
+
+describe('sanitizePaperMeta', () => {
+  it('把脏值折成固定形状', () => {
+    assert.deepEqual(
+      sanitizePaperMeta({ authors: '  A  ', venue: 42, year: '2024', abstract: ' x ' }),
+      { authors: 'A', venue: '', year: 2024, abstract: 'x' },
+    );
+  });
+
+  it('非对象一律 null（不把字符串当摘要拼进去）', () => {
+    for (const value of [null, undefined, 'x', 42, []]) assert.equal(sanitizePaperMeta(value), null);
+  });
+
+  it('年份越界归 0，不是留着 1e9', () => {
+    assert.equal(sanitizePaperMeta({ year: 1e9 }).year, 0);
+    assert.equal(sanitizePaperMeta({ year: 1200 }).year, 0);
+  });
+
+  it('摘要按上限截断', () => {
+    assert.equal(sanitizePaperMeta({ abstract: '字'.repeat(9999) }).abstract.length, PAPER_META_LIMITS.abstract);
   });
 });
 

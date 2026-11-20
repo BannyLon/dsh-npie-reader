@@ -462,3 +462,76 @@ describe('★ 0.20.4 来源徽章：真渲染', () => {
     assert.equal(badge.props.children, undefined, '空胶囊的文案居然不是 undefined —— 对照没落在真形态上');
   });
 });
+
+/**
+ * 「同名 N 本」（0.71.6，跨源重复书提示）。
+ *
+ * ★ 这一条只能在这一层验：`duplicateHintOf` 的单测证明**文案算得对**，
+ *   但「算对了有没有真的画到行上」是另一件事 —— 这一行有 7 个 span，
+ *   插错位置（比如插到书名里）在源码里看起来完全正常。
+ * ★ 两种失效形态与来源徽章同一套：
+ *   ① 渲染了但文案是空串；② 调用方不传时冒出一个只有虚下划线的空 span。
+ */
+describe('★ 0.71.6 跨源同名提示：真渲染', () => {
+  const READING = { added: true, stateName: 'reading', page: 10, pages: 210, selected: false, onReadingPage: true };
+
+  const dupSpan = (tree) => collect(tree, 'span')
+    .find((n) => n.props.className === 'npr-bookrow-dup');
+
+  it('传了提示 ⇒ 渲染一枚，文案与 title 就是传进来的那两个串', async () => {
+    const render = await loadBookRow();
+    const { tree } = renderAndClick({
+      __render: render,
+      bookProps: {
+        book: BOOK, ...READING,
+        duplicateText: '同名 1 本',
+        duplicateTip: '与「网盘电子书」里的《长安的荔枝》同名、同格式、体积几乎一样。',
+      },
+    });
+    const chip = dupSpan(tree);
+    assert.ok(chip, '提示没渲染 —— 用户看不到「这本书在另一份书单里也有一本」');
+    assert.equal(chip.props.children, '同名 1 本');
+    assert.equal(chip.props.title, '与「网盘电子书」里的《长安的荔枝》同名、同格式、体积几乎一样。',
+      'title 不是传进来的那句说明 —— 光标移上去看到的原因与标记对不上');
+  });
+
+  it('★ 不传 ⇒ 一个提示也不许渲染（默认值是空串，不是 undefined）', async () => {
+    const render = await loadBookRow();
+    const { tree } = renderAndClick({ __render: render, bookProps: { book: BOOK, ...READING } });
+    assert.equal(dupSpan(tree), undefined,
+      '没传提示也渲染了一个空 span —— 2634 行每行多一条虚下划线，看起来像表格坏了');
+  });
+
+  it('★ 反向对照：把默认值去掉之后，不传提示必须冒出一个空 span', async () => {
+    const render = await loadBookRow({
+      plugins: [mutateLibraryApp(
+        "  duplicateText = '', duplicateTip = '',",
+        '  duplicateText, duplicateTip,',
+      )],
+    });
+    const { tree } = renderAndClick({ __render: render, bookProps: { book: BOOK, ...READING } });
+    const chip = dupSpan(tree);
+    assert.ok(chip, '去掉默认值之后仍然没有提示 —— 上面那条断言是假绿（`undefined !== \'\'` 没被触发）');
+    assert.equal(chip.props.children, undefined, '空提示的文案居然不是 undefined —— 对照没落在真形态上');
+  });
+
+  it('提示排在「格式 · 体积」之后、「暂不支持阅读」之前（先读身份，再读关系，最后读缺陷）', async () => {
+    const render = await loadBookRow();
+    const { tree } = renderAndClick({
+      __render: render,
+      bookProps: {
+        book: { ...BOOK, renderable: false }, ...READING,
+        duplicateText: '同名 1 本', duplicateTip: '说明',
+      },
+    });
+    const meta = collect(tree, 'span')
+      .find((n) => n.props.className === 'npr-bookrow-meta');
+    assert.ok(meta, '找不到元信息行');
+    const order = collect(meta, 'span').map((n) => typeof n.props.className === 'string' ? n.props.className : '');
+    const atDup = order.indexOf('npr-bookrow-dup');
+    const atWarn = order.indexOf('npr-bookrow-warn');
+    assert.ok(atDup >= 0, '元信息行里没有提示');
+    assert.ok(atWarn > atDup,
+      `提示排在了「暂不支持阅读」之后（dup=${atDup}, warn=${atWarn}）—— 那句是这本书自己的缺陷，该最后读`);
+  });
+});

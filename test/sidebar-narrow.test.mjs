@@ -32,11 +32,13 @@ import { stripComments } from '../scripts/strip-comments.mjs';
 
 const clientDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'client');
 const source = stripComments(readFileSync(join(clientDir, 'ReaderPage.jsx'), 'utf8'));
+/** 0.71.0：下限的唯一数值来源搬到了四个视图共用的模块里。 */
+const shared = stripComments(readFileSync(join(clientDir, 'sidebar-width.js'), 'utf8'));
 
 /** 源码里那个下限（CSS 变量）。 */
 const cssMin = Number(/--npr-sidebar-min:(\d+)px/.exec(source)?.[1] ?? NaN);
 /** JS 里那个下限（拖动与首屏夹取用）。 */
-const jsMin = Number(/export const SIDEBAR_MIN_WIDTH = (\d+);/.exec(source)?.[1] ?? NaN);
+const jsMin = Number(/export const SIDEBAR_MIN_WIDTH = (\d+);/.exec(shared)?.[1] ?? NaN);
 
 describe('0.45.2：侧边栏下限 —— 一个数，两处写', () => {
   it('CSS 变量与 JS 常数都存在', () => {
@@ -49,6 +51,15 @@ describe('0.45.2：侧边栏下限 —— 一个数，两处写', () => {
      两个数岔开就会出现「拖到 220 不换行、窗口一缩就换行」这种只在一条路径上复现的状态。 */
   it('两处必须是同一个数（CSS 变量 === SIDEBAR_MIN_WIDTH）', () => {
     assert.equal(cssMin, jsMin, `CSS 写 ${cssMin}px、JS 写 ${jsMin}px —— 两条路径会对不上`);
+  });
+
+  /* ★ 0.71.0：ReaderPage 不再自己写那个数字，而是从共用模块转出。
+     少这条断言的话，把 import 删掉、改回一个手写的 256 也照样绿 —— 那就又
+     变成「四份常量各写各的」了。 */
+  it('ReaderPage 从共用模块转出下限，不再手写第二个数字', () => {
+    assert.match(source, /from '\.\/sidebar-width\.js'/, 'ReaderPage 没接共用宽度模块');
+    assert.match(source, /export \{ SIDEBAR_MIN_WIDTH \}/, 'ReaderPage 没把共用下限转出给契约断言');
+    assert.doesNotMatch(source, /export const SIDEBAR_MIN_WIDTH = \d+;/, '下限又手写了一份');
   });
 
   /* 量出来的门槛：两位数的「已隐藏 12」要 252px 才不换行。下限必须盖住它，
@@ -100,28 +111,22 @@ describe('0.45.2：侧边栏下限 —— 两条列宽公式都带着它', () =>
   });
 });
 
-describe('0.45.2：拖动与首屏读回也夹在同一个下限上', () => {
-  it('拖动夹取用 SIDEBAR_MIN_WIDTH，不是写死的 220', () => {
-    assert.match(
-      source,
-      /Math\.max\(startX === 0 \? 300 : \(listWidth \+ moveEvent\.clientX - startX\), SIDEBAR_MIN_WIDTH\)/,
-      '拖动下限要跟着 SIDEBAR_MIN_WIDTH 走 —— 220 正好是用户拖到底时那个坏宽度',
-    );
-    assert.doesNotMatch(
-      source,
-      /- startX\), 220\)/,
-      '拖动下限还写死 220：那是 0.45.1 之前的值，比「排得开」还窄',
-    );
+describe('0.45.2 → 0.71.0：拖动与首屏读回也夹在同一个下限上', () => {
+  it('四个视图的拖动都走共用夹取，不是各写一份 220', () => {
+    for (const name of ['ReaderPage.jsx', 'LibraryApp.jsx', 'DiaryApp.jsx', 'PapersApp.jsx']) {
+      const text = stripComments(readFileSync(join(clientDir, name), 'utf8'));
+      assert.match(text, /clampSidebarWidth\(/, `${name} 的拖动没走共用夹取`);
+      assert.doesNotMatch(text, /- startX\), 220\)/, `${name} 的拖动下限还写死 220`);
+      assert.match(text, /saveSidebarWidth\(width\)/, `${name} 的拖动没写共用 key`);
+    }
   });
 
   /* ★ 老用户的 localStorage 里存着 220（旧下限）。不在**首屏读回**时夹一下，
      表现就是「一打开就换行 + 齿轮被遮」，而用户根本没拖过 —— 最难自查的一类。 */
-  it('首屏读回 npr.listWidth 时也要夹（老用户存的是 220）', () => {
-    assert.match(
-      source,
-      /useState\(\(\) => Math\.max\(SIDEBAR_MIN_WIDTH, Number\(localStorage\.getItem\('npr\.listWidth'\)\) \|\| 300\)\)/,
-      '首屏读回没夹下限：老用户存的 220 会原样生效',
-    );
+  it('首屏读回共用 key 时也要夹（老用户存的是 220）', () => {
+    assert.match(shared, /clampSidebarWidth\(raw\)/, '新 key 读回没夹下限');
+    assert.match(shared, /clampSidebarWidth\(Math\.max\(legacy, SIDEBAR_WIDTH\)\)/, '旧 RSS key 迁移没夹下限');
+    assert.match(source, /useState\(readSidebarWidth\)/, 'RSS 首屏没读共用宽度');
   });
 });
 

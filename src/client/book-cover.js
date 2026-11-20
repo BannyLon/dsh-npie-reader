@@ -2,10 +2,10 @@
  * 书封面的客户端支持：把「真封面」与「生成式封面」收敛成一套取值。
  *
  * ★ 为什么需要这一层：书架索引里**没有封面字段**（见 `src/host/book-cover.js` 顶部）。
- *   于是封面只有两条真实来源：
- *     ① EPUB —— 宿主解 zip 取内嵌封面（`GET /cover/:id`）；
- *     ② PDF  —— 客户端用 pdf.js 把**第一页**渲染成图（宿主没有 canvas）。
- *   剩下的格式（mobi / azw3 / txt / docx）没有可用的封面来源 ⇒ 生成式。
+ *   于是封面只有三条真实来源：
+ *     ① 容器类电子书 —— 宿主解内嵌封面（`GET /cover/:id`），EPUB 与 MOBI/AZW/AZW3 都走这条；
+ *     ② PDF  —— 客户端用 pdf.js 把**第一页**渲染成图（宿主没有 canvas）；
+ *     ③ txt / docx —— 没有可用的封面来源 ⇒ 生成式。
  *   **生成式不是「假封面」**：它是界面明说的占位（书名首字 + 主题色渐变），
  *   与「这本书没有封面」这句话在视觉上是两件事，不会误导。
  *
@@ -35,15 +35,25 @@ function remember(key, job) {
   return job;
 }
 
-/** 这本书的封面该走哪条路：`epub`（宿主解）/ `pdf`（客户端渲染）/ `made`（生成）。 */
+/**
+ * 这本书的封面该走哪条路：`epub` / `ebook`（宿主解）/ `pdf`（客户端渲染）/ `made`（生成）。
+ *
+ * ★ `ebook` 与 `epub` **分开**而不是合并成一个 `host`：`data-kind` 会写进 DOM，
+ *   而「这本书是 EPUB」与「这本书是 MOBI」在排查时是两件事 —— 合成一个之后，
+ *   用户报「封面是花的」，就分不清是 OPF 挑错了图还是 EXTH 偏移算错了。
+ *   两者走**同一个** URL（`epubCoverUrl`），差别只在宿主侧的分派。
+ * ★ 判据必须与宿主 `ebookCoverImage` 的白名单一致：多一个格式会得到一张永远 404 的
+ *   `<img>`（界面回落生成式，但控制台多 2634 条 404）。
+ */
 export function coverKind(book) {
   const ext = String(book?.ext ?? '').toLowerCase();
   if (ext === 'epub') return 'epub';
+  if (ext === 'mobi' || ext === 'azw' || ext === 'azw3') return 'ebook';
   if (ext === 'pdf') return 'pdf';
   return 'made';
 }
 
-/** 宿主那侧封面接口的 URL（EPUB）。 */
+/** 宿主那侧封面接口的 URL（EPUB 与 MOBI 系共用）。 */
 export function epubCoverUrl(bookId) {
   return `${LIBRARY_API_PREFIX}/cover/${encodeURIComponent(String(bookId))}`;
 }

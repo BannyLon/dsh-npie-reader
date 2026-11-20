@@ -15,9 +15,22 @@ import { LIBRARY_API_PREFIX } from '../library.js';
 const TIMEOUT_MS = 20_000;
 
 /** 带超时 + 错误正文的 JSON 请求。 */
-async function jsonRequest(path, init = {}, { timeoutMs = TIMEOUT_MS } = {}) {
+async function jsonRequest(path, init = {}, { timeoutMs = TIMEOUT_MS, signal } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  /**
+   * ★ 外部取消（用户点「暂停」）必须也能掐断这条请求。
+   *
+   * 以前只有一个内部 controller 管超时，外部没有任何办法主动中止 ——
+   * 于是「暂停翻译」只能做成「UI 上假装停了，请求继续跑到 3 分钟超时」：
+   * 模型照样烧完、缓存照样写进去，用户以为省下了钱。
+   * `AbortSignal` 不能相加，只能把外部那条挂到内部来。
+   */
+  const onAbort = () => controller.abort();
+  if (signal instanceof AbortSignal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  }
   try {
     const response = await fetch(`${LIBRARY_API_PREFIX}${path}`, {
       ...init,
@@ -35,10 +48,18 @@ async function jsonRequest(path, init = {}, { timeoutMs = TIMEOUT_MS } = {}) {
     }
     return body;
   } catch (error) {
+    // ★ 先判外部取消：超时与暂停都走 `AbortError`，顺序反了会把「你按了暂停」
+    //   报成「请求超时（180 秒）」，用户会以为是插件的问题。
+    if (signal?.aborted) {
+      const paused = new Error('已暂停');
+      paused.code = 'PAUSED';
+      throw paused;
+    }
     if (controller.signal.aborted) throw new Error(`请求超时（${timeoutMs / 1000} 秒）`);
     throw error;
   } finally {
     clearTimeout(timer);
+    if (signal instanceof AbortSignal) signal.removeEventListener('abort', onAbort);
   }
 }
 
@@ -189,6 +210,58 @@ export async function fetchEbookSection(bookId, n, { timeoutMs = 30_000 } = {}) 
 }
 
 /**
+ * 某一节的**对照译文**（只读缓存）。
+ *
+ * 返回 `{ n, available, entries: [[块下标, 译文]], coverage, model }`。
+ * ★ `available: false` 是**正常状态**（这一节还没翻过），不是错误：
+ *   界面据此决定「要不要发那个几十秒的翻译请求」。把它当错误抛出去会让每次
+ *   打开对照都先弹一条红字。
+ */
+export async function fetchEbookTranslation(bookId, n, { timeoutMs = 20_000 } = {}) {
+  return await jsonRequest(`/book/${encodeURIComponent(bookId)}/ebook/l10n/${Number(n)}`, {}, { timeoutMs });
+}
+
+/** 这本书已经译过哪些节（工具栏上「已译 3 节」）。 */
+export async function fetchEbookTranslationIndex(bookId, { timeoutMs = 20_000 } = {}) {
+  return await jsonRequest(`/book/${encodeURIComponent(bookId)}/ebook/l10n`, {}, { timeoutMs });
+}
+
+/**
+ * 真去翻这一节。
+ *
+ * ★ 超时给到 5 分钟：一节通常是几千字（一批），但长节会切成多批，而模型
+ *   逐批回来；`ai.js` 那侧的单次上限本来就是 10 分钟。比它短的话，界面会先
+ *   报「请求超时」，而宿主那边其实还在跑、还会把结果写进缓存 —— 用户重试时
+ *   看到的是一份「凭空出现」的译文。
+ */
+export async function postEbookTranslation(bookId, n, { force = false, timeoutMs = 300_000 } = {}) {
+  return await jsonPost(`/book/${encodeURIComponent(bookId)}/ebook/l10n`, { n: Number(n), force }, { timeoutMs });
+}
+
+/**
+ * 整本预翻的进度（0.59.0）。
+ *
+ * ★ 轮询用**短超时**：它是每秒一次的状态查询，一个慢请求不该把界面拖住。
+ *   超时就当作「这一拍没拿到」，下一拍继续 —— 进度条宁可晚半秒，也不要卡死。
+ * ★ 没在跑时也会回一份（`state: 'idle'` 或 `'done'`，来自磁盘），
+ *   界面靠它画「已译 3 / 14 节」的初始值，不需要另一个接口。
+ */
+export async function fetchEbookPrefetch(bookId, { timeoutMs = 15_000 } = {}) {
+  return await jsonRequest(`/book/${encodeURIComponent(bookId)}/ebook/l10n/prefetch`, {}, { timeoutMs });
+}
+
+/**
+ * 开 / 停整本预翻。
+ *
+ * ★ `action` 必须显式给，没有默认值：host 那侧拒绝缺省的请求，就是怕一个拿错
+ *   body 的调用悄悄花掉几十次模型调用。
+ * ★ 超时给 60 秒：启动时要先解析整本（冷启动一本 100 MB 的 EPUB 也就十几秒）。
+ */
+export async function postEbookPrefetch(bookId, action, { timeoutMs = 60_000 } = {}) {
+  return await jsonPost(`/book/${encodeURIComponent(bookId)}/ebook/l10n/prefetch`, { action: String(action) }, { timeoutMs });
+}
+
+/**
  * 书内搜索：在**全书正文**里找一处词，回 `{ query, total, truncated, sections, blocks,
  * chars, hits: [{ n, sectionTitle, block, start, end, snippet }] }`。
  *
@@ -228,6 +301,51 @@ function jsonPost(path, body, options) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body ?? {}),
   }, options);
+}
+
+/**
+ * 划词翻译：把阅读器里选中的一段原文交给宿主，拿回中文。
+ *
+ * ★ 超时给到 3 分钟：一次划词正常几秒，但宿主那条链路和「逐章解读」共用
+ *   `agentDefaultModel` —— 用户切到推理模型时，一段长公式推导能跑上一分钟。
+ *   20 秒的默认值会让它稳定报超时，而表现是「翻译功能时好时坏」。
+ * ★ 失败文案直接用宿主回的那句（它写的是人话：模型没配 / 限流 / 超时）。
+ */
+export async function postTranslatePassage({ text, context = '' }, { timeoutMs = 180_000 } = {}) {
+  return await jsonPost('/translate', { text, context }, { timeoutMs });
+}
+
+/**
+ * 页级按需翻译（D 档）：整页若干段**一次**交模型，返回 `[{id, text}]`。
+ *
+ * ★ 超时同样给 3 分钟：一页十几段比一次划词长得多，但仍是单次请求；
+ *   用划词那个 20 秒默认值会在模型刚开始生成时就把请求掐掉。
+ * ★ `signal` 透传给 `fetch`：用户点「暂停」时这条请求会被真的掐断，
+ *   而不是跑满 3 分钟再丢结果（那样模型费照付、缓存照写）。
+ */
+export async function postTranslatePage(paragraphs, { timeoutMs = 180_000, signal } = {}) {
+  return await jsonPost('/translate-page', { paragraphs }, { timeoutMs, signal });
+}
+
+/**
+ * PDF 页译文缓存（0.71.0）：逐页按需与整本一次翻完共用这一份。
+ *
+ * ★ 读整本是一次 GET：打开书时拉回「哪些页已经译过」，整本模式据此跳过；
+ *   写一页是一次 POST，绝不做整本覆盖（另一个窗口刚译完的页会被旧快照抹掉）。
+ * ★ 缓存路由没接上（501）时调用方要当**软失败**：译文照样显示，只是不落盘。
+ */
+export async function fetchPageTranslations(bookId, { timeoutMs = 30_000 } = {}) {
+  const body = await jsonRequest(`/page-translation/${encodeURIComponent(bookId)}`, {}, { timeoutMs });
+  return body?.pages ?? {};
+}
+
+export async function putPageTranslation(bookId, { page, paragraphs, translations }, { timeoutMs = 30_000 } = {}) {
+  return await jsonPost(`/page-translation/${encodeURIComponent(bookId)}`,
+    { op: 'put', page, paragraphs, translations }, { timeoutMs });
+}
+
+export async function clearPageTranslations(bookId, { timeoutMs = 30_000 } = {}) {
+  return await jsonPost(`/page-translation/${encodeURIComponent(bookId)}`, { op: 'clear' }, { timeoutMs });
 }
 
 /** 书源配置 + 每份书单 + 载入选择 + 外部书单 + 网盘授权状态。 */

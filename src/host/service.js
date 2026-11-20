@@ -7,8 +7,9 @@
  * 本插件是自包含的：不连接任何第三方后端。译文与改写只由 Harness 当前模型生成。
  */
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readdir, stat, unlink } from 'node:fs/promises';
 import { dirname as dirName, join as joinPath, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Remote, bindTypertRemote } from './typert-lite.js';
@@ -17,14 +18,55 @@ import { READING_DEFAULTS, validateSettings } from '../reading-settings.js';
 import { buildOpml, excerptOf, FEED_LIMITS, hashKey, parseFeed, parseOpml } from './feeds.js';
 import { BACKFILL_LIMITS, discoverArchive, normalizeEntryUrl } from './archive.js';
 import { firstImageUrl, htmlToText, sanitizeHtml } from './sanitize.js';
+import { articleAudioUrl } from '../media.js';
+import { openAudioStream } from './audio-proxy.js';
+import {
+  ASR_MODELS,
+  AsrError,
+  DEFAULT_MODEL_ID,
+  SLICE_MS,
+  buildPrompt,
+  cleanCues,
+  ensureEngine,
+  ensureModel,
+  modelPathOf,
+  probeAsr,
+  recognizeSlice,
+  toWav,
+} from './asr.js';
 import { extractMainHtml } from './fulltext.js';
+import {
+  CLOUD_ASR_PROVIDERS,
+  CLOUD_SLICE_SECONDS,
+  cloudProviderOf,
+  dropSlices,
+  sliceAudioForUpload,
+  transcribeDoubao,
+  transcribeOpenAiCompatible,
+} from './asr-cloud.js';
+import {
+  OLLAMA_ASR_MODEL,
+  OLLAMA_ASR_PULL_NAMES,
+  OLLAMA_DEFAULT_BASE,
+  OLLAMA_SLICE_SECONDS,
+  cutWavSlice,
+  dropSlice,
+  probeOllama,
+  pullOllamaModel,
+  splitSliceText,
+  transcribeSliceOllama,
+} from './asr-ollama.js';
+import { FeedResolveError, resolveFeedUrl } from './feed-resolve.js';
+import { FEED_PLATFORM_HINT, classifySubscriptionUrl, platformAudioSupport } from '../feed-platform.js';
+import { probeGoogleTranslate, translateWithGoogle } from './google-translate.js';
+import { EPISODE_DIGEST_MIN_CHARS, buildEpisodeDigestInput, isEmptyDigest, parseEpisodeDigest } from './episode-digest.js';
 import { chooseReadingContextVersion } from './reading-context-version.js';
 import {
   BOOK_QUOTE_LIMIT, DIARY_CONTEXT_DAY_CHARS, DIARY_CONTEXT_DAY_ENTRY_COUNT, DIARY_CONTEXT_ENTRY_COUNT,
   READING_CONTEXT_INTRO, bookReadingContext, diaryContext,
-  readingMaterial, readingScopeInstruction,
+  readingMaterial, readingScopeInstruction, sanitizePaperMeta,
 } from '../reading-scope.js';
-import { aiModelInUse, createGenerationGuard, generateBookSynthesis, generateChapterDigest, generateRewrite, generateStructuredTranslation, listAiModels } from './ai.js';
+import { aiModelInUse, createGenerationGuard, generateBookSynthesis, generateChapterDigest, generateEbookSectionTranslation, generateEpisodeDigest, generateRewrite, generateStructuredTranslation, listAiModels, translatePageParagraphs as translatePageParagraphsWithModel, translatePassage, translateSubtitleParagraphs } from './ai.js';
 import { isValidAiModel } from '../ai-model.js';
 import { DIGEST_MIN_CHARS } from './digest-prompt.js';
 import { SKILL_PROFILES, buildSkillPackage, detectProfile, skillSlugFor } from './book-skill.js';
@@ -36,10 +78,16 @@ import { createPanReader, DEFAULT_CACHE_MAX_BYTES } from './pan.js';
 import { createDigestStore } from './digest-store.js';
 import { createOcrRunner } from './ocr.js';
 import { createEbookStore } from './ebook/store.js';
+import { createEbookTranslationStore } from './ebook/translation-store.js';
+import { createPrefetchRunner } from './ebook/prefetch.js';
+import { createPrefetchStatsStore } from './ebook/prefetch-stats.js';
 import { isEbookExtension, parseEbook } from './ebook/index.js';
+import { pageTextOfBlocks, relocateAnnotations } from '../annotation-relocate.js';
 import { createAnnotationStore } from './annotation-store.js';
+import { createPageTranslationStore } from './page-translation-store.js';
 import { dateKey } from '../diary-format.js';
-import { createDiaryStore } from './diary-store.js';
+import { createDiaryStore, diaryDailyDir, diaryPrivateDir, diaryRoot } from './diary-store.js';
+import { createDiaryAssets } from './diary-assets.js';
 import { DIARY_API_PREFIX, makeDiaryRoutes } from './diary-routes.js';
 import { createSpeechSynth } from './speech.js';
 import { SPEECH_API_PREFIX, makeSpeechRoutes } from './speech-routes.js';
@@ -48,6 +96,9 @@ import { createLocalReader } from './local-books.js';
 import { buildPreviousIds, scanLocalRoots, scanPanRoots } from './book-source.js';
 import { createLibrary, readExternalStates, readLibraryIndex, resolveLibraryPath } from './library.js';
 import { LIBRARY_API_PREFIX, makeLibraryRoutes } from './library-routes.js';
+import { PaperStore } from './paper-store.js';
+import { PAPER_API_PREFIX, makePaperRoutes } from './paper-routes.js';
+import { downloadPdf, pdfCandidate, resolvePaperInput } from './paper-source.js';
 import {
   bookListsDir, bookListsIndexPath, libraryIndexPath, migrateLegacyPanCredentials, panCacheDir, panAppPath,
   panTokenPath, pluginDataDir, speechCacheDir,
@@ -57,10 +108,13 @@ import {
   CACHE_LIMITS, clearRecomputable, enforceDigestBudget, formatBytes, measureBackups,
   measureDigestCache, pathBytes, pruneBackups,
 } from './cache-budget.js';
-import { fetchPage } from './page-fetch.js';
+import { fetchPage, fetchTranscriptText } from './page-fetch.js';
+import { TranscriptError, parseTranscript } from './transcript-parse.js';
+import { createTranscriptStore } from './transcript-store.js';
+import { isMostlyChinese, transcriptRefOf, transcriptView } from '../transcript.js';
 import { checkPublicUrl } from './net-guard.js';
 import {
-  BOOK_STATES, applyStatePatch, isBookId, mergeImportedStates, normalizeBookSources, normalizeLibraryListIds, stateOf,
+  BOOK_STATES, applyStatePatch, isBookId, isPaperId, mergeImportedStates, normalizeBookSources, normalizeLibraryListIds, paperAsBook, stateOf,
 } from '../library.js';
 
 const REFRESH_WORKERS = 3;
@@ -135,6 +189,14 @@ function assertSessionId(sessionId) {
 export function publicSettings(settings) {
   const copy = { ...settings };
   delete copy.speechApiKey;
+  /**
+   * 云端识别与朗读的 Key 都不许出宿主进程（0.84.0）。
+   *
+   * ★ `asrApiKey` 是这次新加的字段，**必须在这里显式删**。忘了删不会报错 ——
+   *   它只会安静地跟着 `getSettings()` 回到渲染进程，再出现在面板的 props 里。
+   *   界面要显示的是「已配置 / 未配置」，那由 `asrStatus()` 给。
+   */
+  delete copy.asrApiKey;
   return copy;
 }
 
@@ -344,6 +406,42 @@ export class RssService {
      */
     this.digestStore = createDigestStore({ rootDir: pluginDataDir(), log: message => ctx.logger.info(message) });
     /**
+     * 单集字幕的磁盘层（`transcripts/`，P0）。
+     *
+     * ★ 与 `data.json` 分开：那份是全量重写，一集 200 KB 的字幕放进去就是
+     *   「听一分钟重写几兆」（理由见 `digest-store.js` 文件头）。
+     * ★ 与 `digests/` 分开：字幕是**从订阅源抓回来的**，删了能重抓；而解读是花过
+     *   模型钱的产物。混在一个目录里，「清字幕」会顺手删掉用户的解读。
+     */
+    this.transcriptStore = createTranscriptStore({ rootDir: pluginDataDir(), log: message => ctx.logger.info(message) });
+    /**
+     * 字幕抓取的并发去重。
+     *
+     * ★ 同一集连点两次「获取字幕」不该发两次请求：CDN 那边会算两次流量，而用户
+     *   看到的是「点了没反应，再点一下」—— 正是最容易被重复触发的场景。
+     * ★ key 在结束后**必须删掉**，否则失败一次之后这一集永远拿到同一个 rejected
+     *   promise，界面会一直显示「获取失败」，重试变成无效动作。
+     */
+    this.transcriptPending = new Map();
+    /**
+     * 字幕翻译的**串行队列**（一条 key 一个队尾 promise）。
+     *
+     * ★ 与 `transcriptPending` 不同：那张表是「合并重复请求」，这张是「排队」。
+     *   翻译是逐批写整份数组的，两批并发时后写的那次会把另一批的译文覆盖掉 ——
+     *   表现为「翻了两遍，进度条却退回去了」。
+     */
+    this.translationPending = new Map();
+    /**
+     * 本机识别（0.82.0）的运行态。
+     *
+     * ★ `asrSetup` 是**全局一份**（引擎与模型只有一份），`asrJobs` 是**一集一份**。
+     *   两者分开是因为它们的生命周期完全不同：前者下完就一直 ready，后者跑完就该结束。
+     * ★ 状态存在内存里，不落盘：进程重启后「正在识别」这件事本来就不成立了 ——
+     *   落盘反而会让界面在重开时看到一个永远不动的 43%。
+     */
+    this.asrSetup = { status: 'idle', stage: '', progress: 0, error: '', modelId: '' };
+    this.asrJobs = new Map();
+    /**
      * 重排电子书的解析缓存（EPUB / MOBI / AZW3 / TXT）。
      *
      * ★ 与 `digestStore` 分目录、与网盘块缓存也分目录：这里的产物是**解析结果**
@@ -357,12 +455,74 @@ export class RssService {
     /** 并发解析去重：同一本书连点两次不该同时跑两遍 ZIP/LZ77。 */
     this.ebookPending = new Map();
     /**
+     * 电子书**对照译文**的磁盘层（`ebook-translations/`）。
+     *
+     * ★ 与 `ebooks/`（解析缓存）分目录：那份随时可以扔掉重算，而译文是花过钱的
+     *   产物。混在一起时，「清解析缓存」会顺手把用户翻译过的几十节一起删掉，
+     *   而用户完全不知道发生了什么 —— 他只看到「这本书又要重新翻了」。
+     * ★ 也不进 `data.json`：那份是全量重写（理由见 `digest-store.js` 文件头）。
+     */
+    this.ebookTranslation = createEbookTranslationStore({
+      rootDir: joinPath(pluginDataDir(), 'ebook-translations'),
+      log: message => ctx.logger.info(message),
+    });
+    /**
+     * 整本预翻（0.59.0）：一次把这本书每一节都译好，之后读到哪节都是秒开。
+     *
+     * ★ **进度**没有自己的存储：它直接来自 `ebook-translations/` 里已有几节。
+     *   这不是省事，是判据统一 —— 若另写一份「任务进度」，就会出现
+     *   「任务说译了 12 节、缓存里只有 9 节」这种谁也解释不清的状态，
+     *   而用户真正在意的恰恰是缓存里有没有。
+     * ★ **耗时**有自己的存储（0.63.0，`prefetch-stats/`），与上面不冲突：
+     *   进度是「译了几节」（事实，以译文为准），耗时是「每节跑多久」（观测值，
+     *   译文里没有）。没有它，一本译到 17% 停下的书再点「继续」时只剩百分比、
+     *   没有「还剩约多久」—— 内存里的样本随进程一起没了，而磁盘上那 6 节恰恰
+     *   证明这台机器跑过、跑得动多快。
+     * ★ 同一本书只跑一份、不同书可以并行（上限 `DEFAULT_MAX_CONCURRENT` = 4，
+     *   0.61.0 起；0.59.0 曾规定同时只跑一本，被用户「多本书可以同时进行翻译」推翻）。
+     *   每个任务内部仍是**逐节串行**，所以并行 N 本 = 同时在飞 N 个请求；
+     *   上限管的是内存（每个任务持有一份整本解析结果），不是计费。
+     */
+    this.ebookPrefetch = createPrefetchRunner({
+      resolveEbook: book => this.ebookOf(book),
+      translateSection: (book, ebook, n, options) => this.translateSectionOf(book, ebook, n, options),
+      translatedSections: bookId => this.ebookTranslation.listSections(bookId),
+      // 每节实测耗时的档案（0.63.0）：跨会话留着，ETA 才不至于「只有这一轮才有」。
+      stats: createPrefetchStatsStore({
+        rootDir: joinPath(pluginDataDir(), 'prefetch-stats'),
+        log: message => ctx.logger.info(message),
+      }),
+      log: message => ctx.logger.info(message),
+    });
+    /**
+     * 同一节正在翻的请求：`<bookId>:<n>` → Promise。
+     *
+     * ★ 必须有：界面在「打开对照」与「翻回上一页」之间来回点时，同一节会被请求
+     *   两三次；没有去重就是同一段正文被**重复计费**，而且后到的结果还会覆盖前者
+     *   （模型两次译文不同 ⇒ 用户看着看着字变了）。
+     */
+    this.ebookTranslationPending = new Map();
+    /**
      * 划线 / 笔记。
      *
      * ★ 与 `digestStore` **并存但不同目录**：解读目录会被「重新解读」整本删掉，
      *   而划线是用户自己写的，不能因为重抽一次正文就跟着没了。
      */
-    this.annotationStore = createAnnotationStore({ rootDir: pluginDataDir(), log: message => ctx.logger.info(message) });
+    this.annotationStore = createAnnotationStore({
+      rootDir: pluginDataDir(),
+      log: message => ctx.logger.info(message),
+      // 重切页 / 换过文件之后，按摘录原文把划线找回当前这一版正文的坐标。
+      // 只对重排电子书注入；PDF 的文字层坐标系不同，走不注入的原样分支。
+      relocate: (bookId, items) => this.relocateBookAnnotations(bookId, items),
+    });
+    /**
+     * PDF 页译文（0.71.0）。
+     *
+     * ★ 单独一个目录：它是**可再生**的（换个模型 / 分段规则就能重翻），但重建要花
+     *   模型调用，所以既不能混进「清理缓存」里被一键删掉，也不能塞进 `data.json`
+     *   那种全量重写的文件里。
+     */
+    this.pageTranslationStore = createPageTranslationStore({ rootDir: pluginDataDir(), log: message => ctx.logger.info(message) });
     /**
      * 日记。
      *
@@ -375,6 +535,20 @@ export class RssService {
      *   凌晨 7 点前写成前一天）。
      */
     this.diary = createDiaryStore({ log: message => ctx.logger.info(message) });
+    /**
+     * 灵感里贴的图（0.73.0）：`diary/assets/`，**不进** `data.json`、也不进 `.md`。
+     *
+     * ★ 和日记正文同一个根目录（导出时一起走），但它是独立的一层：图片按内容哈希
+     *   命名，写一次就再也不改 —— 与「一天一个 .md、反复重写」是两种存储语义。
+     * ★ 图片**不加密**。它是一个独立的兼容边界，写在这里免得以后有人以为
+     *   「日记正文加密了，图自然也安全」：私密条目的正文由 `diary-secret` 保护，
+     *   而图能不能打开只取决于有没有那个哈希名。真要收得更紧，得先做「私密条目
+     *   拒绝贴图」，那是另一个决定，不该悄悄混在这一层里。
+     */
+    this.diaryAssets = createDiaryAssets({
+      dir: joinPath(diaryRoot(), 'assets'),
+      log: message => ctx.logger.info(message),
+    });
     /**
      * 正在跑逐章解读的书：`bookId → { controller, promise }`。
      *
@@ -400,6 +574,21 @@ export class RssService {
     this.ocrRunner = createOcrRunner({
       scriptPath: resolveOcrScript(),
       log: message => ctx.logger.info(message),
+    });
+    /**
+     * 论文库（`papers.json` + `papers/`）。
+     *
+     * ★ 为什么是**独立 store** 而不是塞进 `RssStore`：`data.json` 是去抖全量重写的，
+     *   论文条目带摘要与作者，几百篇就几百 KB —— 放进去等于「每翻一页都重写论文库」。
+     * ★ 这里是**同步造、异步载**（`paperStore.ready`）：构造期不能 await，否则
+     *   `apply()` 会变成一个慢启动，而宿主不会等它。路由在每条请求上等 `ready`，
+     *   所以「还没载完就来了请求」只会慢一点，不会读到空库。
+     * ★ `ready` 的拒绝必须**就地消化**：没有请求时它就是一个没人 await 的 promise，
+     *   不 catch 会变成一条 `unhandledRejection`，而那条日志在宿主里是红的。
+     */
+    this.paperStore = new PaperStore({ log: message => ctx.logger.info(message) });
+    void this.paperStore.ready.catch(error => {
+      ctx.logger.warn(`dsh-npie-reader: 论文库载入失败：${error?.message ?? error}`);
     });
     /** 书单索引的 id → book 映射；索引重载时才重建。 */
     this.bookMap = undefined;
@@ -431,6 +620,21 @@ export class RssService {
         annotationStore: this.annotationStore,
         ocrRunner: this.ocrRunner,
         ebookOf: book => this.ebookOf(book),
+        // 对照翻译的三条入口。★ 与 `startDigests` 同样传函数：路由层拿不到 service，
+        //   也就绕不过「单飞 / 缓存」这两道闸去直接调模型。
+        translateEbookSection: (book, n, options) => this.translateEbookSection(book, n, options),
+        // 划词翻译（气泡上那颗「翻译」）：与整节对照无关，只翻用户选中的那一小段。
+        translatePassage: payload => this.translateSelectedPassage(payload),
+        // 页级按需翻译（D 档）：整页分段一次性交模型，按 id 回来。
+        translatePageParagraphs: payload => this.translatePageParagraphs(payload),
+        // 页译文落盘缓存：逐页按需与整本一次翻完共用（0.71.0）。
+        pageTranslationStore: this.pageTranslationStore,
+        ebookTranslationOf: (book, n) => this.ebookTranslationOf(book, n),
+        ebookTranslationIndex: book => this.ebookTranslationIndex(book),
+        // 整本预翻（0.59.0）三条：开 / 停 / 查进度。
+        startEbookPrefetch: book => this.startEbookPrefetch(book),
+        stopEbookPrefetch: bookId => this.stopEbookPrefetch(bookId),
+        ebookPrefetchStatus: book => this.ebookPrefetchStatus(book),
         // 逐章解读的三个入口。★ 传函数而不是传 `this`：路由层拿不到整个 service，
         //   也就没有办法绕过「单飞 / 取消」这两道闸去直接跑生成。
         startDigests: request => this.startBookDigests(request),
@@ -441,6 +645,22 @@ export class RssService {
         // 缓存占用 / 清理（设置页的「存储」卡）。
         cacheUsage: () => this.cacheUsage(),
         cleanCache: () => this.cleanCache(),
+        // 单集字幕（P0）：读缓存走 store，抓取走 service——路由层拿不到 service，
+        // 也就绕不过「并发去重」这道闸。
+        transcriptStore: this.transcriptStore,
+        fetchTranscript: ({ key, refresh }) => {
+          const entry = this.store.findFeedEntry(key) ?? this.store.getArticle(key) ?? null;
+          if (!entry) throw new Error(`dsh-npie-reader: unknown article ${key}`);
+          const ref = transcriptRefOf(entry);
+          if (ref === undefined) {
+            throw new TranscriptError('这一集没有提供字幕文件', 'NO_TRANSCRIPT', 404);
+          }
+          return this.fetchTranscriptRecord(key, ref);
+        },
+        // 音频中转（0.81.0）。★ 与字幕同样传**函数**而不是 `this`：路由拿不到
+        // service，也就绕不过 `articleAudioUrl` 与 `pageGuard` 这两道判定。
+        audioOf: key => this.audioUrlOf(key),
+        openAudio: (url, options) => this.openAudio(url, options),
         vendorRoot: this.pdfjsRoot,
         editorRoot: this.editorRoot,
         log: message => ctx.logger.info(message),
@@ -462,6 +682,8 @@ export class RssService {
         append: entry => this.diary.append(entry),
         updateEntry: entry => this.diary.updateEntry(entry),
         removeEntry: entry => this.diary.removeEntry(entry),
+        // 整天删除（0.75.0）：一次 `rename` 到 `diary/_trash/`，不是循环删条目。
+        removeDay: input => this.diary.removeDay(input),
         listMonth: month => this.diary.listMonth(month),
         // 侧栏「情绪罗盘 + 那年今日」。参数是一整个 options：`date`（那年今日的锚点）、
         // `today`（连续天数的锚点）、`month`（统计月，跟着日历显示的那个月走）三者
@@ -482,7 +704,17 @@ export class RssService {
         // ★ 闸门必须**整个对象**递进去：路由层要 peek / allow / setup / unlock / lock
         //   五件事，只传一个「是否解锁」的布尔量就没法完成设置了。
         gate: this.diary.gate,
-        reveal: () => this.revealDiaryDir(),
+        // 贴图（0.73.0）：同样只递两个函数。路由层因此拿不到 `dir`，
+        // 也就没法绕过名字白名单去读别的文件。
+        assets: {
+          save: input => this.diaryAssets.save(input),
+          read: name => this.diaryAssets.read(name),
+          // 清理（0.73.1）：白名单来自扫全部公开日记正文，不来自路由层 ——
+          // 路由不认识日记格式，让它去解析 `.md` 只会多一份会漂移的实现。
+          prune: options => this.diaryAssets.prune(options),
+          referenced: () => this.diary.referencedAssets(),
+        },
+        reveal: options => this.revealDiaryDir(options),
         log: message => ctx.logger.info(message),
       });
       disposers.push(scope.webServer.register(diaryRoute));
@@ -502,6 +734,20 @@ export class RssService {
         log: message => ctx.logger.info(message),
       }).map(route => scope.webServer.register(route)));
       ctx.logger.info(`dsh-npie-reader: 朗读路由已挂载 ${SPEECH_API_PREFIX}`);
+      /**
+       * 论文路由（第四条独立前缀）。
+       *
+       * ★ 它只碰插件自己的数据目录（`papers.json` + `papers/`），风险面比书架还窄，
+       *   但仍**单独挂**：论文那条链路会去外网抓 arXiv / Crossref，抓失败、超时、
+       *   被墙都可能发生 —— 这些不该让书架或日记的请求跟着 500。
+       * ★ 读 PDF 字节**不在这里**：落盘之后论文就是一个普通 PDF 书条目，客户端照旧
+       *   走 `LIBRARY_API_PREFIX/book/:id/raw`（Range / 分片 / OCR 全部复用）。
+       */
+      disposers.push(scope.webServer.register(makePaperRoutes({
+        store: this.paperStore,
+        log: message => ctx.logger.info(message),
+      })));
+      ctx.logger.info(`dsh-npie-reader: 论文路由已挂载 ${PAPER_API_PREFIX}`);
       return () => { for (const dispose of disposers) dispose(); };
     });
 
@@ -777,7 +1023,197 @@ export class RssService {
 
   async bookById(id) {
     await this.libraryIndex();
-    return this.bookMap.get(id);
+    const book = this.bookMap.get(id);
+    if (book !== undefined) return book;
+    // 论文库是异步载入的，这里必须等到位 —— 否则「刚装好插件、第一次就点开一篇论文」
+    // 会得到「没有这本书」，而刷新一次又好了。
+    await this.paperStore.ready.catch(() => {});
+    /**
+     * 论文 PDF 不在书单里 —— 它不是从书源目录扫出来的，是用户从 arXiv / DOI
+     * 导入、下载进插件数据目录的。
+     *
+     * ★ 但**一旦落盘，它就是一个普通 PDF 书条目**：这里补上之后，Range 取字节、
+     *   pdf.js 渲染、目录、找词、划线、逐章解读、读后感归档全部零改动复用。
+     *   这也是论文功能能只写「元数据层」的原因：阅读器那一半一行都不用改。
+     */
+    return this.paperBook(id);
+  }
+
+  /**
+   * 把一篇论文「伪装」成书条目。
+   *
+   * @returns 书条目；没有本地全文（或 id 不是论文）时 `undefined`。
+   *   界面据此显示「先下载全文」，而不是点开一个永远转圈的阅读器。
+   */
+  paperBook(id) {
+    if (!isPaperId(id)) return undefined;
+    return paperAsBook(this.paperStore.get(id));
+  }
+
+  /* ---------- 论文：给 agent 的那一层 ------------------------------------
+   *
+   * ★ 这五个方法**只读 store + 一个会联网的导入**，没有一份自己的判定。
+   *   过滤/排序都写在方法里而不是工具里，是因为「按标签筛」这种语义
+   *   在工具描述里说不清（大小写？部分匹配？），模型会各自理解。
+   */
+
+  /**
+   * 论文列表。`query` 是本地子串匹配（标题 / 作者 / 摘要 / 标签），不联网。
+   *
+   * @param {{ tag?: string, status?: string, query?: string, limit?: number }} [options]
+   */
+  async papersList({ tag = '', status = '', query = '', limit = 40 } = {}) {
+    await this.paperStore.ready.catch(() => {});
+    const needle = String(query ?? '').trim().toLowerCase();
+    const wantTag = String(tag ?? '').trim().toLowerCase();
+    const wantStatus = String(status ?? '').trim();
+    const all = this.paperStore.list({ includeTrashed: false });
+    const hits = all.filter((paper) => {
+      if (wantTag !== '' && !paper.tags.some((item) => item.toLowerCase() === wantTag)) return false;
+      if (wantStatus !== '' && paper.status !== wantStatus) return false;
+      if (needle === '') return true;
+      return [paper.title, paper.abstract, paper.venue, ...(paper.authors ?? []), ...(paper.tags ?? [])]
+        .join(' ').toLowerCase().includes(needle);
+    });
+    const capped = Math.max(1, Math.min(Number(limit) || 40, 200));
+    return {
+      total: all.length,
+      matched: hits.length,
+      papers: hits.slice(0, capped).map((paper) => ({
+        id: paper.id,
+        title: paper.title,
+        authors: paper.authors,
+        year: paper.year,
+        venue: paper.venue,
+        arxivId: paper.arxivId,
+        doi: paper.doi,
+        tags: paper.tags,
+        status: paper.status,
+        /** 有全文才读得了。工具据此提示「先下载全文」。 */
+        hasFile: paper.file !== null,
+        pages: paper.pages,
+        lastPage: paper.lastPage,
+      })),
+    };
+  }
+
+  /**
+   * 在本库里搜（标题 / 摘要 / 笔记 / 标签）。
+   *
+   * ★ 与 `papersList({query})` 的区别是「给你看命中理由」：这里是找内容，
+   *   所以每条带一段摘要片段。合成一个接口会让「列清单」也背上拼片段的成本。
+   */
+  async papersSearch({ query = '', limit = 20 } = {}) {
+    await this.paperStore.ready.catch(() => {});
+    const needle = String(query ?? '').trim();
+    if (needle === '') return { matched: 0, hits: [] };
+    const lower = needle.toLowerCase();
+    const hits = [];
+    for (const paper of this.paperStore.list({ includeTrashed: false })) {
+      const fields = [paper.title, paper.abstract, paper.note, paper.venue, ...paper.authors, ...paper.tags];
+      const flat = fields.join(' ');
+      if (!flat.toLowerCase().includes(lower)) continue;
+      // 命中位置优先：标题里出现过的排前面（那是「这篇就是讲这个」）。
+      const rank = String(paper.title).toLowerCase().includes(lower) ? 0 : 1;
+      hits.push({ rank, paper, snippet: this.paperSnippet(paper, needle) });
+    }
+    hits.sort((a, b) => a.rank - b.rank);
+    const capped = Math.max(1, Math.min(Number(limit) || 20, 100));
+    return { matched: hits.length, hits: hits.slice(0, capped) };
+  }
+
+  /** 摘一段带命中词的片段（工具里只用于展示，不改原文）。 */
+  paperSnippet(paper, needle) {
+    const lower = needle.toLowerCase();
+    for (const field of [paper.abstract, paper.note, String(paper.title)]) {
+      const text = String(field ?? '');
+      const at = text.toLowerCase().indexOf(lower);
+      if (at === -1 || text === '') continue;
+      let start = Math.max(0, at - 40);
+      // ★ 起点要对齐到词边界：直接切 40 个字符会得到「…ransduction models」这种
+      //   半个单词的开头，模型有可能把它当成原文的一部分引用出去。
+      //   取**前一个**空格（不是后一个）：往后找会吃掉「命中词前面的那几个词」，
+      //   片段读起来就只剩命中词本身了。
+      if (start > 0) {
+        const prev = text.lastIndexOf(' ', start);
+        start = prev > 0 ? prev + 1 : start;
+      }
+      let end = Math.min(text.length, at + needle.length + 120);
+      if (end < text.length) {
+        const space = text.lastIndexOf(' ', end);
+        if (space > at) end = space;
+      }
+      return `${start > 0 ? '…' : ''}${text.slice(start, end)}${end < text.length ? '…' : ''}`;
+    }
+    // 摘要/笔记/标题都没命中 ⇒ 那是标签命中的（`papersSearch` 的字段表里有标签）。
+    return paper.tags.join(', ');
+  }
+
+  /**
+   * 导入一篇（arXiv 编号 / DOI / 链接 / 标题），默认顺带下载开放全文。
+   *
+   * ★ 与 HTTP 那条 `/papers/import` 走**同一个** `resolvePaperInput`：两条入口
+   *   各写一份解析，就会出现「对话框里导入成功、界面上说没找到」。
+   * ★ 下载失败**不算导入失败**：元数据已经存下来了，用户还能自己上传 PDF。
+   */
+  async papersImport({ input = '', download = true } = {}) {
+    const resolved = await resolvePaperInput(input);
+    const { paper: stored, created } = await this.paperStore.upsert(resolved);
+    let downloaded = false;
+    let downloadError = '';
+    if (download !== false && stored.file === null) {
+      const target = pdfCandidate(stored);
+      if (target === '') downloadError = '没有开放全文（出版社付费墙内），可以让用户自己下载后上传';
+      else {
+        try {
+          const buffer = await downloadPdf(target);
+          await this.paperStore.putPdf(stored.id, buffer, { name: `${stored.arxivId || stored.id}.pdf` });
+          downloaded = true;
+        } catch (error) {
+          downloadError = error?.message ?? String(error);
+        }
+      }
+    }
+    return { paper: this.paperStore.get(stored.id) ?? stored, created, downloaded, downloadError };
+  }
+
+  /** 一篇论文的摘要与元信息（`paper_abstract`：读摘要不必开 PDF）。 */
+  async papersAbstract(id) {
+    await this.paperStore.ready.catch(() => {});
+    const paper = this.paperStore.get(id);
+    if (paper === undefined) throw new Error(`没有这篇论文：${id}`);
+    return paper;
+  }
+
+  /**
+   * 相关论文：同标签 / 同分类 / 同 venue / 同作者的加权排序。
+   *
+   * ★ 刻意**不做引用网络**（那要有引文数据，我们的源里没有）。这个工具回答的是
+   *   「我库里还有哪些跟这篇相关」，排序依据全部来自用户自己攒的标签与元数据 ——
+   *   比编一个「引用图谱」诚实。
+   */
+  async papersRelated({ id, limit = 8 } = {}) {
+    await this.paperStore.ready.catch(() => {});
+    const target = this.paperStore.get(id);
+    if (target === undefined) throw new Error(`没有这篇论文：${id}`);
+    const targetTags = new Set(target.tags.map((tag) => tag.toLowerCase()));
+    const targetCats = new Set((target.categories ?? []).map((cat) => cat.toLowerCase()));
+    const targetAuthors = new Set((target.authors ?? []).map((name) => String(name).toLowerCase()));
+    const scored = [];
+    for (const paper of this.paperStore.list({ includeTrashed: false })) {
+      if (paper.id === target.id) continue;
+      let score = 0;
+      const shared = paper.tags.filter((tag) => targetTags.has(tag.toLowerCase()));
+      score += shared.length * 3;
+      score += (paper.categories ?? []).filter((cat) => targetCats.has(cat.toLowerCase())).length;
+      if (target.venue !== '' && paper.venue.toLowerCase() === target.venue.toLowerCase()) score += 2;
+      score += (paper.authors ?? []).filter((name) => targetAuthors.has(String(name).toLowerCase())).length;
+      if (score === 0) continue;
+      scored.push({ paper, score, shared });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    const capped = Math.max(1, Math.min(Number(limit) || 8, 50));
+    return { target, related: scored.slice(0, capped) };
   }
 
   /**
@@ -887,9 +1323,38 @@ export class RssService {
    *   更不该持有本地通道的根目录白名单（两份判定迟早漂移，而漂移的那一份会漏掉闸）。
    */
   async readBookBytes(book, start, end) {
+    // 论文：数据目录里的 `<id>.pdf`。分片语义与本地书完全一致（闭区间进来、
+    // 闭区间出去），所以上面那层 Range 拼装一行都不用改。
+    if (book.source === 'paper') return await this.paperStore.readRange(book.id, start, end);
     if (book.source === 'local') return await this.local.read(book.localPath, start, end);
     if (book.fsId > 0) return await this.pan.readRange(book.fsId, start, end);
     throw new Error('这本书既没有网盘 fs_id 也没有本地路径，取不到字节');
+  }
+
+  /**
+   * 本地书「这一版文件」的指纹：体积 + mtime。网盘 / 论文返回 `null`。
+   *
+   * ★ 打开书时 stat，而不是用书单里扫出来的 `size`：书单可能是一周前扫的，
+   *   期间用 calibre 改过就会「书变了、书单还是旧数」，而缓存键跟着旧数走 ——
+   *   判出来永远是「没变」，用户看到的是「我明明改过，插件还念旧的」。
+   *   stat 一次的成本远低于重解析一本 MOBI。
+   * ★ 走 `local.resolve()` 而不是直接 stat：那三道闸（限定目录 + realpath）
+   *   同样得管住缓存判据，否则「书单里被塞了个 ../ 路径」就能靠 stat 探到盘上
+   *   任意文件的 mtime。
+   * ★ 解析失败返回 `null`，让 `local.read` 抛它自己那条「找不到这个文件」——
+   *   这里抢先报一个更含糊的错只会把真原因盖掉。
+   */
+  async ebookFingerprint(book) {
+    if (!book || typeof book !== 'object' || book.source !== 'local') return null;
+    if (String(book.localPath ?? '').trim() === '') return null;
+    try {
+      const absolute = await this.local.resolve(book.localPath);
+      const info = await stat(absolute);
+      if (info.isFile() !== true) return null;
+      return { size: Number(info.size) || 0, mtimeMs: Number(info.mtimeMs) || 0 };
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -909,14 +1374,19 @@ export class RssService {
       error.code = 'EBOOK_FORMAT';
       throw error;
     }
-    const cached = await this.ebookStore.read(book.id, book.size);
+    // 缓存键 = 书 id + 这一版文件的（体积, mtime）。本地书按盘上实况算，
+    // 网盘书 `fingerprint` 为 null，退回书单里的体积（见 ebook/store.js）。
+    const fingerprint = await this.ebookFingerprint(book);
+    const sizeOnDisk = Number(fingerprint?.size) > 0 ? Number(fingerprint.size) : 0;
+    const mtimeMs = Number(fingerprint?.mtimeMs) > 0 ? Number(fingerprint.mtimeMs) : 0;
+    const cached = await this.ebookStore.read(book.id, sizeOnDisk > 0 ? sizeOnDisk : book.size, mtimeMs);
     if (cached !== null) return cached;
 
     const pending = this.ebookPending.get(book.id);
     if (pending !== undefined) return await pending;
 
     const task = (async () => {
-      const size = Number(book.size) > 0 ? Number(book.size) : 0;
+      const size = sizeOnDisk > 0 ? sizeOnDisk : (Number(book.size) > 0 ? Number(book.size) : 0);
       if (size === 0) {
         const error = new Error('这本书的书单记录里体积是 0，取不到字节');
         error.code = 'EBOOK_EMPTY';
@@ -930,7 +1400,7 @@ export class RssService {
       }
       const ebook = parseEbook(buffer, { ext: book.ext, fallbackTitle: book.title });
       // 写缓存失败不影响这次阅读：内存里已经有一份完好的解析结果。
-      await this.ebookStore.write(book.id, size, ebook).catch((error) => {
+      await this.ebookStore.write(book.id, size, ebook, mtimeMs).catch((error) => {
         this.ctx.logger.warn(`[书架] 电子书缓存写失败 ${book.id}：${error?.message ?? error}`);
       });
       return ebook;
@@ -938,6 +1408,242 @@ export class RssService {
 
     this.ebookPending.set(book.id, task);
     return await task;
+  }
+
+  /**
+   * 把这本书的划线锚点投影到**当前这一版正文**上（见 `annotation-relocate.js`）。
+   *
+   * ★ 只做「重排电子书」：PDF 的 `start/end` 基准是 pdf.js 铺出来的文字层
+   *   `textContent`，与电子书的「非空块用换行串起来」是两套坐标，混着算必然把
+   *   PDF 的划线全部误判成失配。
+   * ★ **只读解析缓存，不调 `ebookOf()`**：后者在缓存没建时会整本取字节重解析，
+   *   网盘书可能是几十 MB 的下载。为了读几条划线把整本书下一遍不划算；用户
+   *   打开阅读页时 `fetchEbookIndex` 本来就会建缓存，下次读标注即生效。
+   * ★ 这也意味着「缓存仍是旧正文」时不会重定位 —— 缓存键 `(bookId, size)`，
+   *   换过文件而体积恰好不变属于已知边界，不在这里假装能修。
+   */
+  async relocateBookAnnotations(bookId, items) {
+    let book;
+    try {
+      book = await this.bookById(bookId);
+    } catch (error) {
+      this.ctx.logger.warn(`[划线] 找不到 ${bookId} 的书单记录，跳过重定位：${error?.message ?? error}`);
+      return { items };
+    }
+    if (book === undefined || !isEbookExtension(book?.ext)) return { items };
+    // 口径与 `ebookOf` 完全一致：本地书按盘上 (体积, mtime) 判缓存新旧，
+    // 否则「文件改过但体积没变」时这里会读到旧正文，把划线重定位到错误的段落。
+    const fingerprint = await this.ebookFingerprint(book).catch(() => null);
+    const sizeOnDisk = Number(fingerprint?.size) > 0 ? Number(fingerprint.size) : book.size;
+    const mtimeMs = Number(fingerprint?.mtimeMs) > 0 ? Number(fingerprint.mtimeMs) : 0;
+    const cached = await this.ebookStore.read(book.id, sizeOnDisk, mtimeMs).catch(() => null);
+    if (cached === null || !Array.isArray(cached.sections) || cached.sections.length === 0) {
+      return { items };
+    }
+    const pageTexts = cached.sections.map((section, index) => ({
+      page: index + 1,
+      text: pageTextOfBlocks(section.blocks),
+    }));
+    return relocateAnnotations(items, pageTexts);
+  }
+
+  /**
+   * 某一节的**对照译文**：先看磁盘缓存，没有就翻，翻完落盘。
+   *
+   * ★ 入口仍然是「一节一次」，但 0.59.0 起**不是唯一形态**：`ebookPrefetch`
+   *   会在后台按节循环调这个方法。两者共用这一条链路（同一份缓存判据、同一张
+   *   并发去重表），区别只在谁来驱动循环 —— 用户翻页，还是整本预翻。
+   *   「一节一次」保留为底层形态的理由：翻到第 3 章就只想看第 3 章的人不该
+   *   被按着头翻完整本；而整本第一次跑几个小时、几十块钱，必须由用户显式点。
+   * ★ `force` 只用于「重翻这一节」：模型漏段、或者用户换了翻译模型想再试一次。
+   *   平时的调用一律吃缓存 —— 否则翻回上一页就重花一次钱。
+   * ★ 同一节的并发调用合并成一个 Promise（见构造函数里那张表）：
+   *   整本预翻跑到第 5 节、而用户正好停在第 5 节时，两边拿到的是**同一次**调用，
+   *   不会同一段正文被计费两遍。
+   */
+  async translateEbookSection(book, n, options = {}) {
+    if (!book || typeof book !== 'object') throw new Error('没有这本书');
+    const ebook = await this.ebookOf(book);
+    return await this.translateSectionOf(book, ebook, n, options);
+  }
+
+  /**
+   * 划词翻译：**一句（或一小段）** → 一段中文。
+   *
+   * 与 `translateEbookSection` 是两条路，别合并：
+   *   · 那条按「节」走块模型、分片、覆盖率校验、落盘缓存 —— 一节的成本是几十秒；
+   *   · 这条是阅读器气泡上的即时动作，用户等不了 30 秒，也不该为一句选文写盘。
+   * 共用的是 `complete()`（超时闸门 / 看门狗 / 失败码重试），坑只踩一次。
+   *
+   * ★ 不落缓存：同一句在上下文不同（不同书、同一句在不同段落）时译法会变，
+   *   缓存键要靠「书 + 页 + 偏移」才准 —— 而气泡是临时的，多一层缓存只是多一处
+   *   与现实不符的地方。
+   *
+   * @param {{ text?: string, context?: string }} payload `context` = 书名/页眉，给模型消歧用
+   * @returns {Promise<{ text: string }>}
+   */
+  async translateSelectedPassage(payload = {}) {
+    await this.ready;
+    const value = await translatePassage(this.ctx, {
+      text: payload?.text,
+      context: payload?.context,
+    }, { model: this.aiModel() });
+    return { text: value };
+  }
+
+  /**
+   * 论文 PDF 的页级翻译（D 档 → 0.71.0）：一次翻完一页的若干段。
+   *
+   * ★ 模型用的是 `this.aiModel()` —— **dsh 里配置的那个**（设置项留空则跟随
+   *   Harness 当前默认模型），与划词翻译、RSS 全文翻译、改写共用同一条通道，
+   *   这里没有第二种模型配置。
+   *   **电子书逐章解读不走这里**：它用单独的 `digestModel()`（见本文件下方），
+   *   因为「一本书几十次调用」与「一篇一次」的代价结构不同，用户会想把解读
+   *   压到便宜模型上而翻译仍用好模型 —— 合成一个设置必然牺牲其中一个。
+   *
+   * ★ 逐页按需与整本一次翻完**共用这一条链路**（客户端 `paper-translation.js`
+   *   的 `ensurePageTranslation()`）。译文按页落盘在
+   *   `page-translations/<bookId>/p<page>.json`（见 `page-translation-store.js`）：
+   *   翻回来秒开，重开插件也不用重新调模型；分段规则或原文变了会自动作废重翻。
+   *   客户端命中缓存时根本不会走到这里。
+   */
+  async translatePageParagraphs(payload = {}) {
+    await this.ready;
+    return await translatePageParagraphsWithModel(this.ctx, payload?.paragraphs, { model: this.aiModel() });
+  }
+
+  /**
+   * 某一节的对照译文，**拿已经解析好的整本**（`translateEbookSection` 的下半段）。
+   *
+   * ★ 为什么单独拆一个：整本预翻要连着翻几十节，而 `ebookOf` 每次都会重新解析
+   *   一遍书（读十几兆的解析缓存 + JSON.parse）。一本 400 节的书照原样调 400 次，
+   *   白花的时间比翻译本身还多；而预翻那边手上**本来就有**一份解析结果。
+   *   公开入口仍然自己解析 —— 单节调用没有这份上下文，也不该由调用方持有整本书。
+   * ★ `signal` / `onChunk` 只透传，不在这里解释：前者给「停止」，后者给「这一节
+   *   翻到第几批了」。两者的语义都在 `ai.js` 那一侧，这里多写一层判断只会漂移。
+   */
+  async translateSectionOf(book, ebook, n, { force = false, signal, onChunk } = {}) {
+    const order = Number(n);
+    if (!Number.isInteger(order) || order < 1) {
+      const error = new Error(`节号不合法：${n}`);
+      error.code = 'EBOOK_SECTION';
+      throw error;
+    }
+    const section = ebook.sections[order - 1];
+    if (section === undefined) {
+      const error = new Error(`这本书没有第 ${order} 节`);
+      error.code = 'EBOOK_SECTION';
+      throw error;
+    }
+
+    if (!force) {
+      const cached = await this.ebookTranslation.readSection(book.id, order, { chars: section.chars });
+      if (cached !== null) {
+        return {
+          n: order,
+          cached: true,
+          entries: [...cached.entries.entries()],
+          coverage: cached.coverage,
+          model: cached.model,
+        };
+      }
+    }
+
+    const key = `${book.id}:${order}`;
+    const pending = this.ebookTranslationPending.get(key);
+    if (pending !== undefined) return await pending;
+
+    const task = (async () => {
+      const result = await generateEbookSectionTranslation(
+        this.ctx,
+        { blocks: section.blocks, title: section.title },
+        { model: this.aiModel(), signal, onChunk },
+      );
+      /*
+       * 写盘失败不影响这次结果：内存里已经有译文，用户能立刻读。
+       * ★ 但**必须让调用方知道**（0.64.0）：磁盘上还没有这一节，整本预翻的进度
+       *   就不能把它算进去 —— 否则会出现「已译完 36 节」配一条 83% 的进度条，
+       *   而那 6 节下次打开还得重翻、重花钱。`persisted: false` 就是那句话。
+       */
+      let persisted = true;
+      await this.ebookTranslation.writeSection(book.id, order, {
+        chars: section.chars,
+        entries: result.entries,
+        model: result.model,
+        coverage: result.coverage,
+      }).catch((error) => {
+        persisted = false;
+        this.ctx.logger.warn(`[书架] 对照译文写失败 ${book.id}#${order}：${error?.message ?? error}`);
+      });
+      return {
+        n: order,
+        cached: false,
+        entries: result.entries,
+        coverage: result.coverage,
+        model: result.model,
+        persisted,
+      };
+    })().finally(() => { this.ebookTranslationPending.delete(key); });
+
+    this.ebookTranslationPending.set(key, task);
+    return await task;
+  }
+
+  /** 只读缓存：界面打开对照时先问一次，「有就立刻画，没有再去翻」。 */
+  async ebookTranslationOf(book, n) {
+    if (!book || typeof book !== 'object') throw new Error('没有这本书');
+    const order = Number(n);
+    if (!Number.isInteger(order) || order < 1) {
+      const error = new Error(`节号不合法：${n}`);
+      error.code = 'EBOOK_SECTION';
+      throw error;
+    }
+    const ebook = await this.ebookOf(book);
+    const section = ebook.sections[order - 1];
+    if (section === undefined) {
+      const error = new Error(`这本书没有第 ${order} 节`);
+      error.code = 'EBOOK_SECTION';
+      throw error;
+    }
+    const cached = await this.ebookTranslation.readSection(book.id, order, { chars: section.chars });
+    if (cached === null) return { n: order, available: false, entries: [], coverage: null };
+    return {
+      n: order,
+      available: true,
+      entries: [...cached.entries.entries()],
+      coverage: cached.coverage,
+      model: cached.model,
+    };
+  }
+
+  /** 这本书已译了哪些节（界面上「对照已译 3 节」那一行）。 */
+  async ebookTranslationIndex(book) {
+    if (!book || typeof book !== 'object') throw new Error('没有这本书');
+    const sections = await this.ebookTranslation.listSections(book.id);
+    return { sections, count: sections.length };
+  }
+
+  /**
+   * 开始整本预翻。**立刻返回**，进度靠 `ebookPrefetchStatus` 轮询。
+   *
+   * ★ 为什么不在请求里等：一本 16 节的书要十几分钟，一本 400 节的书要几小时。
+   *   没有哪个 HTTP 请求会等它，浏览器会先超时，而宿主其实还在跑 —— 用户重试
+   *   时看到的是「又开了一个任务」。
+   */
+  async startEbookPrefetch(book) {
+    if (!book || typeof book !== 'object') throw new Error('没有这本书');
+    return await this.ebookPrefetch.start(book);
+  }
+
+  /** 停止整本预翻。已译的节留在磁盘上，下次接着翻。 */
+  async stopEbookPrefetch(bookId) {
+    return this.ebookPrefetch.stop(bookId);
+  }
+
+  /** 当前进度（没在跑也回一份磁盘口径的，界面用它画初始值）。 */
+  async ebookPrefetchStatus(book) {
+    if (!book || typeof book !== 'object') throw new Error('没有这本书');
+    return await this.ebookPrefetch.status(book);
   }
 
   /**
@@ -955,6 +1661,23 @@ export class RssService {
    *   因为它的真实原因是「你还没授权」，用户完全能自己修好。
    */
   async verifyReadable(book) {
+    /**
+     * 论文：文件在不在。
+     *
+     * ★ 这道校验发生在**写响应头之前**（见 `library-routes.js` 里 `verifyReadable` 的
+     *   说明）。它挡的是一种很难解释的现象：PDF 被手工删掉之后，路由先发 206、
+     *   再读文件失败 ⇒ 客户端拿到一个「长度对、内容空」的分片，pdf.js 报的是解析错误。
+     *   在这里先拦住，用户看到的就是一句人话。
+     */
+    if (book.source === 'paper') {
+      const info = await this.paperStore.statPdf(book.id);
+      if (info === undefined) {
+        const error = new Error('这篇论文的 PDF 不在磁盘上（可能被手工删除了），重新下载一次即可');
+        error.code = 'LOCAL_MISSING';
+        throw error;
+      }
+      return;
+    }
     if (book.source === 'local') {
       await this.local.resolve(book.localPath);
       return;
@@ -1491,6 +2214,1028 @@ export class RssService {
     };
   }
 
+  /**
+   * 一集的字幕（P0）。
+   *
+   * 三条路：
+   *   ① 盘上有缓存且没要求刷新 → 直接给（**不联网**，翻列表/重开面板都是这条路）；
+   *   ② 条目里没有 `<podcast:transcript>` → 返回已有的那份（可能为 null）并说明
+   *      `reason: 'no-transcript'`，界面据此说「这期没有字幕」，而不是转圈；
+   *   ③ 有地址 → 抓一次、解析、落盘，再把**视图**（段落已切好）给出去。
+   *
+   * ★ 为什么返回值里同时有 `cached` 与 `reason`：界面要区分「没抓过」与「抓过但没有」
+   *   —— 前者该显示按钮，后者该显示一句话。只给 null 的话，两种情况长得一样。
+   * ★ 为什么错误要包成 `TranscriptError`：路由层靠 `status` 决定状态码，
+   *   网络失败（502）与格式不支持（415）对用户是两件完全不同的事。
+   */
+  async getTranscript(request) {
+    const { key, refresh = false } = request ?? {};
+    await this.ready;
+    const trimmed = typeof key === 'string' ? key.trim() : '';
+    if (trimmed === '') throw new Error('需要文章 key');
+    const cached = await this.transcriptStore.read(trimmed);
+    if (cached !== null && refresh !== true) {
+      return { transcript: transcriptView(cached), cached: true };
+    }
+    const entry = this.store.findFeedEntry(trimmed) ?? this.store.getArticle(trimmed) ?? null;
+    if (!entry) throw new Error(`dsh-npie-reader: unknown article ${trimmed}`);
+    const ref = transcriptRefOf(entry);
+    if (ref === undefined) {
+      return { transcript: transcriptView(cached), cached: cached !== null, reason: 'no-transcript' };
+    }
+    const record = await this.fetchTranscriptRecord(trimmed, ref);
+    return { transcript: transcriptView(record), cached: false };
+  }
+
+  /**
+   * 真正去抓一集字幕并落盘。同一集并发只发一次请求（`transcriptPending`）。
+   *
+   * ★ 失败**不缓存**：字幕 CDN 会偶发 5xx，把一次失败钉成这一集的结论，用户就只能
+   *   删数据目录。成功的那次由 `transcriptStore` 落盘，重开面板直接命中缓存。
+   */
+  async fetchTranscriptRecord(key, ref) {
+    const pending = this.transcriptPending.get(key);
+    if (pending !== undefined) return await pending;
+    const task = (async () => {
+      let text;
+      try {
+        text = await fetchTranscriptText(ref.url, { timeoutMs: 20_000, checkUrl: this.pageGuard });
+      } catch (error) {
+        throw new TranscriptError(`抓取字幕失败：${error?.message ?? String(error)}`, 'TRANSCRIPT_FETCH', 502);
+      }
+      const { format, segments } = parseTranscript(text, ref.type);
+      return await this.transcriptStore.write(key, {
+        segments,
+        format,
+        source: { kind: 'feed', url: ref.url, type: ref.type },
+      });
+    })();
+    this.transcriptPending.set(key, task);
+    try {
+      return await task;
+    } finally {
+      // ★ 无论成败都删：留着一个 rejected promise，这一集的重试会永远拿到同一个错误。
+      this.transcriptPending.delete(key);
+    }
+  }
+
+  /**
+   * 一集的音频地址（给 `/library/audio` 中转用）。
+   *
+   * ★ 复用 `src/media.js` 的 `articleAudioUrl`，而不是在这里再写一遍「https + 无凭据 +
+   *   audio/*」的判定：那份判定客户端也在用（决定要不要显示播放条），两处各写一份
+   *   迟早出现「界面显示播放条、中转说没有音频」。
+   */
+  audioUrlOf(key) {
+    const entry = this.store.findFeedEntry(key) ?? this.store.getArticle(key) ?? null;
+    if (!entry) return '';
+    return articleAudioUrl(entry) ?? '';
+  }
+
+  /** 打开音频流（`audio-proxy.js`）。SSRF 校验用与抓页面同一条 `pageGuard`。 */
+  openAudio(url, options = {}) {
+    return openAudioStream(url, { ...options, checkUrl: this.pageGuard });
+  }
+
+  /**
+   * 本机识别的可用性（0.82.0）。
+   *
+   * ★ 三件套（ffmpeg / 引擎 / 模型）分开报，理由见 `asr.js` 的 `probeAsr`：界面要能说
+   *   「只差一个 ffmpeg」或「再下 181 MB 就行」，而不是一句「暂不可用」。
+   * ★ `setup` 是**同一个对象引用**（不是快照）：下载进度靠的是轮询时读到最新值，
+   *   每次返回副本的话，界面会一直停在 0%。
+   */
+  /** Ollama 地址（设置项留空 = 本机默认）。 */
+  ollamaBase() {
+    const raw = String(this.store.data.settings.ollamaBase ?? '').trim();
+    return raw === '' ? OLLAMA_DEFAULT_BASE : raw.replace(/\/+$/, '');
+  }
+
+  /**
+   * 云端识别的配置快照（**不含 Key 本身**：这个对象会回到界面）。
+   *
+   * ★ `configured` 只说明「填了 key」，不说明「key 有效」—— 后者要真发一次请求
+   *   才知道。把「填了」说成「能用」，用户会在识别时才撞上 401，而他刚刚在设置里
+   *   看到的是绿勾。
+   */
+  cloudAsrConfig() {
+    const settings = this.store.data.settings;
+    const providerId = String(settings.asrCloudProvider ?? 'groq');
+    const provider = cloudProviderOf(providerId);
+    const key = String(settings.asrApiKey ?? '').trim();
+    const base = String(settings.asrBaseUrl ?? '').trim() || (provider?.base ?? '');
+    const model = String(settings.asrModel ?? '').trim() || (provider?.model ?? '');
+    const needsBase = providerId === 'custom';
+    return {
+      provider: provider?.id ?? '',
+      providerName: provider?.name ?? '',
+      kind: provider?.kind ?? 'openai',
+      base,
+      model,
+      configured: key !== '' && (!needsBase || base !== ''),
+      needsBase,
+      hint: provider?.hint ?? '',
+      providers: CLOUD_ASR_PROVIDERS.map(({ id, name, model: preset, models, hint, kind }) => ({ id, name, model: preset, models, hint, kind })),
+    };
+  }
+
+  /**
+   * 这次用哪条识别路。
+   *
+   * 顺序：设置里点名的 → 装了 Ollama 且有 `qwen3-asr` → whisper 三件套齐了 →
+   * Ollama 在跑但没模型（下拉 1 GB）→ whisper 缺件（提示补 ffmpeg）。
+   *
+   * ★ 为什么 Ollama 优先于 whisper：中文口播上 Qwen3-ASR 的断句与专名明显更稳
+   *   （实测「HF0 / 曾鸣」这类），而且**不需要 ffmpeg 之外的东西**；whisper 那条
+   *   路已经能用，作为「没装 Ollama」时的兜底。
+   * ★ 用户点名的引擎**不自动换**：他选了 cloud 就不该因为本机有 Ollama 而偷偷
+   *   改成本机（那会让「我不想把音频传到别人服务器」这个选择失效）。
+   */
+  resolveAsrEngine({ probe, ollama, cloud }) {
+    const wanted = String(this.store.data.settings.asrEngine ?? '');
+    const resolution = {
+      qwen: ollama?.running === true && ollama?.hasModel === true,
+      whisper: probe?.ready === true,
+      cloud: cloud?.configured === true,
+    };
+    if (wanted === 'qwen' || wanted === 'whisper' || wanted === 'cloud') {
+      return { engine: wanted, ready: resolution[wanted], reason: resolution[wanted] ? '' : this.asrMissingReason(wanted, { probe, ollama, cloud }) };
+    }
+    if (resolution.qwen) return { engine: 'qwen', ready: true, reason: '' };
+    if (resolution.whisper) return { engine: 'whisper', ready: true, reason: '' };
+    if (resolution.cloud) return { engine: 'cloud', ready: true, reason: '' };
+    /**
+     * 一条都不通时给**最接近能用**的那条：Ollama 在跑但没模型 ⇒ qwen（下拉 1 GB）；
+     * 否则 whisper（它只需要一个 ffmpeg + 181 MB）。让界面能说「还差什么」，
+     * 而不是一句「不可用」。
+     */
+    if (ollama?.running === true) return { engine: 'qwen', ready: false, reason: this.asrMissingReason('qwen', { probe, ollama, cloud }) };
+    return { engine: 'whisper', ready: false, reason: this.asrMissingReason('whisper', { probe, ollama, cloud }) };
+  }
+
+  /** 缺什么，说人话。三条路各有一套前置条件，混在一起说等于没说。 */
+  asrMissingReason(engine, { probe, ollama, cloud }) {
+    if (engine === 'qwen') {
+      if (ollama?.running !== true) return 'Ollama 没在运行（装了之后执行 ollama serve，或打开 Ollama 应用）';
+      if (ollama?.hasModel !== true) return `还差本机模型 ${OLLAMA_ASR_MODEL.name}（约 1.0 GB）`;
+      return '';
+    }
+    if (engine === 'cloud') {
+      return cloud?.configured === true ? '' : `还差云端识别的 API Key（当前选的是 ${cloud?.providerName || '未选择'}）`;
+    }
+    const missing = [];
+    if (probe?.ffmpeg?.ok !== true) missing.push('ffmpeg');
+    if (probe?.engine?.ok !== true) missing.push('识别引擎');
+    if ((probe?.models ?? []).length === 0) missing.push('识别模型');
+    return missing.length === 0 ? '' : `本机还缺${missing.join('、')}`;
+  }
+
+  /**
+   * 本机识别的可用性（0.82.0；0.84.0 扩成三条路）。
+   *
+   * ★ 三件套（ffmpeg / 引擎 / 模型）分开报，理由见 `asr.js` 的 `probeAsr`：界面要能说
+   *   「只差一个 ffmpeg」或「再下 181 MB 就行」，而不是一句「暂不可用」。
+   * ★ `setup` 是**同一个对象引用**（不是快照）：下载进度靠的是轮询时读到最新值，
+   *   每次返回副本的话，界面会一直停在 0%。
+   * ★ `ready` 现在是「**选中的那条路**能用」，不是「whisper 能用」：原来那个口径
+   *   会让「装好 Ollama 的人」看到 ready=false，然后界面去下 181 MB 的 whisper 模型。
+   */
+  async asrStatus() {
+    await this.ready;
+    const dataDir = pluginDataDir();
+    const probe = await probeAsr({ dataDir, log: message => this.ctx.logger.info(message) });
+    const cloud = this.cloudAsrConfig();
+    // 2.5 秒超时：Ollama 没起来时立即回（本机连接被拒是毫秒级），别让面板等 3 秒。
+    const ollama = await probeOllama({ baseUrl: this.ollamaBase(), model: OLLAMA_ASR_MODEL.name, timeoutMs: 2_500 });
+    const resolution = this.resolveAsrEngine({ probe, ollama, cloud });
+    return {
+      ffmpeg: probe.ffmpeg,
+      engine: probe.engine,
+      // 不把本机绝对路径交给渲染进程：界面用不到，而它会暴露用户名与目录结构。
+      models: probe.models.map((model) => ({
+        id: model.id, name: model.name, sizeMb: model.sizeMb, origin: model.origin, note: model.note,
+      })),
+      defaultModel: probe.defaultModel,
+      catalog: ASR_MODELS.map(({ id, name, sizeMb, note }) => ({ id, name, sizeMb, note })),
+      setup: this.asrSetup,
+      ollama: {
+        running: ollama.running === true,
+        hasModel: ollama.hasModel === true,
+        model: ollama.model || OLLAMA_ASR_MODEL.name,
+        recommend: OLLAMA_ASR_MODEL,
+        base: this.ollamaBase(),
+        error: ollama.error ?? '',
+        sliceSeconds: OLLAMA_SLICE_SECONDS,
+      },
+      cloud: { ...cloud, providers: cloud.providers },
+      engineChoice: resolution.engine,
+      ready: resolution.ready,
+      reason: resolution.reason,
+      // 兼容旧字段：whisper 那条路的整体可用性（面板的「缺 ffmpeg」分支还在用它）。
+      whisperReady: probe.ready,
+      missing: [
+        ...(probe.ffmpeg.ok ? [] : ['ffmpeg']),
+        ...(probe.engine.ok ? [] : ['engine']),
+        ...(probe.models.length > 0 ? [] : ['model']),
+      ],
+    };
+  }
+
+  /**
+   * 下载识别引擎与模型（后台跑，立即返回当前状态）。
+   *
+   * ★ 为什么不等下载完再返回：模型 181 MB，在慢网络上要几分钟。做成同步调用的话，
+   *   一次 Remote 会挂在那里直到超时，而用户看到的是「按钮点了没反应」。
+   * ★ 按体积分账（引擎 8%、模型 92%）：不分的话，17.8 MB 的引擎下完进度就到 100%，
+   *   然后卡在那十分钟 —— 比没有进度条更让人以为死机。
+   */
+  /**
+   * 准备识别环境（0.82.0；0.84.0 支持三条路）。
+   *
+   * ★ 为什么不等下载完再返回：模型 181 MB / 1 GB，在慢网络上要几分钟到十几分钟。
+   *   做成同步调用的话，一次 Remote 会挂在那里直到超时，而用户看到的是
+   *   「按钮点了没反应」。
+   * ★ 按体积分账（引擎 8%、模型 92%）：不分的话，17.8 MB 的引擎下完进度就到 100%，
+   *   然后卡在那十分钟 —— 比没有进度条更让人以为死机。qwen 那条只有模型，直接 0→100%。
+   * ★ cloud 这条路**不需要下载**：配好 key 就是 ready，`prepareAsr` 只做一次校验，
+   *   避免界面为了「准备」白等两秒。
+   */
+  async prepareAsr(request) {
+    await this.ready;
+    const modelId = String(request?.modelId ?? '') || DEFAULT_MODEL_ID;
+    const status = await this.asrStatus();
+    const engine = String(request?.engine ?? '') || status.engineChoice;
+    if (this.asrSetup.status === 'downloading') return { ...this.asrSetup };
+
+    if (engine === 'cloud') {
+      if (!status.cloud.configured) {
+        throw new AsrError(`云端识别还没配 Key（当前供应商：${status.cloud.providerName || '未选择'}）`, 409, 'ASR_CLOUD_UNCONFIGURED');
+      }
+      this.asrSetup = { status: 'ready', stage: '', progress: 1, error: '', modelId: status.cloud.model, engine };
+      return { ...this.asrSetup };
+    }
+
+    if (engine === 'qwen') {
+      if (!status.ollama.running) {
+        throw new AsrError(`Ollama 没在运行：${status.ollama.error || '请先打开 Ollama 应用'}`, 409, 'ASR_OLLAMA_DOWN');
+      }
+      if (status.ollama.hasModel) {
+        this.asrSetup = { status: 'ready', stage: '', progress: 1, error: '', modelId: OLLAMA_ASR_MODEL.name, engine };
+        return { ...this.asrSetup };
+      }
+      const state = { status: 'downloading', stage: 'model', progress: 0, error: '', modelId: OLLAMA_ASR_MODEL.name, engine };
+      this.asrSetup = state;
+      void (async () => {
+        let lastError = null;
+        for (const name of OLLAMA_ASR_PULL_NAMES) {
+          try {
+            state.modelId = name;
+            state.progress = 0;
+            await pullOllamaModel({
+              baseUrl: this.ollamaBase(),
+              model: name,
+              onProgress: (ratio) => { state.progress = Math.min(1, ratio); },
+            });
+            lastError = null;
+            break;
+          } catch (error) {
+            // 官方短名在 registry 里不存在时，`/api/pull` 会立刻回 error —— 换下一个名字。
+            lastError = error;
+            this.ctx.logger.info(`[识别] 拉取 ${name} 失败：${error?.message ?? String(error)}`);
+          }
+        }
+        if (lastError !== null) {
+          state.status = 'error';
+          state.error = lastError?.message ?? String(lastError);
+          return;
+        }
+        state.status = 'ready';
+        state.stage = '';
+        state.progress = 1;
+      })();
+      return { ...state };
+    }
+
+    const dataDir = pluginDataDir();
+    const log = message => this.ctx.logger.info(message);
+    const state = { status: 'downloading', stage: 'engine', progress: 0, error: '', modelId, engine: 'whisper' };
+    this.asrSetup = state;
+    void (async () => {
+      try {
+        await ensureEngine({
+          dataDir,
+          log,
+          onProgress: (ratio) => { state.progress = Math.min(0.08, ratio * 0.08); },
+        });
+        state.stage = 'model';
+        await ensureModel({
+          dataDir,
+          modelId,
+          log,
+          onProgress: (ratio) => { state.progress = 0.08 + ratio * 0.92; },
+        });
+        state.status = 'ready';
+        state.stage = '';
+        state.progress = 1;
+      } catch (error) {
+        state.status = 'error';
+        state.error = error?.message ?? String(error);
+        log(`[识别] 准备失败：${state.error}`);
+      }
+    })();
+    return { ...state };
+  }
+
+  /** 任务快照（给 Remote 用）。`preview` 是最近几段，让「在跑」有可读的证据。 */
+  asrJobView(job) {
+    return {
+      key: job.key,
+      status: job.status,
+      done: job.done,
+      total: job.total,
+      segments: job.segments,
+      error: job.error,
+      preview: job.preview,
+      model: job.model,
+      // 0.84.0：这一集走的是哪条路（qwen / whisper / cloud）。界面据此说
+      // 「本机识别中」还是「云端识别中」—— 两者对「音频有没有出本机」是相反的答案。
+      engine: job.engine ?? '',
+    };
+  }
+
+  /**
+   * 开始给一集做本机识别（后台跑）。
+   *
+   * ★ 同一集只允许一个任务：连点两次会同时解码两份 230 MB 的 WAV，磁盘先满。
+   * ★ 前置条件在这里一次性查完并把**缺哪一件**说出来：只说「不可用」的话，
+   *   用户会去重装插件，而实际只差 `brew install ffmpeg`。
+   */
+  async startTranscription(request) {
+    const { key, modelId = '', engine: wanted = '' } = request ?? {};
+    await this.ready;
+    const trimmed = String(key ?? '').trim();
+    if (trimmed === '') throw new Error('需要文章 key');
+    const running = this.asrJobs.get(trimmed);
+    if (running && (running.status === 'preparing' || running.status === 'running')) return this.asrJobView(running);
+
+    /**
+     * ★ 这里**不再只认 whisper 三件套**：`asrStatus()` 会把「设置里点名的引擎」
+     *   与「本机实际能用哪条路」合成一个结论（见 `resolveAsrEngine`）。
+     *   原来那版直接用 `probe.ready` 判，装好 Ollama 的人会被告知「本机还缺识别模型」，
+     *   而那 181 MB 其实他根本不需要下。
+     */
+    const status = await this.asrStatus();
+    const engine = String(wanted ?? '') || status.engineChoice;
+    if (!status.ready && engine === status.engineChoice) {
+      throw new AsrError(`${status.reason}，先点「识别这一集」准备环境`, 409, 'ASR_NOT_READY');
+    }
+    const entry = this.store.findFeedEntry(trimmed) ?? this.store.getArticle(trimmed) ?? null;
+    if (!entry) throw new Error(`dsh-npie-reader: unknown article ${trimmed}`);
+    const audioUrl = articleAudioUrl(entry) ?? '';
+    if (audioUrl === '') {
+      throw new AsrError('这一集没有音频，没法识别', 404, 'NO_AUDIO');
+    }
+
+    const job = {
+      key: trimmed,
+      status: 'preparing',
+      done: 0,
+      total: 0,
+      segments: 0,
+      error: '',
+      preview: [],
+      model: '',
+      engine,
+      cancel: false,
+      startedAt: Date.now(),
+    };
+
+    if (engine === 'cloud') {
+      if (!status.cloud.configured) {
+        throw new AsrError(`云端识别还没配 Key（当前供应商：${status.cloud.providerName || '未选择'}）`, 409, 'ASR_CLOUD_UNCONFIGURED');
+      }
+      job.model = status.cloud.model;
+      this.asrJobs.set(trimmed, job);
+      void this.runTranscriptionCloud({
+        job,
+        audioUrl,
+        config: status.cloud,
+        apiKey: String(this.store.data.settings.asrApiKey ?? '').trim(),
+        ffmpeg: status.ffmpeg.path,
+      });
+      return this.asrJobView(job);
+    }
+
+    if (engine === 'qwen') {
+      if (!status.ffmpeg.ok) throw new AsrError('本机识别要 ffmpeg（切 30 秒片用）：brew install ffmpeg', 409, 'ASR_NO_FFMPEG');
+      if (!status.ollama.running) throw new AsrError(`Ollama 没在运行：${status.ollama.error || '请先打开 Ollama 应用'}`, 409, 'ASR_OLLAMA_DOWN');
+      if (!status.ollama.hasModel) throw new AsrError(`还差本机模型 ${OLLAMA_ASR_MODEL.name}，先点「识别这一集」下载`, 409, 'ASR_NOT_READY');
+      job.model = status.ollama.model;
+      this.asrJobs.set(trimmed, job);
+      void this.runTranscriptionQwen({
+        job,
+        entry,
+        audioUrl,
+        ffmpeg: status.ffmpeg.path,
+        baseUrl: status.ollama.base,
+        model: status.ollama.model,
+      });
+      return this.asrJobView(job);
+    }
+
+    const probe = await probeAsr({ dataDir: pluginDataDir(), log: message => this.ctx.logger.info(message) });
+    if (!probe.ready) {
+      const missing = [];
+      if (!probe.ffmpeg.ok) missing.push('ffmpeg');
+      if (!probe.engine.ok) missing.push('识别引擎');
+      if (probe.models.length === 0) missing.push('识别模型');
+      throw new AsrError(`本机还缺${missing.join('、')}，先点「识别这一集」`, 409, 'ASR_NOT_READY');
+    }
+    const model = modelPathOf(probe, modelId);
+    if (model === '') throw new AsrError('识别模型不在，先点「识别这一集」准备环境', 409, 'ASR_NOT_READY');
+    job.model = ASR_MODELS.find((item) => model.endsWith(item.file))?.id ?? '';
+    this.asrJobs.set(trimmed, job);
+    void this.runTranscription({ job, entry, audioUrl, model, engine: probe.engine.path, ffmpeg: probe.ffmpeg.path });
+    return this.asrJobView(job);
+  }
+
+  /**
+   * 识别的实际工作：解码一次 → 逐片识别 → 落盘。
+   *
+   * ★ 只解码一次（`toWav`），然后每片用 `-ot/-d` 读同一个 WAV 的不同区段。
+   *   每片单独从网络取的话，5 分钟片光握手与 seek 就要好几秒，24 片白等两分钟。
+   * ★ 每片都更新 `done/preview`：一片 5 分钟音频要跑十几秒，不做这件事的话，
+   *   界面在那十几秒里没有任何变化。
+   */
+  async runTranscription({ job, entry, audioUrl, model, engine, ffmpeg }) {
+    const log = message => this.ctx.logger.info(message);
+    const dirs = joinPath(pluginDataDir(), 'asr', 'tmp');
+    const wav = joinPath(dirs, `${createHash('sha256').update(job.key).digest('hex').slice(0, 16)}.wav`);
+    try {
+      await mkdir(dirs, { recursive: true });
+      const seconds = await toWav({ ffmpeg, url: audioUrl, outPath: wav });
+      const totalMs = seconds * 1000;
+      job.total = Math.max(1, Math.ceil(totalMs / SLICE_MS));
+      job.status = 'running';
+
+      /**
+       * 简体引导要不要带，按**元信息的书写脚本**判断，不按音频语言判断。
+       *
+       * ★ 音频语言此刻还不知道（要跑第一片才检测出来），而 whisper 的中文 prompt
+       *   会把英文音频往中文方向拉（subcast 的 `fits_language` 就是在防这个）。
+       *   标题与摘要的脚本是零成本可得的最强线索：中文播客的中文标题、英文播客
+       *   的英文标题，命中率高得多。
+       */
+      const meta = `${entry.title ?? ''} ${entry.summary ?? ''}`.trim();
+      const script = meta === '' || isMostlyChinese(meta) ? 'zh' : 'en';
+      // ★ 节目名在条目上是 `channelName`（`refresh` 时由订阅源标题灌进去的）。
+      //   写成 `showName` 不会报错 —— 取到 undefined，`buildPrompt` 少一段，
+      //   提示词静默变短，专名纠正随之失效。
+      const prompt = buildPrompt({ title: entry.title ?? '', show: entry.channelName ?? '', language: script });
+      log(`[识别] ${job.key} 开始：${Math.round(seconds / 60)} 分钟音频，${job.total} 片，脚本 ${script}`);
+
+      const cues = [];
+      for (let index = 0; index < job.total; index += 1) {
+        if (job.cancel) { job.status = 'cancelled'; return; }
+        const startMs = index * SLICE_MS;
+        const durationMs = Math.min(SLICE_MS, totalMs - startMs);
+        if (durationMs <= 500) break;
+        const part = await recognizeSlice({
+          bin: engine,
+          model,
+          wav,
+          startMs,
+          durationMs,
+          language: 'auto',
+          prompt,
+          outDir: joinPath(dirs, 'slices'),
+        });
+        cues.push(...part);
+        job.done = index + 1;
+        job.segments = cues.length;
+        job.preview = cues.slice(-12).map((cue) => cue.text);
+      }
+
+      // ★ 跨片再去一遍：片与片的边界上 whisper 会把同一句吐两次（两片各自听到半个
+      //   句尾），只在这一层能看见 —— 单片内部看不到邻居。
+      const segments = cleanCues(cues);
+      if (segments.length === 0) throw new AsrError('这段音频里没有识别出人声', 422, 'ASR_EMPTY');
+      await this.transcriptStore.write(job.key, {
+        segments,
+        format: 'asr',
+        source: { kind: 'asr', engine: 'crispasr', model: job.model },
+      });
+      job.segments = segments.length;
+      job.status = 'done';
+      log(`[识别] ${job.key} 完成：${segments.length} 段`);
+    } catch (error) {
+      if (job.cancel) { job.status = 'cancelled'; return; }
+      job.status = 'error';
+      job.error = error?.message ?? String(error);
+      log(`[识别] ${job.key} 失败：${job.error}`);
+    } finally {
+      // 两小时的 WAV 是 230 MB，不删会把插件数据目录撑爆。
+      await unlink(wav).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Qwen3-ASR（Ollama）那条路：解码一次 → 每 30 秒一片 → 片内按字数分配时间。
+   *
+   * ★ 片长 30 秒是模型的物理限制（60 秒内准确率平稳，2 分钟开始退化）。代价是
+   *   时间戳粒度只有 30 秒 —— 这一点写在界面上，不装作和 whisper 一样精确。
+   * ★ 每片切完立刻删：108 片 × 960 KB ≈ 100 MB，攒到整集结束再删，中途崩一次
+   *   就把这 100 MB 留在磁盘上（下次还得靠人工清）。
+   * ★ 模型第一次调用要 5–6 秒加载权重（实测），之后每片 0.3 秒左右。所以第一片
+   *   明显慢，界面上的进度条不能因为「第一片慢」就显示失败。
+   */
+  async runTranscriptionQwen({ job, entry, audioUrl, ffmpeg, baseUrl, model }) {
+    const log = message => this.ctx.logger.info(message);
+    const dirs = joinPath(pluginDataDir(), 'asr', 'tmp');
+    const hash = createHash('sha256').update(job.key).digest('hex').slice(0, 16);
+    const wav = joinPath(dirs, `${hash}.wav`);
+    const sliceDir = joinPath(dirs, `${hash}-qwen`);
+    try {
+      await mkdir(dirs, { recursive: true });
+      const seconds = await toWav({ ffmpeg, url: audioUrl, outPath: wav });
+      job.total = Math.max(1, Math.ceil(seconds / OLLAMA_SLICE_SECONDS));
+      job.status = 'running';
+      log(`[识别] ${job.key} 开始（Qwen3-ASR）：${Math.round(seconds / 60)} 分钟，${job.total} 片 × ${OLLAMA_SLICE_SECONDS}s`);
+
+      const cues = [];
+      for (let index = 0; index < job.total; index += 1) {
+        if (job.cancel) { job.status = 'cancelled'; return; }
+        const start = index * OLLAMA_SLICE_SECONDS;
+        const span = Math.min(OLLAMA_SLICE_SECONDS, seconds - start);
+        if (span <= 0.5) break;
+        const slice = await cutWavSlice({ ffmpeg, wav, startSec: start, seconds: span, outDir: sliceDir });
+        let text = '';
+        try {
+          text = await transcribeSliceOllama({ baseUrl, model, wavPath: slice });
+        } finally {
+          await dropSlice(slice);
+        }
+        cues.push(...splitSliceText(text, { start, end: start + span }));
+        job.done = index + 1;
+        job.segments = cues.length;
+        job.preview = cues.slice(-12).map((cue) => cue.text);
+      }
+
+      const segments = cleanCues(cues);
+      if (segments.length === 0) throw new AsrError('这段音频里没有识别出人声', 422, 'ASR_EMPTY');
+      await this.transcriptStore.write(job.key, {
+        segments,
+        format: 'asr',
+        source: { kind: 'asr', engine: 'qwen3-asr', model, granularity: OLLAMA_SLICE_SECONDS },
+      });
+      job.segments = segments.length;
+      job.status = 'done';
+      log(`[识别] ${job.key} 完成：${segments.length} 段（Qwen3-ASR）`);
+    } catch (error) {
+      if (job.cancel) { job.status = 'cancelled'; return; }
+      job.status = 'error';
+      job.error = error?.message ?? String(error);
+      log(`[识别] ${job.key} 失败（Qwen3-ASR）：${job.error}`);
+    } finally {
+      await unlink(wav).catch(() => undefined);
+    }
+  }
+
+  /**
+   * 云端识别那条路。
+   *
+   * ★ 两条分支的**外形完全不同**：OpenAI 兼容的要先切 10 分钟片再逐片上传（25 MB
+   *   上限），豆包是自己去下载公网音频（一次提交 + 轮询）。所以 `total` 在两边的
+   *   含义不一样（片数 / 1 次任务），界面上都显示成「第 n/N 片」是够用的 ——
+   *   它表达的是「还剩多少」。
+   * ★ `degraded`（服务只回整段文本、没有分段）也记进字幕的 `source`：字幕面板
+   *   据此说明「这家服务没给时间戳，段落起点是按片估算的」，而不是假装精确。
+   */
+  async runTranscriptionCloud({ job, audioUrl, config, apiKey, ffmpeg }) {
+    const log = message => this.ctx.logger.info(message);
+    const dirs = joinPath(pluginDataDir(), 'asr', 'tmp', `${createHash('sha256').update(job.key).digest('hex').slice(0, 16)}-cloud`);
+    let parts = [];
+    try {
+      job.status = 'running';
+      let segments = [];
+      let degraded = false;
+
+      if (config.kind === 'doubao') {
+        const [appKey, accessKey] = String(apiKey).split(':').map((part) => part.trim());
+        if (!appKey || !accessKey) {
+          throw new AsrError('豆包要 App ID 与 Access Token 两个值，请在设置里按「appid:token」填写', 409, 'ASR_CLOUD_UNCONFIGURED');
+        }
+        job.total = 1;
+        const result = await transcribeDoubao({ base: config.base, appKey, accessKey, audioUrl });
+        segments = result.segments;
+        degraded = result.degraded;
+        job.done = 1;
+        job.segments = segments.length;
+        job.preview = segments.slice(-12).map((cue) => cue.text);
+      } else {
+        log(`[识别] ${job.key} 开始（云端 ${config.providerName} / ${config.model}）：切片中`);
+        parts = await sliceAudioForUpload({ ffmpeg, url: audioUrl, dir: dirs });
+        job.total = Math.max(1, parts.length);
+        for (const part of parts) {
+          if (job.cancel) { job.status = 'cancelled'; return; }
+          const result = await transcribeOpenAiCompatible({
+            base: config.base,
+            apiKey,
+            model: config.model,
+            filePath: part.path,
+            offsetSec: part.offsetSec,
+          });
+          segments.push(...result.segments);
+          degraded = degraded || result.degraded;
+          job.done += 1;
+          job.segments = segments.length;
+          job.preview = segments.slice(-12).map((cue) => cue.text);
+        }
+      }
+
+      // 云端的段落一般已经是按句切的，但重复与幻觉仍需过一遍：不同服务都会在
+      // 静音处补「谢谢观看」这类句子（原因见 `asr.js` 的 `cleanCues`）。
+      const cleaned = cleanCues(segments);
+      if (cleaned.length === 0) throw new AsrError('这段音频里没有识别出人声', 422, 'ASR_EMPTY');
+      await this.transcriptStore.write(job.key, {
+        segments: cleaned,
+        format: 'asr',
+        source: { kind: 'asr', engine: `cloud:${config.provider}`, model: config.model, granularity: degraded ? CLOUD_SLICE_SECONDS : 0 },
+      });
+      job.segments = cleaned.length;
+      job.status = 'done';
+      log(`[识别] ${job.key} 完成：${cleaned.length} 段（云端 ${config.provider}）`);
+    } catch (error) {
+      if (job.cancel) { job.status = 'cancelled'; return; }
+      job.status = 'error';
+      job.error = error?.message ?? String(error);
+      log(`[识别] ${job.key} 失败（云端）：${job.error}`);
+    } finally {
+      await dropSlices(parts);
+    }
+  }
+
+  /** 轮询问进度。没有任务时返回 `idle`，不是报错 —— 界面重开时本来就没有任务。 */
+  async transcriptionStatus(request) {
+    const { key } = request ?? {};
+    await this.ready;
+    const trimmed = String(key ?? '').trim();
+    if (trimmed === '') throw new Error('需要文章 key');
+    const job = this.asrJobs.get(trimmed);
+    if (!job) {
+      return { key: trimmed, status: 'idle', done: 0, total: 0, segments: 0, error: '', preview: [], model: '' };
+    }
+    return this.asrJobView(job);
+  }
+
+  /** 停掉正在跑的识别。已经识别出的部分**不落盘**（半份字幕比没有更误导）。 */
+  async cancelTranscription(request) {
+    const { key } = request ?? {};
+    await this.ready;
+    const trimmed = String(key ?? '').trim();
+    const job = this.asrJobs.get(trimmed);
+    if (!job) {
+      return { key: trimmed, status: 'idle', done: 0, total: 0, segments: 0, error: '', preview: [], model: '' };
+    }
+    job.cancel = true;
+    return this.asrJobView(job);
+  }
+
+  /**
+   * 一集的「AI 导读」（0.84.0）：读缓存，或**当场生成**。
+   *
+   * 与 `getTranscriptTranslation` 同一条分工：读的时候绝不调模型（面板一挂上就调它），
+   * 只有 `refresh: true` 或「没有可用缓存」时才真去生成一次。
+   *
+   * ★ 为什么生成是**同步阻塞**的（不像识别那样后台跑 + 轮询）：它只有**一次**模型
+   *   调用（30–60 秒），而期间界面上有「正在读这一集…」的确定文案。做成任务队列
+   *   要多一套轮询与落盘，换来的只是「可以在生成时去翻别的集」—— 而这件事用户
+   *   现在也能做（切走会作废这次调用，代价是那一次模型钱）。
+   * ★ 缓存按 `sourceHash` 失效：重新识别会换掉字幕，旧导读里的时间戳就会指向
+   *   别的话。这一点和译文缓存是同一条纪律。
+   * ★ 没有字幕时返回 `reason: 'no-transcript'`（不是报错）：界面据此把「AI 导读」
+   *   那一段换成「先有字幕，才能导读」。
+   */
+  async episodeDigest(request) {
+    const { key, refresh = false, generate = true } = request ?? {};
+    await this.ready;
+    const trimmed = typeof key === 'string' ? key.trim() : '';
+    if (trimmed === '') throw new Error('需要文章 key');
+    const record = await this.transcriptStore.read(trimmed);
+    if (record === null) {
+      return { key: trimmed, digest: null, cached: false, reason: 'no-transcript' };
+    }
+    const view = transcriptView(record);
+    const paragraphs = view.paragraphs;
+    const texts = paragraphs.map((paragraph) => paragraph.text);
+    const hash = transcriptTextsHash(texts);
+
+    if (refresh !== true) {
+      const cached = await this.transcriptStore.readDigest(trimmed);
+      if (cached !== null && cached.sourceHash === hash) {
+        return { key: trimmed, digest: cached.digest, cached: true, updatedAt: cached.updatedAt, model: cached.model };
+      }
+    }
+
+    const chars = texts.join('').length;
+    if (chars < EPISODE_DIGEST_MIN_CHARS) {
+      return { key: trimmed, digest: null, cached: false, reason: 'too-short', chars };
+    }
+
+    /**
+     * `generate: false` = **只读缓存**。
+     *
+     * ★ 这一条是必需的，不是可选优化：面板一进收听视图就会调一次，用来显示「上次
+     *   生成过的那份」。如果那次调用顺手生成，用户只是切到收听视图听个响，就白花了
+     *   一次模型调用 —— 而且他会发现「我什么都没点，怎么在烧钱」。
+     *   所以「读」与「生成」必须是两次不同的调用（与字幕翻译同一条纪律）。
+     */
+    if (generate !== true) {
+      return { key: trimmed, digest: null, cached: false, reason: 'not-generated' };
+    }
+
+    const entry = this.store.findFeedEntry(trimmed) ?? this.store.getArticle(trimmed) ?? null;
+    const material = buildEpisodeDigestInput({
+      title: entry?.title ?? '',
+      channel: entry?.channelName ?? '',
+      paragraphs,
+    });
+    const raw = await generateEpisodeDigest(this.ctx, material, { model: this.digestModel() });
+    const digest = parseEpisodeDigest(raw, {
+      paragraphs,
+      duration: paragraphs.length > 0 ? paragraphs[paragraphs.length - 1].end : 0,
+    });
+    if (isEmptyDigest(digest)) {
+      const error = new Error('模型返回的导读是空的，稍后再试一次');
+      error.code = 'EPISODE_DIGEST_EMPTY';
+      throw error;
+    }
+    const meta = {
+      ...digest,
+      // 让界面知道这份导读是「全量看完」还是「抽了段」——抽过段的导读，中间那些
+      // 章节可能本来就不存在，用户看到「4–8 段」时不该以为是模型漏了。
+      sampled: material.sampled === true,
+      paragraphs: paragraphs.length,
+      generatedAt: new Date().toISOString(),
+    };
+    // 落盘时记「用的哪个模型」：设置项留空表示跟随 Harness 默认，那也写清是「默认」。
+    const model = this.digestModel();
+    await this.transcriptStore.writeDigest(trimmed, { digest: meta, sourceHash: hash, model });
+    return { key: trimmed, digest: meta, cached: false, updatedAt: Date.now(), model };
+  }
+
+  /**
+   * 一集的字幕**段落文本**（切段规则与界面完全同源：`transcriptView`）。
+   *
+   * ★ 为什么不在客户端把 `paragraphs` 传回来翻译：那条路会让「译文数组的第 n 项」
+   *   与「时间轴的第 n 段」由两个地方各自决定。字幕一刷新（源站换了转写文本），
+   *   客户端的旧 `paragraphs` 就会把译文错位一整段 —— 界面上全是中文，看不出来。
+   *   所以只认 key，段落在宿主现切。
+   *
+   * @returns {Promise<string[] | null>} 没有字幕时 null（不是空数组：两者含义不同）
+   */
+  async transcriptTextsOf(key) {
+    const record = await this.transcriptStore.read(key);
+    if (record === null) return null;
+    return transcriptView(record).paragraphs.map((paragraph) => paragraph.text);
+  }
+
+  /**
+   * 字幕中文层的**读**：纯读盘，不调模型。
+   *
+   * ★ 面板一挂上就调它：译过的集子秒开中文，没译过的返回全空串。
+   *   一次模型调用都不发 —— 用户翻十集列表不该产生十次费用。
+   * ★ `done` 是「每段都有译文」，不是「翻过」：逐批落盘会留下「前 60 段有、
+   *   后 60 段空」的中间态，界面据此继续翻，而不是把半份当成品。
+   */
+  async getTranscriptTranslation(request) {
+    const { key } = request ?? {};
+    await this.ready;
+    const trimmed = typeof key === 'string' ? key.trim() : '';
+    if (trimmed === '') throw new Error('需要文章 key');
+    const texts = await this.transcriptTextsOf(trimmed);
+    if (texts === null) {
+      return { key: trimmed, translations: [], total: 0, done: false, reason: 'no-transcript' };
+    }
+    const cached = await this.transcriptStore.readTranslation(trimmed);
+    const fresh = cached !== null
+      && cached.sourceHash === transcriptTextsHash(texts)
+      && cached.translations.length === texts.length;
+    const translations = fresh ? cached.translations : texts.map(() => '');
+    return {
+      key: trimmed,
+      translations,
+      total: texts.length,
+      model: fresh ? cached.model : '',
+      via: fresh ? cached.via ?? '' : '',
+      done: translations.length > 0 && translations.every((text) => text !== ''),
+    };
+  }
+
+  /**
+   * 翻**一批**字幕（客户端循环驱动，这样才有进度条）。
+   *
+   * ★ 为什么按批暴露，而不是「一次翻完这一集」：一集 120 段要 6 次模型调用、
+   *   一两分钟。做成一个 Remote 调用的话，用户在等待期间看不到任何进展，
+   *   也没法在中途停下 —— 而「翻到一半发现模型不对」是最常见的想停下的时刻。
+   * ★ 每批都落盘：中途关掉面板，已经翻好的段不再花钱。
+   * ★ 同一集串行（`translationPending`）：两个窗口同时翻同一集时，后写的那次
+   *   会把前一次的数组覆盖成它自己那份（每批都写整份数组）。串行之后，第二次
+   *   读到的是第一次刚落盘的译文，直接跳过已译段。
+   */
+  async translateTranscriptBatch(request) {
+    const { key, start = 0, refresh = false, engine = '' } = request ?? {};
+    await this.ready;
+    const trimmed = typeof key === 'string' ? key.trim() : '';
+    if (trimmed === '') throw new Error('需要文章 key');
+
+    const tail = this.translationPending.get(trimmed) ?? Promise.resolve();
+    const guarded = tail.then(
+      () => this.runTranscriptTranslation(trimmed, { start, refresh, engine }),
+      () => this.runTranscriptTranslation(trimmed, { start, refresh, engine }),
+    );
+    const tracked = guarded.catch(() => {});
+    this.translationPending.set(trimmed, tracked);
+    try {
+      return await guarded;
+    } finally {
+      // 只有「队尾还是我」才删：后面还排着别的批次时删掉，会让它变成两条并行队列。
+      if (this.translationPending.get(trimmed) === tracked) this.translationPending.delete(trimmed);
+    }
+  }
+
+  /**
+   * `translateTranscriptBatch` 的实际工作（串行队列里跑的就是它）。
+   *
+   * ── 引擎顺序（0.84.0）────────────────────────────────────────────────
+   *
+   *   `auto`（默认）：先 Google，**通不了或没翻全**再用模型补
+   *   `google`：只用 Google；不可达就报错（给「明确不想花钱」的人）
+   *   `model`：只走模型（术语多、口播绕的集子明显更准）
+   *
+   * ★ 混合结果也要如实记：一次翻译里前 18 段 Google、后 2 段模型补，`via` 就写
+   *   `google+<模型>`。写成 `google` 会让「某几段明显更像模型译的」变成没解释的怪事。
+   * ★ Google 不可达时**不报错、不空转**：`translateWithGoogle` 会带 `reachable: false`
+   *   回来，这里直接落到模型 —— 这是「默认路径」而不是异常路径。
+   */
+  async runTranscriptTranslation(key, { start = 0, refresh = false, engine = '' } = {}) {
+    /** 一批 20 段：与 `ai.js` 那边「最多 30 段」的上限留出余量。 */
+    const BATCH = 20;
+    const texts = await this.transcriptTextsOf(key);
+    if (texts === null) {
+      const error = new Error('这一集还没有字幕，先获取字幕再翻译');
+      error.code = 'NO_TRANSCRIPT';
+      throw error;
+    }
+    const total = texts.length;
+    const from = Math.max(0, Math.min(Math.floor(Number(start) || 0), total));
+    const slice = texts.slice(from, from + BATCH);
+
+    const hash = transcriptTextsHash(texts);
+    const cached = refresh === true ? null : await this.transcriptStore.readTranslation(key);
+    const usable = cached !== null && cached.sourceHash === hash && cached.translations.length === total ? cached : null;
+    const translations = usable === null ? texts.map(() => '') : [...usable.translations];
+
+    if (slice.length === 0) {
+      return {
+        key, translations, total, from, count: 0, translated: 0, done: true,
+        model: usable?.model ?? '', via: usable?.via ?? '', note: '',
+      };
+    }
+
+    const pending = [];
+    for (let offset = 0; offset < slice.length; offset += 1) {
+      const index = from + offset;
+      // 已经译过的段（上一批落的盘）不再翻：重复调用同一个区间是「重试本批」的常态。
+      if (translations[index] !== '') continue;
+      // 本来就是中文的段照抄，不花模型钱 —— 中文播客的字幕不该被再翻一遍。
+      if (isMostlyChinese(slice[offset])) {
+        translations[index] = slice[offset];
+        continue;
+      }
+      pending.push(index);
+    }
+
+    const preferred = String(engine || this.store.data.settings.subtitleTranslateEngine || 'auto');
+    let model = usable?.model ?? '';
+    let via = '';
+    let note = '';
+
+    if (pending.length > 0 && (preferred === 'google' || preferred === 'auto')) {
+      const result = await translateWithGoogle(pending.map((index) => texts[index]));
+      let filled = 0;
+      pending.forEach((index, offset) => {
+        const value = typeof result.texts[offset] === 'string' ? result.texts[offset].trim() : '';
+        if (value !== '') {
+          translations[index] = value;
+          filled += 1;
+        }
+      });
+      if (filled > 0) via = 'google';
+      if (!result.reachable) {
+        note = `Google 翻译这次没成功（${result.error || '网络不通'}），改用模型`;
+      } else if (filled < pending.length) {
+        note = `Google 漏了 ${pending.length - filled} 段，已用模型补齐`;
+      }
+      if (preferred === 'google' && filled < pending.length) {
+        throw new Error(
+          `Google 翻译没翻完（${filled}/${pending.length} 段）：${result.error || '网络不可达'}。`
+          + '可以到「设置 › 阅读与字幕」把翻译引擎换成「模型」，或改成「自动」。',
+        );
+      }
+    }
+
+    const leftover = pending.filter((index) => translations[index] === '');
+    if (leftover.length > 0) {
+      model = this.aiModel();
+      const items = leftover.map((index) => ({ id: String(index), text: texts[index] }));
+      const out = await translateSubtitleParagraphs(this.ctx, items, { model });
+      for (const item of out) {
+        const index = Number(item.id);
+        if (!Number.isInteger(index) || index < 0 || index >= total) continue;
+        const value = typeof item.text === 'string' ? item.text.trim() : '';
+        if (value !== '') translations[index] = value;
+      }
+      via = via === '' ? `model:${model || '默认'}` : `${via}+model:${model || '默认'}`;
+    }
+
+    try {
+      await this.transcriptStore.writeTranslation(key, { translations, sourceHash: hash, model, via });
+    } catch (error) {
+      // ★ 落盘失败不该让这一批译文白翻：照样返回给界面，只是下次重开会重翻。
+      this.ctx.logger?.info?.(`[字幕] 译文落盘失败：${error?.message ?? String(error)}`);
+    }
+
+    /**
+     * ★ 本批有没有「没译出来的段」（0.84.9）。
+     *
+     * 漏译不是意外，是**提示词里明确允许的**（`translateSubtitleParagraphs` 写着
+     * 「漏译时可以少给几项」），而 `parsePageTranslations` 会把缺失补成空串。
+     * 原来这里直接 `done: from + slice.length >= total` —— 只要**位置**推到了末尾
+     * 就算完成，哪怕上面真有空格。于是界面报「翻译完成」，正文是中英混排；
+     * 更糟的是客户端按 `from + count` 推进，**缺口从此再也不会被访问**，
+     * 用户除了清缓存重翻没有任何办法。
+     *
+     * 现在分三步：① 缺口当场补翻**一次**（只翻缺的那几段，不重跑整批）；
+     * ② 补不上就**不把 `count` 推过缺口**，下一次调用从缺口重来；
+     * ③ `done` 与 `unfilled` 如实回传，界面据此说「还有几段没译」。
+     * ★ 补翻只做一次：同一段连续重试会把「点一下」变成「等三分钟」，
+     *   而真正译不出的段落（模型拒答、纯噪声）重试多少次都一样。
+     */
+    const blankAt = (index) => translations[index] === '' && String(texts[index] ?? '').trim() !== '';
+    let advanced = 0;
+    while (advanced < slice.length && !blankAt(from + advanced)) advanced += 1;
+    if (advanced < slice.length) {
+      const gaps = [];
+      for (let offset = advanced; offset < slice.length; offset += 1) {
+        if (blankAt(from + offset)) gaps.push(from + offset);
+      }
+      if (gaps.length > 0) {
+        try {
+          const retry = await translateSubtitleParagraphs(
+            this.ctx,
+            gaps.map((index) => ({ id: String(index), text: texts[index] })),
+            { model: model || this.aiModel() },
+          );
+          for (const item of retry) {
+            const index = Number(item.id);
+            const value = typeof item.text === 'string' ? item.text.trim() : '';
+            if (Number.isInteger(index) && index >= 0 && index < total && value !== '') {
+              translations[index] = value;
+            }
+          }
+        } catch (error) {
+          this.ctx.logger?.info?.(`[字幕] 缺口补翻失败：${error?.message ?? String(error)}`);
+        }
+        // 补完重算：补上的段要算进推进位置，否则下一轮会把它们再翻一遍。
+        advanced = 0;
+        while (advanced < slice.length && !blankAt(from + advanced)) advanced += 1;
+      }
+    }
+    let unfilled = 0;
+    for (let offset = 0; offset < slice.length; offset += 1) {
+      if (blankAt(from + offset)) unfilled += 1;
+    }
+    const gapNote = unfilled > 0 ? `有 ${unfilled} 段没译出，可以再点一次「中文」继续` : '';
+
+    return {
+      key,
+      translations,
+      total,
+      from,
+      // 只推进到缺口之前：推过去就等于把缺口忘了。
+      count: advanced,
+      // `translated` 一直是「本批要翻几段」（含缓存命中的 0）：判据与界面都在用它，
+      // 改成「已译几段」会把「第二次调用返回 0」这条既有约定推翻。
+      translated: pending.length,
+      done: advanced >= slice.length && from + advanced >= total,
+      unfilled,
+      model,
+      via,
+      note: note === '' ? gapNote : (unfilled > 0 ? `${note}；${gapNote}` : note),
+    };
+  }
+
   /** Resolve the article body from the feed cache, hydrating it from the page if needed. */
   async ensureArticle(key) {
     const cached = this.store.getArticle(key);
@@ -1660,10 +3405,22 @@ export class RssService {
    */
   async setBookContext(request) {
     await this.ready;
-    const { sessionId, bookId, title = '', page, pages, text, quote = '' } = request ?? {};
+    const { sessionId, bookId, title = '', page, pages, text, quote = '', kind = 'book', meta = null } = request ?? {};
     assertSessionId(sessionId);
     if (!isBookId(bookId)) throw new Error('无效的书 id');
     if (typeof title !== 'string' || title.length > 300) throw new Error('书名过长');
+    /**
+     * ★ `kind` 只认两个字面量，**不做「非 paper 即 book」的兜底**：拼错一个字母
+     *   （`'Paper'`）会静默退回书的措辞 —— 界面上完全看不出异常，而模型已经
+     *   把论文当成书在讲了。缺省 `book` 只为兼容老调用方。
+     */
+    if (kind !== 'book' && kind !== 'paper') throw new Error('kind 只能是 book 或 paper');
+    /**
+     * ★ 论文信息只做**边界校验**，不做内容改写：作者为空串是合法状态（未补全元数据的
+     *   预印本），但传成数组、对象或超长串就抛错 —— 后者会把整页正文顶出上下文预算，
+     *   而症状是「模型忽然只谈作者不谈内容」，没人会想到是这里。
+     */
+    if (meta !== null && (typeof meta !== 'object' || Array.isArray(meta))) throw new Error('论文信息必须是对象');
     if (!Number.isInteger(page) || page < 0 || page > 1_000_000) throw new Error('page 必须是非负整数');
     // ★ 第三个判据必须是 `pages`：原来写成了 `page`（上一行刚校验过），于是 `pages`
     //   根本没有上界 —— 传 1e15 也能落盘，伴读上下文会写「第 3 页（共 1000000000000000 页）」，
@@ -1677,7 +3434,11 @@ export class RssService {
      */
     if (typeof quote !== 'string') throw new Error('划选引文必须是字符串');
     if (quote.length > BOOK_QUOTE_LIMIT) throw new Error('划选引文过长');
-    this.putCompanionContext(sessionId, bookReadingContext({ title, page, pages, text, quote }), `book:${bookId}`);
+    this.putCompanionContext(
+      sessionId,
+      bookReadingContext({ kind, title, page, pages, text, quote, meta: sanitizePaperMeta(meta) }),
+      `${kind}:${bookId}`,
+    );
     this.store.touch();
     return { ok: true, hasText: text.trim().length > 0, hasQuote: quote.trim().length > 0 };
   }
@@ -1764,12 +3525,22 @@ export class RssService {
   // ------------------------------------------------------------------
 
   /**
-   * 在系统文件管理器里打开日记目录。
+   * 在系统文件管理器里打开日记目录（0.86.0 起跟着模块走）。
    *
    * ★ 这个能力必须有，不是锦上添花：取消「移入 Obsidian」之后，日记**没有第二个
    *   副本**。用户要知道东西在哪、要能自己拖走 / 备份，就得有一个「带我去看」的
    *   入口。不给的话，日记就成了「存在某个看不见的地方」—— 而那个地方是
    *   `~/.dsh/storages/`，不是任何人会主动去翻的目录。
+   *
+   * ★ `module`（用户 2026-11-19：「不管是切换那个，点击文件夹图标打开的都是这个
+   *   文件夹」）：
+   *     · `private` → `diary/private/`（加密那一半，与 `daily/` 平级）；
+   *     · `inspiration` / `reflection` → `diary/daily/`。**这两个模块共用同一个
+   *       `.md`**（靠标题行的 `kind` 分家），所以它们指向同一个目录不是 bug，
+   *       而是磁盘上的事实 —— 界面文案要如实说，不要假装分开了；
+   *     · 不传（老客户端 / 命令行）→ 仍然打开 `diary/` 根目录。
+   *   选中最近一天的文件（`open -R`）：只把目录摊开的话，用户还是得自己在几十个
+   *   `YYYY-MM-DD.md` 里找，「切到读后感」与「切到灵感」看起来仍然一模一样。
    *
    * ★ 用 `spawn` + 参数数组，不用 `exec` + 拼字符串：路径里带空格或中文（用户名
    *   是中文的机器很常见）时，拼进 shell 就得自己负责转义，而数组不需要。
@@ -1778,20 +3549,34 @@ export class RssService {
    * ★ 目录不存在时先建出来：用户第一次点「打开文件夹」很可能一篇日记都还没写，
    *   这时 Finder 会弹「找不到」—— 那是**我们**该先建，不是让他自己去猜。
    */
-  async revealDiaryDir() {
-    // ★ 打开的是 `diary/` 而不是 `diary/daily/`（2026-10-26 加私密那半边时改的）：
-    //   `private/` 与 `daily/` 是**平级**的，只打开 `daily/` 会让用户以为私密日记
-    //   不存在 —— 而「东西在哪」正是他点这个按钮时唯一想知道的事。
-    const dir = this.diary.root();
+  async revealDiaryDir(input = {}) {
+    const moduleValue = typeof input?.module === 'string' ? input.module : '';
+    const side = moduleValue === 'private' ? 'private' : moduleValue === '' ? 'root' : 'daily';
+    const dir = side === 'private' ? diaryPrivateDir() : side === 'daily' ? diaryDailyDir() : this.diary.root();
     await mkdir(dir, { recursive: true });
+    // 优先选中**今天**那一份，没有才退到最近一天：用户点这个按钮时多半就在写今天，
+    // 而「打开文件夹」之后还要自己在几十个 `YYYY-MM-DD.md` 里找今天，等于没帮上忙。
+    const suffix = side === 'private' ? '.md.enc' : '.md';
+    const names = (await readdir(dir).catch(() => []))
+      .filter((name) => {
+        const key = name.slice(0, side === 'private' ? -7 : -3);
+        return name.endsWith(suffix) && /^\d{4}-\d{2}-\d{2}$/.test(key);
+      })
+      .sort();
+    const todayName = `${dateKey()}${suffix}`;
+    const file = names.includes(todayName)
+      ? joinPath(dir, todayName)
+      : names.length > 0 ? joinPath(dir, names[names.length - 1]) : '';
     const [command, args] = process.platform === 'darwin'
-      ? ['open', [dir]]
+      ? ['open', file === '' ? [dir] : ['-R', file]]
       : process.platform === 'win32'
-        ? ['explorer', [dir]]
+        ? ['explorer', file === '' ? [dir] : [`/select,${file}`]]
+        // Linux 的 xdg-open 没有「打开父目录并选中」这回事，只能开目录。
         : ['xdg-open', [dir]];
     const child = spawn(command, args, { detached: true, stdio: 'ignore' });
     child.unref();
-    return { dir };
+    // `dir` 永远是**目录**（回执要说人话）；`file` 是选中的那一份（可能为空）。
+    return { dir, file, side, module: moduleValue };
   }
 
   /**
@@ -2744,6 +4529,10 @@ export class RssService {
         addedAt: sub.addedAt,
         lastFetchedAt: sub.lastFetchedAt,
         lastError: sub.lastError,
+        // 0.84.0：用户贴的是平台链接时记下来源平台与原始地址，界面上能显示
+        // 「来自 小宇宙」。旧数据没有这两个字段，取到 undefined 即可（不影响渲染）。
+        platform: sub.platform,
+        sourceUrl: sub.sourceUrl,
         entryCount: (sub.entries ?? []).length,
         // 补全过历史的源要能在界面上看出来：否则「20 条」与「506 条」在列表里
         // 长得一样，用户没法判断自己到底点没点过那个按钮。
@@ -2755,13 +4544,65 @@ export class RssService {
     };
   }
 
+  /**
+   * 把一个地址解析成真正的订阅源（0.84.0）。
+   *
+   * 用户在订阅框里贴的是 Apple Podcasts / 小宇宙 / YouTube 的**主页地址**，而订阅
+   * 要的是 XML。这个方法是那条翻译，**且只翻译不落盘** —— 界面在添加前先调一次，
+   * 把「会订阅到哪个 feed、来自哪个平台」给用户看一眼，再决定要不要加。
+   *
+   * ★ 与 `addSubscription` 共用同一个解析器（`resolveFeedUrl`）：分开实现的话，
+   *   预览说「找到了 feed A」、添加后订的却是 feed B，而两边各自都不报错。
+   */
+  async resolveSubscription(request) {
+    const { url } = request ?? {};
+    await this.ready;
+    const trimmed = String(url ?? '').trim();
+    if (trimmed === '') throw new Error('订阅地址不能为空');
+    try {
+      const resolved = await resolveFeedUrl({
+        url: trimmed,
+        // 页面用带 UA 的抓取（小宇宙裸请求回 403，见 `fetchHtml` 的注释）；
+        // 真正的 feed 由 `addSubscription` 用 `fetchText` 抓。
+        fetchText: (target, timeoutMs) => fetchHtml(target, timeoutMs ?? FEED_TIMEOUT_MS),
+        fetchJson: (target, timeoutMs) => fetchJson(target, timeoutMs ?? 12_000),
+        log: (message) => this.ctx.logger.info(message),
+      });
+      const audio = platformAudioSupport(resolved.platform === 'page' ? 'feed' : resolved.platform);
+      return { ...resolved, audio, hint: FEED_PLATFORM_HINT, cached: false };
+    } catch (error) {
+      if (error instanceof FeedResolveError) {
+        // 人话 + 机器码：界面显示 message，日志与测试用 code。
+        return { feedUrl: '', platform: classifySubscriptionUrl(trimmed).kind, title: '', via: '', note: '', error: error.message, code: error.code };
+      }
+      throw error;
+    }
+  }
+
   async addSubscription(request) {
     const { url, name, group } = request ?? {};
     await this.ready;
     const trimmed = String(url ?? '').trim();
     if (!/^https?:\/\//i.test(trimmed)) throw new Error('订阅地址必须是 http(s) URL');
     if (this.store.data.subscriptions.length >= 100) throw new Error('个人订阅最多 100 个');
-    const existing = this.store.findSubscriptionByUrl(trimmed);
+    /**
+     * ★ 先把「用户贴的地址」解析成真正的 feed，再做去重与抓取。
+     *
+     *   顺序反过来（先去重再解析）会出现：同一个节目，一次贴 Apple 链接、一次贴
+     *   小宇宙链接、一次贴 feed 地址 —— 三条记录指向同一个 feed，刷新时同一集被
+     *   抓三遍，而「已订阅」的判据（按 url 比）一次都没命中。
+     *
+     * ★ 解析失败**直接抛**（带人话）：这条链路上「猜一个 feed 地址」是最坏的选择 ——
+     *   用户会得到一个指向别处的订阅，而错误会在几天后以「内容不对」的形式出现。
+     */
+    const resolved = await resolveFeedUrl({
+      url: trimmed,
+      fetchText: (target, timeoutMs) => fetchHtml(target, timeoutMs ?? FEED_TIMEOUT_MS),
+      fetchJson: (target, timeoutMs) => fetchJson(target, timeoutMs ?? 12_000),
+      log: (message) => this.ctx.logger.info(message),
+    });
+    const feedUrl = resolved.feedUrl;
+    const existing = this.store.findSubscriptionByUrl(feedUrl) ?? this.store.findSubscriptionByUrl(trimmed);
     if (existing) throw new Error(`该订阅已存在: ${existing.name}`);
     const displayName = (name ?? '').trim();
     // An unreachable feed is still worth subscribing to: record the failure and
@@ -2771,8 +4612,8 @@ export class RssService {
     let lastError;
     let feedTitle;
     try {
-      const xml = await fetchText(trimmed, FEED_TIMEOUT_MS);
-      const parsed = parseFeed(xml, trimmed);
+      const xml = await fetchText(feedUrl, FEED_TIMEOUT_MS);
+      const parsed = parseFeed(xml, feedUrl);
       entries = parsed.entries;
       feedTitle = parsed.title;
     } catch (error) {
@@ -2780,19 +4621,23 @@ export class RssService {
       lastError = error instanceof Error ? error.message : String(error);
     }
     const sub = {
-      id: `feed:${hashKey(trimmed)}`,
-      url: trimmed,
-      name: displayName || feedTitle || trimmed,
+      id: `feed:${hashKey(feedUrl)}`,
+      url: feedUrl,
+      // 用户贴的原文只在「与原地址不同」时留一份：界面上「这个订阅是从哪个链接来的」
+      // 需要一个出处，而它不该把 data.json 撑大（一条几十字节，可忽略）。
+      sourceUrl: trimmed === feedUrl ? undefined : trimmed,
+      platform: resolved.platform,
+      name: displayName || feedTitle || resolved.title || feedUrl,
       group: (group ?? '').trim() || undefined,
       addedAt: Date.now(),
       lastFetchedAt: feedTitle ? Date.now() : undefined,
       status,
       lastError,
-      entries: entries.map((entry) => ({ ...entry, channelName: displayName || feedTitle || trimmed })),
+      entries: entries.map((entry) => ({ ...entry, channelName: displayName || feedTitle || resolved.title || feedUrl })),
     };
     this.store.addSubscription(sub);
     await this.store.flush();
-    return { ...sub, entryCount: sub.entries.length };
+    return { ...sub, entryCount: sub.entries.length, resolved: { via: resolved.via, note: resolved.note } };
   }
 
   async removeSubscription(request) {
@@ -3035,12 +4880,33 @@ export class RssService {
       // 原地换源。第三方代理会死（实测 8 个公众号源经的代理 2026-09-21 之后就停止更新），
       // 以前只能「退订 + 重订」，那会连带丢掉分组、阅读记录和当前频道。这里保留 id 与分组，
       // 只把地址和内容换掉 —— id 不能换，阅读记录 / 收藏 / 当前频道都挂在它上面。
+      //
+      // ★ 先抓取、成功了才认这个新地址（0.84.7）。旧写法先把 entries 清空再 refresh，
+      //   而 refreshSubscription 内部 catch 住、只返回 `{ ok: false }` —— 于是地址打错
+      //   或临时不可达时，旧条目已经没了、也没有回滚，用户看到的是一个空订阅，
+      //   只会以为「这个源本来就没内容」。
+      const snapshot = {
+        url: sub.url,
+        entries: sub.entries,
+        name: sub.name,
+        status: sub.status,
+        lastError: sub.lastError,
+        lastFetchedAt: sub.lastFetchedAt,
+      };
       sub.url = next;
       sub.entries = [];
       sub.status = undefined;
       sub.lastError = undefined;
       sub.lastFetchedAt = undefined;
-      await this.refreshSubscription(sub);
+      const refreshed = await this.refreshSubscription(sub);
+      if (refreshed.ok !== true) {
+        // 整体回滚（地址 / 条目 / 状态 / 名字一起还原），再把真实原因抛给调用方。
+        // 不抛的话界面会当作「保存成功」，用户永远不会知道源没换成。
+        Object.assign(sub, snapshot);
+        this.store.touch();
+        await this.store.flush();
+        throw new Error(`新地址抓不到内容，已保留原来的订阅：${refreshed.error ?? '未知错误'}`);
+      }
     }
     if (typeof name === 'string' && name.trim() !== '') {
       sub.name = name.trim();
@@ -3143,6 +5009,26 @@ export class RssService {
   }
 
   /**
+   * 写云端识别的 Key（0.84.0）。
+   *
+   * ★ 为什么不走 `saveSettings`：那条路要先把当前设置交给渲染进程，而 `asrApiKey`
+   *   被 `publicSettings` 剔掉了 —— 设置页手里那份快照里它是空串，提交回去就是
+   *   「每点一次保存清空一次 Key」，界面还显示「设置已保存」。
+   *   与朗读 Key 完全同一条理由（`POST /speech/config`）。
+   * ★ 只回「配没配」，**不回 Key 本身**（回显不出一分钱好处，只多一次泄露面）。
+   */
+  async saveAsrConfig(request) {
+    const { apiKey } = request ?? {};
+    await this.ready;
+    const clean = String(apiKey ?? '').trim();
+    Object.assign(this.store.data.settings, validateSettings({ asrApiKey: clean }));
+    this.store.touch();
+    await this.store.flush();
+    const cloud = this.cloudAsrConfig();
+    return { configured: cloud.configured, provider: cloud.provider, providerName: cloud.providerName, model: cloud.model };
+  }
+
+  /**
    * 写入朗读用的 API Key（0.55.0）。
    *
    * ★ 为什么不走 `saveSettings`：那条路是「整份 patch 覆盖」，而 Key 的写入者是
@@ -3162,11 +5048,15 @@ export class RssService {
 {
   const names = [
     'listChannels', 'listEntries', 'searchArticles', 'getArticle', 'entryMeta', 'getVersionContent',
+    'getTranscript', 'getTranscriptTranslation', 'translateTranscriptBatch',
+    'asrStatus', 'prepareAsr', 'startTranscription', 'transcriptionStatus', 'cancelTranscription',
+    // 0.84.0：AI 导读 + 平台链接解析（`saveAsrConfig` 在下面设置那一组）。
+    'episodeDigest', 'resolveSubscription',
     'generateVersion', 'fetchFullText', 'refresh', 'listSubscriptions', 'addSubscription',
     'removeSubscription', 'updateSubscription', 'backfillSubscription', 'opmlPreview', 'opmlImport', 'opmlExport',
     'listCatalog', 'addCatalogSource', 'removeCatalogSource', 'setCatalogHidden',
     'setCatalogService', 'probeCatalogService',
-    'setRead', 'setFavorite', 'setHidden', 'getSettings', 'saveSettings', 'listAiModels', 'aiModelInfo',
+    'setRead', 'setFavorite', 'setHidden', 'getSettings', 'saveSettings', 'saveAsrConfig', 'listAiModels', 'aiModelInfo',
     'prepareChat', 'setReadingContext', 'setBookContext', 'setDiaryContext',
   ];
   const prototype = RssService.prototype;
@@ -3216,6 +5106,57 @@ async function fetchText(url, timeoutMs) {
   return text;
 }
 
+/**
+ * 抓一个平台页面（Apple / 小宇宙 / YouTube / 任意站点），用来反查它的订阅源。
+ *
+ * ★ 必须带浏览器 UA：本机实测 `www.xiaoyuzhoufm.com/podcast/<id>` 在裸 fetch 下
+ *   回 **403**（同一地址 curl 带 UA 是 200）。没有这一步，小宇宙那条路会一律
+ *   报「页面抓不下来」，而用户完全无从修复 —— 他会以为自己贴错了链接。
+ * ★ 与 `fetchText`（抓 feed）分开：feed 拉的是 XML，加 `accept: text/html` 对
+ *   少数服务端会触发内容协商；而且 feed 站对 UA 的要求远没那么严。
+ */
+const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+async function fetchHtml(url, timeoutMs) {
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(timeoutMs),
+    redirect: 'follow',
+    headers: {
+      'user-agent': BROWSER_UA,
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    },
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
+  const contentType = response.headers.get('content-type') ?? '';
+  const buffer = await response.arrayBuffer();
+  // 平台页面普遍 200–400 KB；3 MB 是「这不像一个页面」的界线。
+  if (buffer.byteLength > 3 * 1024 * 1024) throw new Error(`page larger than 3 MB: ${url}`);
+  return new TextDecoder(charsetOf(contentType) ?? 'utf-8', { fatal: false }).decode(buffer);
+}
+
+/**
+ * 抓一个 JSON 接口（Apple 目录那条路用，0.84.0）。
+ *
+ * ★ 单独一个函数而不是在 `resolveFeedUrl` 里直接 `fetch`：目录接口的失败形态
+ *   （403 限流、非 JSON 的 HTML 错误页）要被翻译成「这个区查不到」继续试下一个区，
+ *   而不是让整个订阅流程挂在一个 403 上。
+ */
+async function fetchJson(url, timeoutMs) {
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(timeoutMs),
+    redirect: 'follow',
+    headers: { accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`响应不是 JSON：${url}`);
+  }
+}
+
 /*
  * 抓原文页的实现搬到 `./page-fetch.js`（0.24.4）。
  *
@@ -3258,4 +5199,17 @@ function escapeHtml(text) {
 function charsetOf(contentType) {
   const match = /charset=([\w-]+)/i.exec(contentType);
   return match?.[1];
+}
+
+/**
+ * 字幕段落文本的指纹（sha256）。
+ *
+ * ★ 译文缓存靠它判断「这份译文还对得上原文吗」。源站换了转写文本（同一集重新上传
+ *   了字幕）时，段落数往往一样、时间轴也差不多，**只有文字变了** —— 不比对内容
+ *   就会把旧译文挂到新字幕上，而且看起来完全正常（都是中文、都有时间戳）。
+ * ★ 用 JSON 序列化再哈希：分隔符能让「两段拼起来等于另一段」这类碰撞不会发生
+ *   （直接 `join('')` 时 `['ab','c']` 与 `['a','bc']` 指纹相同）。
+ */
+function transcriptTextsHash(texts) {
+  return createHash('sha256').update(JSON.stringify(texts), 'utf8').digest('hex').slice(0, 32);
 }

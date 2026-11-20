@@ -7,7 +7,7 @@
  * goes through `var(--npc-brand, …)` so the NPIE theme can restyle it, and text
  * or fills that carry white text use the darker `--npc-brand-dark` variant.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { sanitizeHtml } from '../host/sanitize.js';
 import { markdownToHtml } from '../host/markdown.js';
 import { READING_DEFAULTS, fontStack } from '../reading-settings.js';
@@ -18,17 +18,25 @@ import { ChannelPicker, ChannelMark } from './ChannelPicker.jsx';
 import { ReadingAppearance } from './ReadingAppearance.jsx';
 import { SettingsPage } from './SettingsPage.jsx';
 import { resolveReadingVersion, shouldAutoTranslate } from './reading-version.js';
+import { buildContrastHtml, contrastReadable } from './contrast-view.js';
 import { activeIndex, outlineOf, scrollTarget } from './article-outline.js';
-import { pickVoice, speechChunks, SPEECH_RATES, chineseVoices, SPEECH_SAMPLE } from './article-speech.js';
 import {
-  SPEECH_API_PREFIX, SPEECH_CLOUD_CHUNK, SILICON_VOICES,
-  parseSpeechVoice, speechVoiceValue,
+  pickVoice, speechChunks, speechChunksForReading, SPEECH_RATES, SPEECH_SAMPLE,
+  SPEECH_VOICE_KEY, SPEECH_RATE_KEY, SPEECH_PREFS_EVENT,
+  speechVoiceGroups, activeSpeechVoiceValue, writeSpeechPrefs,
+} from './article-speech.js';
+import { isPronunciationEnabled } from '../speech-pronunciation.js';
+import {
+  SPEECH_API_PREFIX, SPEECH_CLOUD_CHUNK,
+  parseSpeechVoice,
 } from '../speech.js';
 import { createCloudPlayer, fetchCloudAudio } from './speech-engine.js';
-import { readPosition, savePosition, scrollFromRatio, scrollRatio } from './read-position.js';
 import { articleToMarkdown, downloadText, markdownFileName } from './article-markdown.js';
 import { Discover } from './Discover.jsx';
 import { MediaDock } from './MediaDock.jsx';
+import { TranscriptPanel, nextLang } from './TranscriptPanel.jsx';
+import { EpisodeDigest } from './EpisodeDigest.jsx';
+import { runTranscriptTranslation, translatedCount } from './transcript-translation.js';
 import { quoteRange, selectedPassage } from './selection.js';
 import { selectionBarPlacement } from './selection-bar.js';
 import { AskArticle } from './AskArticle.jsx';
@@ -45,10 +53,17 @@ import { staleNotice } from './source-health.js';
 import { AddFeedDialog } from './dialogs.jsx';
 import { groupNamesOf } from './groups.js';
 import { LibraryApp } from './LibraryApp.jsx';
+import { PapersApp } from './PapersApp.jsx';
 import { DiaryApp } from './DiaryApp.jsx';
 import { QuickCapture } from './QuickCapture.jsx';
+import { seedBlock } from './quick-draft.js';
 import { ViewSwitch } from './ViewSwitch.jsx';
+import {
+  SIDEBAR_MIN_WIDTH, SIDEBAR_WIDTH,
+  clampSidebarWidth, readSidebarWidth, saveSidebarWidth,
+} from './sidebar-width.js';
 import REFINEMENTS from './refinements.css';
+import { attachMenuDismiss } from './menu-dismiss.js';
 
 /**
  * 首帧要恢复的「浏览状态」（筛选 / 搜索词）。
@@ -65,7 +80,7 @@ function initialBrowseState() {
   return bootBrowse;
 }
 
-const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--dsw-alias-bg-layer-1);--npr-fg:var(--dsw-alias-label-primary);--npr-muted:var(--dsw-alias-label-secondary);--npr-faint:var(--dsw-alias-label-tertiary);--npr-border:var(--dsw-alias-border-l1);--npr-border-strong:var(--dsw-alias-border-l2);--npr-hover:var(--dsw-alias-interactive-bg-hover);--npr-accent:var(--npc-brand,var(--dsw-alias-brand-primary));--npr-accent-strong:var(--npc-brand-dark,var(--dsw-alias-brand-primary));--npr-scrim:var(--dsw-alias-bg-mask-1);/* 伴读对话容器专用：refinements.css 里那块「把宿主 --dsw-* 令牌改写成阅读主题色」的覆写引用了它们。
+const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--dsw-alias-bg-layer-1);--npr-fg:var(--dsw-alias-label-primary);--npr-muted:var(--dsw-alias-label-secondary);--npr-faint:var(--dsw-alias-label-tertiary);--npr-border:var(--dsw-alias-border-l1);--npr-border-strong:var(--dsw-alias-border-l2);--npr-hover:var(--dsw-alias-interactive-bg-hover);--npr-accent:var(--npc-brand,var(--dsw-alias-brand-primary));--npr-accent-strong:var(--npc-brand-dark,color-mix(in srgb,var(--dsw-alias-brand-primary) 74%,#000));--npr-scrim:var(--dsw-alias-bg-mask-1);/* 伴读对话容器专用：refinements.css 里那块「把宿主 --dsw-* 令牌改写成阅读主题色」的覆写引用了它们。
    ★ 这两个变量以前**从来没被定义过**。后果不是「覆写不生效」，而是更糟的一种：在自定义属性里引用一个未定义的 var()，
    该声明会变成 guaranteed-invalid ⇒ 解析成**空值**，而 .npr-companion 上那条 --dsw-alias-bg-base 又被它**覆写**了，
    于是宿主原生对话卡片（它靠 var(--dsw-alias-bg-base) 画底）在整个子树里底色变成透明、边框消失。
@@ -116,7 +131,7 @@ const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--
 
 .npr-visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 /* ★★ 侧边栏的**宽度下限**（0.45.2）—— 一个数，三处用：这条 grid、@container 里那条、
-   以及 JS 里拖动与首屏读回 npr.listWidth 时的夹取。
+   以及 sidebar-width.js 里四个视图共用的拖动 / 首屏夹取。
    256px 是**量出来的**（.build/preview/measure-sidebar-min.mjs，真 Chrome）：
      · 工具栏要 240px 才放得下（三档视图开关 88 + 四颗图标 4×28 + 内外边距与间距 30；
        频道按钮在窄处自己缩到 0，所以它不参与这道门槛）；
@@ -204,9 +219,19 @@ const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--
 .npr-version-switch{display:inline-flex;align-items:center;gap:3px;height:30px;padding:0 7px;border:1px solid var(--npr-border);border-radius:999px;background:var(--npr-bg-2);color:var(--npr-muted);font-size:12px;white-space:nowrap}.npr-version-switch span{font-size:11px}.npr-root .npr-mode-select{appearance:none;border:0;background:transparent;width:auto;max-width:110px;padding:3px 1px;height:26px;font:inherit;font-size:12px;color:var(--npr-fg);cursor:pointer;outline:none}.npr-version-switch:focus-within{outline:1px solid var(--npr-accent);outline-offset:1px}
 .npr-root .npr-mode-select:disabled{opacity:.6;cursor:default}
 .npr-reader-nav{display:flex;gap:0;margin-left:10px}
-.npr-actions{display:flex;align-items:center;gap:2px;margin-left:auto;position:relative}
-.npr-root .npr-icon{display:inline-flex;flex-shrink:0;align-items:center;justify-content:center;width:32px;height:32px;padding:7px;border:0;border-radius:5px;background:transparent;color:var(--npr-muted);cursor:pointer}
+.npr-actions{display:flex;align-items:center;gap:4px;margin-left:auto;position:relative}
+.npr-root .npr-icon{display:inline-flex;flex-shrink:0;position:relative;align-items:center;justify-content:center;width:32px;height:32px;padding:7px;border:0;border-radius:5px;background:transparent;color:var(--npr-muted);cursor:pointer}
+/* 0.84.8：工具栏 7 颗图标等宽等重连排，读起来是一团，用户看不出「收藏/已读」「问 AI/朗读」
+   「大纲/设置/更多」其实是三件事。用一条极细的竖线把它们分成三组，不加分组标题、
+   不挪动任何入口的可达性（收进菜单会让常用动作多点一次）。 */
+.npr-actions .npr-icon[data-sep]{margin-left:5px}
+.npr-actions .npr-icon[data-sep]::before{content:'';position:absolute;left:-4px;top:50%;width:1px;height:16px;transform:translateY(-50%);background:var(--npr-border-strong);pointer-events:none}
 .npr-root .npr-icon:hover{color:var(--npr-fg);background:var(--npr-hover)}
+/* ★ 0.84.1：带音频的播客把朗读按钮 disabled 之后，**必须画成灰的**。
+   只给 disabled 属性、却留着 hover 高亮，就是本项目记过好几次的「看着能点、点了没反应」。
+   :disabled:hover 要单独写一条：只写 :disabled 会被上面那条 .npr-icon:hover 盖掉底色。 */
+.npr-root .npr-icon:disabled{opacity:.38;cursor:not-allowed}
+.npr-root .npr-icon:disabled:hover{background:transparent;color:var(--npr-muted)}
 .npr-root .npr-icon svg{width:17px;height:17px}
 .npr-root .npr-icon.is-active svg{fill:currentColor}
 .npr-root .npr-icon.is-loading svg{animation:npr-spin 1.2s linear infinite}
@@ -214,9 +239,15 @@ const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--
 .npr-root.npr-focus .npr-layout{grid-template-columns:minmax(0,1fr)}
 .npr-root.npr-focus .npr-sidebar,.npr-root.npr-focus .npr-resize{display:none}
 .npr-article{max-width:var(--npr-article-width);margin:0 auto;padding:30px clamp(24px,5%,60px) 90px}
-.npr-article-head{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;margin-bottom:14px;color:var(--npr-muted);font-size:12px;line-height:1.6}
-.npr-article-head .npr-mode-chip{padding:1px 7px;border:.5px solid var(--npr-border-strong);border-radius:999px;font-size:11px}
-.npr-article h1{font-size:clamp(24px,2.5cqw,32px);line-height:1.5;letter-spacing:-.025em;margin:0 0 26px;overflow-wrap:anywhere;font-weight:600;text-wrap:balance;font-family:var(--npr-font-family)}
+/* ★ 0.84.6：元信息行两种态共用一条规则。以前收听头另写 11.5px / faint / gap 8，
+   切 tab 时整行字会缩小、颜色变淡 —— 用户要的是「除了内容，其它全一样」。 */
+.npr-article-head,.npr-listen-meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;margin:0 0 14px;color:var(--npr-muted);font-size:12px;line-height:1.6}
+.npr-article-head .npr-mode-chip,.npr-listen-meta .npr-mode-chip{padding:1px 7px;border:.5px solid var(--npr-border-strong);border-radius:999px;font-size:11px}
+/* ★ 0.84.3 起标题排版**一条规则、两个选择器**；0.84.6 把 margin 也并进来。
+   文章态用 .npr-article > h1，字幕/导读态用 .npr-listen-head h1（另一处 h1，
+   正文那颗被 data-listen 隐掉）。以前收听头另写 21px/1.35 + margin 0，
+   用户一眼看出切 tab 标题变小、离播放条的间距也变窄 —— 两份写法必然漂移。 */
+.npr-article > h1,.npr-listen-head h1{font-size:clamp(24px,2.5cqw,32px);line-height:1.5;letter-spacing:-.025em;overflow-wrap:anywhere;font-weight:600;text-wrap:balance;font-family:var(--npr-font-family);margin:0 0 26px}
 .npr-article h1 a{color:inherit;text-decoration:none}
 .npr-article h1 a:hover{text-decoration:underline;text-underline-offset:.15em}
 .npr-prose{font-family:var(--npr-font-family);font-size:var(--npr-font-size);line-height:var(--npr-line-height);overflow-wrap:anywhere;-webkit-user-select:text;user-select:text}
@@ -230,6 +261,15 @@ const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--
 .npr-prose table{display:block;overflow:auto;border-collapse:collapse;max-width:100%}
 .npr-prose td,.npr-prose th{border:1px solid var(--npr-border);padding:8px}
 .npr-prose a{color:var(--npr-accent-strong);text-underline-offset:3px}
+/* 双语对照（0.57.0）：译文块用**一条细竖线 + 略淡的字**与原文分开。
+   ★ 不换纸色、不加底色：正文区已经有六种纸色主题，再叠一层背景就会和主题打架，
+     而「哪一句是译文」用一条线与字色差已经说得清。 */
+.npr-prose .npr-ct-zh{color:var(--npr-muted);padding-left:12px;border-left:2px solid color-mix(in srgb, var(--npr-accent) 35%, var(--npr-border));font-size:.96em}
+.npr-prose p.npr-ct-zh,.npr-prose figcaption.npr-ct-zh,.npr-prose dd.npr-ct-zh{margin:.25em 0 1.1em}
+.npr-prose h1.npr-ct-zh,.npr-prose h2.npr-ct-zh,.npr-prose h3.npr-ct-zh,.npr-prose h4.npr-ct-zh{margin:.3em 0 .7em}
+.npr-prose blockquote.npr-ct-zh{margin:.4em 0 1.3em}
+.npr-prose li>.npr-ct-zh,.npr-prose td>.npr-ct-zh,.npr-prose th>.npr-ct-zh{margin:.3em 0 .1em;font-size:.94em}
+.npr-ct-split{border:0;border-top:1px solid var(--npr-border);margin:2em 0 1.4em}
 .npr-root[data-images=false] .npr-prose img{display:none}
 /* ---- 文章大纲（0.44）----
    浮在阅读区右上，**不挤压正文**：挤压会让 prose 重排、正在读的那一行跳走 ——
@@ -346,6 +386,7 @@ const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--
 .npr-reading-setting input[type=range]{grid-row:2;padding:0;border:0;background:transparent}
 .npr-reading-setting-check{grid-template-columns:84px auto}
 .npr-reading-setting-check input{grid-column:2;justify-self:start}
+.npr-reading-setting-check .npr-switch{grid-column:2;justify-self:start}
 .npr-reading-reset{width:100%;margin-top:14px;padding:6px;font:inherit;font-size:12px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);border:.5px solid var(--dsw-alias-border-l2);border-radius:7px;cursor:pointer}
 .npr-channel-backdrop{position:fixed;inset:0;z-index:58;background:var(--npr-scrim);display:flex;align-items:flex-start;justify-content:center;padding-top:12vh}
 .npr-channel-picker{width:min(430px,92vw);max-height:520px;display:flex;flex-direction:column;padding:8px;border:.5px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--npr-surface);color:var(--dsw-alias-label-primary);box-shadow:var(--npr-elevation);overflow:hidden}
@@ -452,20 +493,42 @@ const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--
 
 `;
 
-const VERSION_LABELS = { original: '原文', translation: '译文', rewrite: '改写' };
+const VERSION_LABELS = { original: '原文', translation: '译文', contrast: '对照', rewrite: '改写' };
+
+/**
+ * 阅读页三选一选项卡（0.84.1，用户 2026-11-18 要求「文章 / 字幕 / 导读」）。
+ *
+ * ★ id 同时是 `data-read-tab` 的取值与 CSS 选择器的一部分，判据逐项断言这三个 id
+ *   与这三段中文 —— 不要改成从别处拼出来的标签。
+ * ★ 只有带音频的条目才渲染：普通文章没有字幕，也没有可跳回原话的导读。
+ */
+const READ_TABS = Object.freeze([
+  { id: 'article', label: '文章' },
+  { id: 'transcript', label: '字幕' },
+  { id: 'digest', label: '导读' },
+]);
+
+/**
+ * 版本下拉里的**顺序**。
+ *
+ * ★ 「对照」排在译文之后而不是最后：它读的是译文那份数据，用户的心理顺序是
+ *   「原文 → 译文 → 对照 → 改写」—— 把对照甩到改写后面，等于让一个新功能
+ *   藏在另一个功能的后面。
+ */
+const VERSION_ORDER = ['original', 'translation', 'contrast', 'rewrite'];
 const FALLBACK_READING = { ...READING_DEFAULTS };
 /**
  * 侧边栏宽度下限（px）—— **必须**与 `PANEL_CSS` 里的 `--npr-sidebar-min` 是同一个数。
  *
- * 两处各写一遍是有代价的：CSS 那条管「面板宽度算出来的列宽」，这个常数管「拖动与首屏
- * 读回 `npr.listWidth`」—— 两条路径都通向同一个数，写岔了就会出现「拖到 220 不换行、
- * 但窗口一缩就换行」这种只在某个路径上复现的怪状态。
- * `test/sidebar-narrow.test.mjs` 有一条断言把两者钉在一起（从源码里抠 CSS 变量再比）。
+ * 0.71.0 起数值的唯一来源在 `sidebar-width.js`（四个视图共用），这里只是转出给
+ * `test/sidebar-narrow.test.mjs` 那条「CSS 变量 === JS 常数」的契约断言用。
+ * CSS 那条管「面板宽度算出来的列宽」，常数管「拖动与首屏读回」—— 两条路径写岔
+ * 就会出现「拖到 220 不换行、但窗口一缩就换行」这种只在一条路径上复现的怪状态。
  *
  * ★ 256 是量出来的，依据写在 `PANEL_CSS` 里那段注释（工具栏 240 / 单行 chip 244 /
  *   两位数计数 252）。
  */
-export const SIDEBAR_MIN_WIDTH = 256;
+export { SIDEBAR_MIN_WIDTH };
 
 /**
  * 「正在重新生成」进度条。
@@ -524,7 +587,9 @@ export function RegeneratingNotice({ kind, hasBody = false }) {
  * @returns {string} 空串 = 不显示
  */
 export function partialTranslationHint({ active, coverage } = {}) {
-  if (active !== 'translation') return '';
+  // 「对照」读的也是同一份译文：漏翻的段落在对照视图里表现为**只有原文、没有中文**，
+  // 同样需要一个解释，否则用户会以为对照功能坏了。
+  if (active !== 'translation' && active !== 'contrast') return '';
   const total = Number(coverage?.total);
   const done = Number(coverage?.done);
   if (!Number.isFinite(total) || total <= 0) return '';
@@ -560,6 +625,28 @@ export function PartialTranslationNotice({ active, coverage } = {}) {
 }
 
 /**
+ * 「这次只能整篇上下对照」的说明（0.57.0）。
+ *
+ * ★ 为什么必须说这一句
+ * --------------------
+ * 逐段交错的前提是**译文与原文结构完全相同**。2026-10-14 之前生成的译文走的是
+ * 「HTML → Markdown → 模型 → Markdown」，结构早就变了，只能退成「上原文、下译文」。
+ * 不说的话，用户看到一篇没有交错的文章，会以为对照功能没做出来 ——
+ * 而实际上该重做的是那份旧译文（点「重新生成译文」即可）。
+ *
+ * @param {{mode?: string}} props `buildContrastHtml` 的 mode
+ */
+export function ContrastStackedNotice({ mode } = {}) {
+  if (mode !== 'stacked') return null;
+  return (
+    <div className="npr-translation-partial" role="status">
+      <Icon name="info" size={14} />
+      <span>这份译文是旧格式生成的，段落结构和原文对不上，只能整篇上下对照（上面原文、下面译文）。点「重新生成译文」就会变成逐段对照。</span>
+    </div>
+  );
+}
+
+/**
  * 「更多操作」里「重新生成 X」那一条的文案。
  *
  * ★ 为什么文案也要跟着变
@@ -572,8 +659,14 @@ export function PartialTranslationNotice({ active, coverage } = {}) {
  * @param {{active?: string, generating?: string}} props
  */
 export function regenerateMenuLabel({ active, generating }) {
-  if (generating) return `正在重新生成${VERSION_LABELS[generating]}…`;
-  return `重新生成${VERSION_LABELS[active]}`;
+  /**
+   * ★ 「对照」底下没有自己的产物 —— 它渲染的是译文那份数据。
+   *   写成「重新生成对照」会让用户以为要点一下才会出现对照版，
+   *   而真正要重建的是译文。所以这里先把视图映回它依赖的版本。
+   */
+  const kind = (value) => (value === 'contrast' ? 'translation' : value);
+  if (generating) return `正在重新生成${VERSION_LABELS[kind(generating)]}…`;
+  return `重新生成${VERSION_LABELS[kind(active)]}`;
 }
 
 /**
@@ -670,40 +763,15 @@ export function readerBodyHtml({ active, articleHtml, version, baseUrl } = {}) {
 /**
  * 「更多操作」下拉：点菜单外面就关掉。
  *
- * ★ 为什么抽成独立函数，而不是把逻辑写在 useEffect 里
- * ----------------------------------------------------
- * 这里有两个**一写错就静默失效**的细节，必须能被断言钉住：
+ * ★ 判据本体已抽到零依赖的 menu-dismiss.js（连同两个静默失效的坑与 JSDoc）。
+ *   论文页「+」菜单、阅读页「翻译」下拉都要复用它；它们若从本文件取，会绕出
+ *   `ReaderPage → LibraryApp/PapersApp → BookReader/PapersApp → ReaderPage` 的环，
+ *   并把本文件的 refinements.css 拖进「只渲染 BookReader」的测试 bundle。
  *
- *   ① **触发器本身要排除**。⋯ 按钮的 onClick 是 `setMenuOpen(open => !open)`。
- *      如果 pointerdown 先把菜单关掉、紧接着 onClick 又把它翻回来，菜单就**永远关不掉** ——
- *      用户看到的是「点了 ⋯ 没反应」，而且不报错。
- *
- *   ② **菜单本身要排除**。用 pointerdown 关闭时，若把菜单也算作「外面」，
- *      菜单会在 **pointerdown 阶段**就卸载，随后的 click 落在已经消失的按钮上 ⇒
- *      **点任何一条菜单项都什么都不做**（比「关不掉」更严重）。
- *
- * 所以判据独立成这个函数，用真 DOM 桩真跑断言（`test/reader-menu-dismiss.test.mjs`）——
- * 这两个坑都靠「源码里写了 `contains`」这种字符串断言看不出来。
- *
- * ★ 监听器挂在 `document` 上且用**捕获阶段**：宿主 UI 里任何一处 `stopPropagation`
- *   都不该让我们自己的菜单关不掉。
- *
- * @param {EventTarget} doc 真实调用时是 `document`
- * @param {{menu?: Node|null, trigger?: Node|null, close: () => void}} options
- * @returns {() => void} 卸载函数。★ 移除时的捕获标志**必须与添加时一致**，
- *   否则监听器会留在 document 上（菜单每开一次多一个，且旧的还指向过期的 ref）。
+ * ★ 这里保留一次**转发导出**：`test/reader-menu-dismiss.test.mjs` 从本文件取函数
+ *   真跑，接线断言也读本文件的 effect。转发不复制逻辑，判据仍只有一份。
  */
-export function attachMenuDismiss(doc, { menu, trigger, close }) {
-  const onPointerDown = (event) => {
-    const target = event?.target;
-    if (!target) return;
-    if (menu?.contains?.(target)) return;
-    if (trigger?.contains?.(target)) return;
-    close();
-  };
-  doc.addEventListener('pointerdown', onPointerDown, true);
-  return () => doc.removeEventListener('pointerdown', onPointerDown, true);
-}
+export { attachMenuDismiss } from './menu-dismiss.js';
 
 let stylesReady = false;
 /**
@@ -787,6 +855,16 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   const [showAddFeed, setShowAddFeed] = useState(false);
   /** 灵感浮层（`L` 键）。挂在 ReaderPage 而不是日记页：订阅与书架两种阅读场景共用一份。 */
   const [quickOpen, setQuickOpen] = useState(false);
+  /**
+   * 按 `L` 那一刻**正文里的选区**（已经转成 `> 引用` 块，空串 = 没选）。
+   *
+   * ★ 必须在打开浮层（`setQuickOpen`）之前快照：textarea 一拿到焦点，浏览器就把正文的
+   *   选区折叠掉，`captureSelection` 随即把 `passage` 清成 `null`。等浮层渲染时再读，
+   *   十次有十次已经空了。
+   * ★ 存成字符串而不是存整个 `passage`：浮层只需要正文，不需要那条 passage 的
+   *   `articleKey` / `quoteId`（那是「摘录」链路要的，两件事别混）。
+   */
+  const [quickSeed, setQuickSeed] = useState('');
   /**
    * 书架正在读的那本书 / 第几页 / 第几章 —— 灵感速记用它写 `meta`（「灵感流转」）。
    *
@@ -890,18 +968,18 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   const [modelInfo, setModelInfo] = useState(null);
   /* ★ 首屏读回也要夹（0.45.2）：老用户的 localStorage 里存着 220（旧拖动下限），
      不夹的话「一打开就是换行 + 齿轮被裁」，而用户根本没拖过 —— 那是最难自查的一类。 */
-  const [listWidth, setListWidth] = useState(() => Math.max(SIDEBAR_MIN_WIDTH, Number(localStorage.getItem('npr.listWidth')) || 300));
+  // 四个视图共用一个默认值与一个 key；旧 RSS key 的迁移在 readSidebarWidth() 里。
+  const [listWidth, setListWidth] = useState(readSidebarWidth);
   const [askContext, setAskContext] = useState(null);
   const activeChannelRef = useRef(channel);
   activeChannelRef.current = channel;
   /**
    * `reading` 的镜像。
    *
-   * ★ 必须走 ref：下面「恢复上次阅读位置」那个 effect 的依赖是 `[]`，它拿到的是
-   *   **首渲染**的 `openArticle` 闭包，里面的 `reading` 还是 `FALLBACK_READING`。
-   *   自动翻译的开关正是从 `reading` 上读的 —— 直接读 state 的话，用户开着
-   *   「英文原文自动翻译」重启应用、恢复到上次那篇英文文章时，翻译**不会触发**，
-   *   而且没有任何报错（开关看着是开的）。
+   * ★ 必须走 ref：`openArticle` 是 async 的，`shouldAutoTranslate` 在
+   *   `await api.getArticle()` **之后**才读这个开关。若直接读闭包里的 `reading`，
+   *   拿到的是「点开这篇那一刻」的旧值 —— 用户刚改过默认版本时按旧值判断，
+   *   自动翻译可能**不按最新设置触发**，且没有任何报错（开关看着是开的）。
    */
   const readingRef = useRef(reading);
   readingRef.current = reading;
@@ -963,6 +1041,15 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   const articleRequest = useRef(0);
   /** 上一次「已同步过浏览状态」的频道（`channel` 变了才去读 localStorage）。 */
   const browseSync = useRef('');
+  /**
+   * 列表里**现在摆着的是哪个频道**的文章。
+   *
+   * ★ 只用来回答一件事：这次 effect 是「换频道」还是「换筛选 / 搜索词」。
+   *   前者必须清空（否则会短暂显示另一个源的文章），后者**不许清空** ——
+   *   用户 2026-11-11：「点击『全部』『未读』…… 切换的时候，会闪一下。」
+   *   闪的就是这条 effect 里的 `setPage({ entries: [] })`，见下面那段注释。
+   */
+  const listedChannel = useRef('');
   /** 待还原的列表滚动位置；`null` = 没有待还原的。 */
   const pendingListScroll = useRef(null);
   /** 列表容器本身（记滚动位置）。 */
@@ -991,11 +1078,13 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
    *
    * @param {string} message
    * @param {boolean} [isError]
-   * @param {{label: string, onClick: () => void}} [action] 挂一颗按钮（撤销 / 查看）
+   * @param {{label: string, onClick: () => void} | Array<{label: string, onClick: () => void}>} [action]
+   *   挂按钮（撤销 / 查看）。**可以是数组**（0.72.0）：灵感速记的回执同时给
+   *   「撤销」和「去看看」，只有一颗时用户要么撤销要么去看，做不了第二个。
    *
    * ★ 带按钮的提示**要活得更久**（8s vs 2.4s）：2400ms 是「扫一眼就走」的时长，
    *   而「撤销」要求用户读完那句话之后再做一个决定 —— 按原时长，按钮在他找到
-   *   鼠标之前就消失了，等于没给撤销。
+   *   鼠标之前就消失了，等于没给撤销。多一颗按钮不延长时长：8s 已经够读完一句话。
    */
   const notify = (message, isError = false, action) => {
     setToast({ message, isError, action });
@@ -1087,6 +1176,25 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
 
   useEffect(() => {
     localStorage.setItem('npr.channel', channel);
+    /*
+     * ★ 换频道 vs 换筛选 —— 两者的「旧列表还能不能留」是相反的。
+     *
+     * 这里原来不分情况，一律 `setPage({ entries: [] })` 再请求。换筛选时那一帧
+     * 就是用户 2026-11-11 说的「闪一下」：列表整块消失 → 「正在加载…」→ 新列表，
+     * 三帧里换两次内容。顺着它还带走了两样东西 ——
+     *   ① 列表滚动位置归零（内容回来时从顶上开始）；
+     *   ② `page.hiddenCount` 变 `undefined` ⇒ `hiddenCount > 0` 为 false ⇒
+     *      「已隐藏 N」那颗 chip 消失，底座里从 4 颗变 3 颗、等分宽度重算，
+     *      整排 chip 左右跳一下，再随数据回来跳回去 —— 这一下比列表更晃眼。
+     *
+     * 换筛选 / 换搜索词是**同一批数据的另一种取法**，旧条目在被替换前仍然可用
+     * （本地宿主通常几十毫秒就回），保留它只是「内容原地替换」，不会亮出一块空白。
+     * 换频道才是「换一整个世界」，那一条继续清空。
+     */
+    if (listedChannel.current !== channel) {
+      listedChannel.current = channel;
+      setPage({ entries: [], hasMore: false, nextCursor: undefined });
+    }
     /* 切到一个新频道时，先把**这个源自己**的筛选 / 搜索词装回去。
      *
      * ★ 恢复完立刻 `return`，这一轮**不发请求**：`setFilter` 是异步的，此刻
@@ -1107,7 +1215,6 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
       pendingListScroll.current = saved.scroll;
     }
     saveChannelState(channel, { filter, query }, localStorage);
-    setPage({ entries: [], hasMore: false, nextCursor: undefined });
     void loadPage(undefined, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channel, filter, query]);
@@ -1214,9 +1321,9 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     if (request !== articleRequest.current) return;
     if (!data) { setSelected({ error: true, key }); return; }
     setSelected({ ...data, article: { ...data.article, read: true }, active: resolveReadingVersion(restoreVersion || reading.defaultVersion, data) });
+    // ★ 打开即回顶（0.84.5），不恢复上次读到的位置。放在 setSelected 之后：
+    //   早一步滚的是上一篇的旧 scroller，新正文一渲染又停在中间。
     rootRef.current?.querySelector('.npr-reader')?.scrollTo?.({ top: 0 });
-    // 先回顶（别让用户看到上一篇的中间），等正文渲染完再由 effect 滚到上次读到的地方
-    setRestoreFor(key);
     if (shouldAutoTranslate(readingRef.current, data)) void autoTranslate(key, request);
     if (data.article?.read === false) {
       void api.setRead([key], true).catch(e => notify(e.message, true));
@@ -1518,14 +1625,13 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     const startX = event.clientX;
     let width = listWidth;
     const move = (moveEvent) => {
-      /* 拖动下限 = SIDEBAR_MIN_WIDTH（0.45.2）。原来写死 220：那正是用户拖到底时
-         「已隐藏 1 换行 + 齿轮被裁」的宽度 —— 下限比「排得开」还窄，等于允许用户
-         把自己拖进一个坏布局。 */
-      width = Math.round(Math.min(Math.max(startX === 0 ? 300 : (listWidth + moveEvent.clientX - startX), SIDEBAR_MIN_WIDTH), 520));
+      /* 夹取与持久化都走共用模块（0.71.0）：下限仍是量出来的 256，
+         上限 520；原来写死 220 会让用户把自己拖进「chip 换行 + 齿轮被裁」。 */
+      width = clampSidebarWidth(startX === 0 ? SIDEBAR_WIDTH : (listWidth + moveEvent.clientX - startX));
       setListWidth(width);
     };
     const up = () => {
-      localStorage.setItem('npr.listWidth', String(width));
+      saveSidebarWidth(width);
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
     };
@@ -1569,6 +1675,9 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
       if (dialog || pickerOpen || askContext || appearanceOpen || menuOpen || rowMenu || addMenu || showAddFeed) return;
       if (event.target?.closest?.('input,textarea,select,[contenteditable="true"]')) return;
       event.preventDefault();
+      // 有选区就把这段正文带进浮层（0.72.0 P1）。分工见 `seedBlock` 的注释：
+      // 「摘录到灵感」= 不编辑直接存；`L` = 带进来接着写。
+      setQuickSeed(seedBlock(passage?.quote));
       setQuickOpen(true);
     };
     window.addEventListener('keydown', onKey);
@@ -1622,6 +1731,9 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     //   `test/reader-focus-scope.test.mjs` 逐字守着 `if (mode === 'library') setFocused(false)`
     //   那一句（并进去会让它红，而它守的正是「书架页的书单被藏掉」那次真机事故）。
     if (mode === 'diary') setFocused(false);
+    // ★ 论文页同理（2026-11-06）。它也不带订阅那一列，专注状态留着只会让
+    //   「从论文切回订阅」时莫名专注一次。
+    if (mode === 'paper') setFocused(false);
     if (mode !== 'library') return;
     // 还在路上的正文请求要作废：它回来时会把刚清掉的 selected 又填上。
     articleRequest.current += 1;
@@ -1633,22 +1745,481 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
 
   const activeArticle = selected && !selected.loading ? selected : undefined;
   const versions = activeArticle?.versions;
-  const active = activeArticle?.active ?? 'original';
+  /**
+   * 「对照」是**派生视图**，没有自己的产物：译文不在了（换文章、被清缓存、
+   * 上次读的这篇本来就没译过），它就必须当场退回原文 —— 否则版本下拉里
+   * 那个值会落在一个不存在的选项上（React 报 value 不匹配，界面显示空白）。
+   */
+  const translationReady = contrastReadable(versions);
+  const remembered = activeArticle?.active ?? 'original';
+  const active = remembered === 'contrast' && !translationReady ? 'original' : remembered;
   /** 「更多操作」里三条与版本相关的条目的可见性。策略在 `menuItemVisibility` 里（可测）。 */
   const menuItems = menuItemVisibility({ active });
   const audioUrl = articleAudioUrl(activeArticle?.article);
+  /**
+   * 单集字幕（P0）。
+   *
+   * ★ 只有**带音频的条目**才去取字幕：播客的 `<podcast:transcript>` 与音频是一对，
+   *   而普通文章没有音频，取字幕只会白跑一次请求。
+   * ★ `transcriptRequest` 是「作废票」：用户连着点两集时，先发的那次请求可能后回来，
+   *   回来时 `activeArticle` 已经换了。不判票号的话，界面会把**上一集**的字幕挂到
+   *   这一集下面 —— 而且看起来完全正常（都是英文、都有时间戳）。
+   * ★ 接口缺失（旧宿主）时落到 `empty`，面板会说「这期没有字幕」，不会一直转圈。
+   */
+  const audioKey = audioUrl ? activeArticle?.article?.key ?? '' : '';
+  const [audioController, setAudioController] = useState(null);
+  const [transcript, setTranscript] = useState({ status: 'idle', data: null, error: '' });
+  const transcriptRequest = useRef(0);
+  /**
+   * 字幕中文层（P0 的翻译）。
+   *
+   * ★ `translations` 是**与 paragraphs 等长**的字符串数组，空串表示「这段还没译」。
+   *   不另存「已译集合」：两套结构一定会漂移，而漂移的表现是「某几段永远显示英文」
+   *   —— 用户会以为是模型漏翻。
+   * ★ `translationTicket` 与 `transcriptRequest` 是两个票号，别合并：换集时字幕
+   *   可能要重抓，而翻译可能正在跑；一个票号管两件事，切集时必然有一边作废不了。
+   */
+  const [translation, setTranslation] = useState({ status: 'idle', translations: [], total: 0, done: false, error: '' });
+  const translationTicket = useRef(0);
+  /**
+   * 本机识别（0.82.0）：订阅源没字幕时，用本机模型把音频转成字幕。
+   *
+   * ★ 状态放在这一层而不是面板里：面板会随「收听视图」开关**卸载**（`listenMode`
+   *   为 false 时它不在树上）。识别一集要几分钟，状态跟着面板一起没了的话，
+   *   用户切回文章再切回来，进度就归零 —— 而后台其实还在跑。
+   * ★ `asrTicket` 与另外两个票号分开：「换集」要作废识别轮询，但字幕抓取与翻译
+   *   各有可能正在跑；共用票号会让换集时只作废其中一件。
+   */
+  const [asr, setAsr] = useState({
+    status: 'idle', progress: 0, stage: '', done: 0, total: 0, segments: 0, error: '', preview: [], sizeMb: 0,
+    /**
+     * 环境探测结果（缺哪一件）。`undefined` = 还没问过，与「问过、都不缺」要分开：
+     * 前者不能显示「都就绪」，后者不该显示「检查中」。
+     */
+    missing: undefined,
+  });
+  const asrTicket = useRef(0);
+  /**
+   * AI 导读（0.84.0）。
+   *
+   * ★ 「读缓存」与「生成」是**两条独立的路**（`episodeDigest(key, false, false)` /
+   *   进收听视图时只读缓存，绝不顺手生成 —— 否则用户只是切过去听个响，就白花一次
+   *   模型调用，而他并没有点任何按钮。
+   * ★ `focus` 是「跳到第几秒」的**令牌**（带自增 token）：同一个时间戳连点两次也要
+   *   重新滚一次，只传秒数的话第二次点击 props 没变、effect 不跑，看起来像「点了没反应」。
+   */
+  const [digest, setDigest] = useState({ status: 'idle', data: null, error: '', cached: false });
+  const digestTicket = useRef(0);
+  const [focus, setFocus] = useState({ at: 0, token: 0 });
+  /**
+   * 「双语」是**播放条与字幕面板共用**的一个开关，所以状态必须放在这一层。
+   *
+   * ★ 两边各存一份的结果是可预见的：播放条按下去，面板里还是英文，用户会以为
+   *   那个按钮没生效（而它其实生效了，只是作用在另一个地方）。
+   * ★ 译完自动开一次（`autoZh`）：用户点「译成中文」的意图就是「我想看中文」，
+   *   译好了还要再点一次「显示中文」是多余的一步。但只自动开一次 —— 他手动
+   *   关掉之后，下一次分批回来不该再把他推回去。
+   */
+  const [langMode, setLangMode] = useState('source');
+  const autoZh = useRef(false);
+  const zhReady = translatedCount(translation.translations);
+  useEffect(() => {
+    if (zhReady > 0 && !autoZh.current) {
+      autoZh.current = true;
+      // 译完自动进「双语」：用户点「译成中文」是想听懂，不是想把原文藏起来。
+      // 只推一次 —— 他手动切回「原文」之后，下一批译文回来不该再把他推回去。
+      setLangMode((mode) => (mode === 'source' ? 'both' : mode));
+    }
+    if (zhReady === 0) autoZh.current = false;
+  }, [zhReady]);
+  const cycleLang = useCallback(() => setLangMode((mode) => nextLang(mode)), []);
+  /**
+   * 「收听视图」开关（0.81.0）。
+   *
+   * ★ 为什么字幕要**离开正文那一页**：一集 120 段字幕常驻在文章里，等于把正文
+   *   挤到屏幕外 —— 「读」和「听」是两种任务，同时摆在一条竖排里谁都不好用。
+   *   参考 SubCast 的单集页：标题 + 播放器 + 一屏字幕，正文另有一页。
+   * ★ 实现上**不卸载播放器**：`<audio>` 一旦卸载就等于换了一个播放器，位置回到
+   *   0 秒、正在听的那一段也就丢了。所以播放条留在文章容器里的固定位置，切视图
+   *   只给容器加 `data-listen` / `data-read-tab`，让 CSS 把该隐的隐掉；
+   *   `audio` 元素从头到尾是同一个。
+   * ★ 0.84.1 起是**三态互斥**：文章 / 字幕 / 导读。`data-listen` 仍表示「不在文章视图」
+   *   （正文要不要隐），`data-read-tab` 决定字幕与导读哪一块可见 —— 两者必须从**同一个**
+   *   状态派生，各存一份就会漂出「正文藏了、两块面板也全藏」的空白页。
+   */
+  const [readTab, setReadTab] = useState('article');
+  const listenMode = readTab !== 'article';
+
+  const loadTranscript = useCallback(async ({ refresh = false } = {}) => {
+    if (audioKey === '') {
+      setTranscript({ status: 'idle', data: null, error: '' });
+      return;
+    }
+    if (typeof api?.getTranscript !== 'function') {
+      setTranscript({ status: 'empty', data: null, error: '' });
+      return;
+    }
+    transcriptRequest.current += 1;
+    const ticket = transcriptRequest.current;
+    setTranscript((previous) => ({ status: 'loading', data: previous.data, error: '' }));
+    try {
+      const result = await api.getTranscript(audioKey, refresh);
+      if (ticket !== transcriptRequest.current) return;
+      const data = result?.transcript ?? null;
+      setTranscript(data ? { status: 'ready', data, error: '' } : { status: 'empty', data: null, error: '' });
+    } catch (error) {
+      if (ticket !== transcriptRequest.current) return;
+      setTranscript({ status: 'error', data: null, error: error?.message ?? String(error) });
+    }
+  }, [api, audioKey]);
+
+  /**
+   * 出现「这期没有字幕」时顺手探一次本机环境（0.82.0）。
+   *
+   * ★ 为什么不是挂载时就探：探测要遍历 PATH 与几个目录，属冷启动开销。只有真的
+   *   撞上「没字幕」才需要知道「能不能自己识别」。
+   * ★ 探到 `missing` 之后才谈得上「先补哪一步」：缺 ffmpeg 时下 181 MB 模型也
+   *   没用，界面得直接说清，而不是让用户点一次按钮吃一次 409。
+   */
+  useEffect(() => {
+    if (transcript.status !== 'empty' || audioKey === '') return undefined;
+    if (typeof api?.asrStatus !== 'function') return undefined;
+    let cancelled = false;
+    api.asrStatus().then((status) => {
+      if (cancelled) return;
+      setAsr((previous) => ({
+        ...previous,
+        missing: Array.isArray(status?.missing) ? status.missing : [],
+        /**
+         * 要下载多少：qwen 那条是 1.0 GB，whisper 按选中的模型算。
+         * ★ 原来只查 `catalog`（whisper 的模型表），装了 Ollama 的环境会显示
+         *   「约 181 MB」—— 而实际要下的是 1 GB，用户等到一半发现体积不对。
+         */
+        sizeMb: status?.engineChoice === 'qwen'
+          ? (status?.ollama?.recommend?.sizeMb ?? 1024)
+          : (status?.catalog?.find((item) => item.id === status.defaultModel)?.sizeMb ?? 0),
+        engine: status?.engineChoice ?? '',
+        reason: status?.reason ?? '',
+      }));
+    }).catch(() => {
+      // 探测失败不拦截手动开始：真正的原因会在开始时以具体文案报出来。
+    });
+    return () => { cancelled = true; };
+  }, [api, audioKey, transcript.status]);
+
+  /**
+   * 本机识别：准备环境 → 启动 → 轮询到结束（0.82.0）。
+   *
+   * ★ 为什么是「轮询」而不是等一个长请求返回：一集 1–3 小时，识别要几分钟到十几分钟。
+   *   做成一个 Remote 调用的话，界面在整段时间里没有任何进展，用户分不清「在跑」
+   *   与「卡死」，也没法在中途停下。
+   * ★ 为什么准备阶段也要轮询：模型 181 MB，在慢网络上要几分钟。`prepareAsr` 立刻
+   *   返回并在后台下载，进度只能靠轮询读 `setup.progress`。
+   * ★ 每轮都先查 `alive()`：换集或关面板后，已经在飞的那次请求回来不该再写状态 ——
+   *   否则用户会看到「新的一集」带着「上一集 3/12 片」的进度条。
+   */
+  const transcribe = useCallback(async () => {
+    if (audioKey === '' || typeof api?.asrStatus !== 'function') return;
+    asrTicket.current += 1;
+    const ticket = asrTicket.current;
+    const alive = () => ticket === asrTicket.current;
+    const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+    try {
+      let status = await api.asrStatus();
+      if (!alive()) return;
+      const sizeMb = status.engineChoice === 'qwen'
+        ? (status.ollama?.recommend?.sizeMb ?? 1024)
+        : (status.catalog?.find((item) => item.id === status.defaultModel)?.sizeMb ?? 0);
+      setAsr((previous) => ({
+        ...previous,
+        status: 'preparing',
+        progress: 0,
+        stage: status.engineChoice === 'qwen' ? 'model' : 'engine',
+        error: '',
+        sizeMb,
+        engine: status.engineChoice ?? '',
+        reason: status.reason ?? '',
+      }));
+      if (!status.ready) {
+        // ★ 引擎由宿主决定（qwen / whisper / cloud），客户端不猜：它对「这台机器
+        //   装了 Ollama 还是有 ffmpeg」一无所知，猜错就会去下 1 GB 的模型。
+        await api.prepareAsr(status.defaultModel || '', status.engineChoice);
+        for (;;) {
+          await wait(1200);
+          if (!alive()) return;
+          status = await api.asrStatus();
+          if (!alive()) return;
+          setAsr((previous) => ({
+            ...previous,
+            status: 'preparing',
+            progress: status.setup?.progress ?? 0,
+            stage: status.setup?.stage ?? '',
+          }));
+          if (status.setup?.status === 'ready') break;
+          if (status.setup?.status === 'error') throw new Error(status.setup.error || '下载没成功');
+        }
+      }
+      const job = await api.startTranscription(audioKey, status.defaultModel || '', status.engineChoice);
+      if (!alive()) return;
+      setAsr((previous) => ({
+        ...previous,
+        status: 'running',
+        done: job.done ?? 0,
+        total: job.total ?? 0,
+        segments: job.segments ?? 0,
+        preview: job.preview ?? [],
+        engine: job.engine ?? previous.engine,
+        error: '',
+      }));
+      for (;;) {
+        await wait(1200);
+        if (!alive()) return;
+        const now = await api.transcriptionStatus(audioKey);
+        if (!alive()) return;
+        setAsr((previous) => ({
+          ...previous,
+          status: 'running',
+          done: now.done ?? 0,
+          total: now.total ?? 0,
+          segments: now.segments ?? 0,
+          preview: now.preview ?? [],
+        }));
+        if (now.status === 'done') {
+          // 完成后**重读一遍字幕**（走缓存，不联网）：宿主刚落盘，这一读就把面板换成正文。
+          await loadTranscript();
+          return;
+        }
+        if (now.status === 'cancelled') {
+          setAsr((previous) => ({ ...previous, status: 'cancelled' }));
+          return;
+        }
+        if (now.status === 'error') throw new Error(now.error || '识别失败');
+      }
+    } catch (error) {
+      if (!alive()) return;
+      setAsr((previous) => ({ ...previous, status: 'error', error: error?.message ?? String(error) }));
+    }
+  }, [api, audioKey, loadTranscript]);
+
+  /** 停掉识别。宿主侧停止失败也不用提示：那一轮的轮询会自己走到 `cancelled`。 */
+  const cancelTranscribe = useCallback(async () => {
+    if (audioKey === '' || typeof api?.cancelTranscription !== 'function') return;
+    try {
+      await api.cancelTranscription(audioKey);
+    } catch {
+      // 宿主已经结束这个任务时这里会报错，而用户要的结果（别再跑）已经达成。
+    }
+  }, [api, audioKey]);
+
+  /**
+   * 读一次导读缓存（**不生成**）。
+   *
+   * ★ 只在有字幕时调：没字幕时宿主会回 `no-transcript`，那也要显示出来（用户才知道
+   *   「不是没做，是还没有字幕」），所以这里不提前 return，让宿主给结论。
+   */
+  const loadDigest = useCallback(async () => {
+    if (audioKey === '' || typeof api?.episodeDigest !== 'function') return;
+    const ticket = digestTicket.current + 1;
+    digestTicket.current = ticket;
+    const alive = () => ticket === digestTicket.current;
+    try {
+      // 第三个参数 `false` = 只读缓存，不生成。进面板时必须是这个调用。
+      const result = await api.episodeDigest(audioKey, false, false);
+      if (!alive()) return;
+      if (result?.digest) {
+        setDigest({ status: 'ready', data: result.digest, error: '', cached: result.cached === true });
+        return;
+      }
+      const reason = result?.reason ?? '';
+      if (reason === 'no-transcript') setDigest({ status: 'no-transcript', data: null, error: '', cached: false });
+      else if (reason === 'too-short') setDigest({ status: 'too-short', data: null, error: '', cached: false });
+      else setDigest({ status: 'idle', data: null, error: '', cached: false });
+    } catch {
+      // 读缓存失败不该弹错：真正需要报错的是「生成」那一步。
+      if (alive()) setDigest({ status: 'idle', data: null, error: '', cached: false });
+    }
+  }, [api, audioKey]);
+
+  /** 生成导读（**只有用户点按钮时才走这里**，会调用一次模型）。 */
+  const generateDigest = useCallback(async () => {
+    if (audioKey === '' || typeof api?.episodeDigest !== 'function') return;
+    const ticket = digestTicket.current + 1;
+    digestTicket.current = ticket;
+    const alive = () => ticket === digestTicket.current;
+    setDigest((previous) => ({ ...previous, status: 'loading', error: '' }));
+    try {
+      const result = await api.episodeDigest(audioKey, true, true);
+      if (!alive()) return;
+      if (result?.digest) {
+        setDigest({ status: 'ready', data: result.digest, error: '', cached: false });
+        return;
+      }
+      const reason = result?.reason ?? '';
+      if (reason === 'no-transcript') setDigest({ status: 'no-transcript', data: null, error: '', cached: false });
+      else if (reason === 'too-short') setDigest({ status: 'too-short', data: null, error: '', cached: false });
+      else setDigest({ status: 'error', data: null, error: '模型没有返回内容，稍后再试', cached: false });
+    } catch (error) {
+      if (alive()) setDigest({ status: 'error', data: null, error: error?.message ?? String(error), cached: false });
+    }
+  }, [api, audioKey]);
+
+  /**
+   * 导读里点时间戳：音频跳过去，字幕滚到那一段。
+   *
+   * ★ 三件事必须一起做：切到字幕 tab、seek、滚动高亮。缺切页时字幕还是
+   *   display:none，滚动等于没做；只 seek 不滚动，用户看不到「跳到了哪一句」；
+   *   只滚动不 seek，「点时间戳」就退化成书签。`play: true` 是刻意的：点时间戳的
+   *   意图是「从这句开始听」。
+   */
+  const jumpToTime = useCallback((seconds) => {
+    // ★ 三选一 tab 之后必须切到字幕页：时间戳按钮长在导读面板里，而字幕面板
+    //   在同一时刻是 display:none —— 对隐藏元素调 scrollIntoView 什么也不会发生，
+    //   用户只听到声音跳了、却看不到跳到了哪一句。只 seek 不切页等于把
+    //   「点时间戳跳回原话」砍掉了一半。
+    setReadTab('transcript');
+    audioController?.seek?.(seconds, { play: true });
+    setFocus((previous) => ({ at: seconds, token: previous.token + 1 }));
+  }, [audioController]);
+
+  /**
+   * 进入收听视图且拿到字幕之后，读一次导读缓存。
+   *
+   * ★ 依赖里只放 `transcript.status`（不放假数据对象）：前者是枚举，后者每次渲染
+   *   都是新引用，会让这个 effect 每帧重发一次请求。
+   */
+  useEffect(() => {
+    if (!listenMode || audioKey === '' || transcript.status !== 'ready') return;
+    void loadDigest();
+  }, [listenMode, audioKey, transcript.status, loadDigest]);
+
+  useEffect(() => {
+    // 换集时**不要**在这里 `setAudioController(null)`。
+    //
+    // ★ 踩过的坑（2026-11-17 实测）：React 在 commit 阶段**先跑子组件的 effect、
+    //   再跑父组件的 effect**。所以「MediaDock 发布控制器 → TranscriptPanel 订阅 →
+    //   父组件把它清成 null」这个顺序是必然发生的；而父组件这次写入不会再触发
+    //   MediaDock 的 effect 重跑（它的依赖只有 key），于是控制器**永久是 null**。
+    //   表现：字幕不跟着高亮、点段落也不跳，但播放条一切正常 —— 看起来像
+    //   「字幕面板没接上时间」，实际是被自己人清掉了。
+    // ★ 清理仍然有人做：`MediaDock` 卸载时（换集 / 音频地址变空）在自己的
+    //   effect cleanup 里 `onController(null)`，那一次发生在**新子组件 effect 之前**，
+    //   不会被谁覆盖。所有权归发布者，才不会被时序咬。
+    // ★ 换集时退出收听视图：新的一集可能根本没有音频，留在收听页只会看到
+    //   一个空壳（而且播放条已经换成了另一个播放器）。
+    setReadTab('article');
+    // 换集时作废正在跑的识别轮询，并把面板上的进度清掉。任务本身留在宿主里继续跑
+    // （用户可能只是切到另一集看一眼），但这一页不能再显示上一集的「3/12 片」。
+    asrTicket.current += 1;
+    setAsr({ status: 'idle', progress: 0, stage: '', done: 0, total: 0, segments: 0, error: '', preview: [], sizeMb: 0 });
+    // 导读同理：作废在飞的读取/生成，并清空上一集的内容（否则会看到「新的一集」
+    // 顶着上一集的章节与时间戳，点下去跳到的是另一集的位置）。
+    digestTicket.current += 1;
+    setDigest({ status: 'idle', data: null, error: '', cached: false });
+    setFocus({ at: 0, token: 0 });
+    void loadTranscript();
+  }, [loadTranscript]);
+
+  /**
+   * 读已经译好的字幕（纯读盘，不发模型）。
+   *
+   * ★ 挂载就读：用户上次译过的集子，重开应当直接是中文，而不是再点一次「译成中文」
+   *   再等两分钟 —— 那样缓存等于没有。
+   * ★ 接口缺失（旧宿主）时静默：用户没做错任何事，弹一个错只会让他困惑。
+   */
+  const loadCachedTranslation = useCallback(async () => {
+    if (audioKey === '' || typeof api?.getTranscriptTranslation !== 'function') return;
+    const ticket = translationTicket.current;
+    try {
+      const result = await api.getTranscriptTranslation(audioKey);
+      if (ticket !== translationTicket.current) return;
+      const texts = Array.isArray(result?.translations) ? result.translations : [];
+      if (translatedCount(texts) === 0) return;
+      setTranslation({
+        status: 'ready',
+        translations: texts,
+        total: Number.isFinite(result?.total) ? result.total : texts.length,
+        done: result?.done === true,
+        error: '',
+      });
+    } catch {
+      // 旧宿主没有这个方法：当作「没译过」。
+    }
+  }, [api, audioKey]);
+
+  /**
+   * 逐个批次翻到完。
+   *
+   * ★ 恒从 0 起，不记「上次翻到第几段」：宿主每批都会读盘上的译文、跳过已译段，
+   *   所以「继续翻」与「从头翻」是同一条代码路径。多几次本地读盘，换来的是
+   *   **没有第二种要对齐的状态** —— 那种状态一旦偏一段，中文就会整体错位。
+   */
+  const translate = useCallback(async () => {
+    if (audioKey === '' || typeof api?.translateTranscriptBatch !== 'function') return;
+    translationTicket.current += 1;
+    const ticket = translationTicket.current;
+    setTranslation((previous) => ({ ...previous, status: 'loading', error: '' }));
+    try {
+      const result = await runTranscriptTranslation({
+        api,
+        key: audioKey,
+        start: 0,
+        isCancelled: () => ticket !== translationTicket.current,
+        onProgress: ({ translations, total, done }) => {
+          if (ticket !== translationTicket.current) return;
+          setTranslation({ status: 'loading', translations, total, done, error: '' });
+        },
+      });
+      if (ticket !== translationTicket.current || result === null) return;
+      setTranslation({ status: 'ready', translations: result.translations, total: result.total, done: result.done, error: '' });
+    } catch (error) {
+      if (ticket !== translationTicket.current) return;
+      setTranslation((previous) => ({ ...previous, status: 'error', error: error?.message ?? String(error) }));
+    }
+  }, [api, audioKey]);
+
+  useEffect(() => {
+    // 作废上一集正在跑的翻译循环：它回来时会把上一集的中文挂到这一集下面。
+    translationTicket.current += 1;
+    setTranslation({ status: 'idle', translations: [], total: 0, done: false, error: '' });
+    void loadCachedTranslation();
+  }, [loadCachedTranslation]);
+
   const currentChannel = channels.find((item) => item.key === channel);
   // 正文 HTML 的决策在 `readerBodyHtml` 里（纯函数，可被真跑）：
   // 原文 → sanitize(article.html)；新译文 → 直接用生成时 sanitize 过的 HTML；
   // 旧译文 → sanitize(markdownToHtml(markdown))。
-  const bodyHtml = useMemo(() => (activeArticle
-    ? readerBodyHtml({
+  /**
+   * 对照视图的产物在 `buildContrastHtml` 里（纯函数，可被真跑）。
+   *
+   * ★ 只在**真的选了对照**时才算：别的视图不该为它多付一次 HTML 扫描。
+   * ★ 译文取的是 `readerBodyHtml('translation')` —— 旧译文（只有 markdown 的那批）
+   *   也走同一条路，于是「旧译文能不能逐段对照」由 `buildContrastHtml` 的**结构比对**
+   *   决定（对不上就退成整篇上下），而不是在这里靠字段猜一遍 —— 猜的判据一定会漂移。
+   */
+  const contrast = useMemo(() => {
+    if (active !== 'contrast' || !activeArticle) return null;
+    const baseUrl = activeArticle.article?.url;
+    return buildContrastHtml({
+      articleHtml: readerBodyHtml({ active: 'original', articleHtml: activeArticle.html, baseUrl }),
+      translatedHtml: readerBodyHtml({
+        active: 'translation',
+        articleHtml: activeArticle.html,
+        version: versions?.translation,
+        baseUrl,
+      }),
+    });
+  }, [activeArticle, active, versions]);
+
+  const bodyHtml = useMemo(() => {
+    if (!activeArticle) return '';
+    if (active === 'contrast') return contrast?.html ?? '';
+    return readerBodyHtml({
       active,
       articleHtml: activeArticle.html,
       version: versions?.[active],
       baseUrl: activeArticle.article?.url,
-    })
-    : ''), [activeArticle, active, versions]);
+    });
+  }, [activeArticle, active, versions, contrast]);
   // 标题行：译文 / 改写用它们自己的中文标题（正文里的 H1 已在生成时被去掉）。
   const title = readerTitle({ active, versions, article: activeArticle?.article });
 
@@ -1717,42 +2288,15 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     }
   };
 
-  /* ---- 阅读位置（0.44.9）------------------------------------------------
-   * 之前 `openArticle` 里写死 scrollTo({ top: 0 })：长文读一半被叫走，回来从头开始。
-   * `read: true/false` 只回答「读没读过」，回答不了「读到哪」。
-   * ★ 存**比例**不存像素：换个窗口宽度，同一段落在完全不同的 scrollTop 上。
+  /* ---- 打开文章一律回顶（0.84.5）--------------------------------------
+   * 0.44.9 起这里存过「读到哪」（`npr.pos.*`）并在下次打开时按比例滚回去。
+   * 用户 2026-11-18 明确要求：每次从侧边栏点文章都从头开始 —— 点开一篇播客
+   * 精读却落在上一回读到的末尾，看起来像「打开错了文章」。
+   * ★ 整条链路一起撤：读取 effect、滚动写盘 effect、`read-position.js` 模块和
+   *   它的测试都删掉。只留写入不读等于埋一条死持久化，下次又会被当成功能加回来。
+   *   老用户 localStorage 里的 `npr.pos.*` 不动：没人读了，专门清理反而多一次写盘。
+   * ★ 回顶动作在 `openArticle` 里、拿到正文后立刻做；这里不再有任何回滚逻辑。
    */
-  const [restoreFor, setRestoreFor] = useState('');
-  useEffect(() => {
-    if (!restoreFor || restoreFor !== selected?.article?.key) return;
-    const scroller = proseRef.current?.closest('.npr-reader');
-    if (!scroller) return;
-    const ratio = readPosition(restoreFor, localStorage);
-    if (ratio > 0) {
-      scroller.scrollTo({ top: scrollFromRatio(ratio, scroller.scrollHeight, scroller.clientHeight), behavior: 'auto' });
-    }
-    // 恢复完立刻清掉：留着的话切版本（bodyHtml 变化）会再滚一次，
-    // 把用户自己滚走的位置又拽回去 —— 看着像「翻译文就跳回上次的位置」。
-    setRestoreFor('');
-  }, [bodyHtml, restoreFor, selected?.article?.key]);
-
-  useEffect(() => {
-    const scroller = proseRef.current?.closest('.npr-reader');
-    const key = selected?.article?.key;
-    if (!scroller || !key) return undefined;
-    let timer = 0;
-    const flush = () => {
-      timer = 0;
-      savePosition(key, scrollRatio(scroller.scrollTop, scroller.scrollHeight, scroller.clientHeight), localStorage);
-    };
-    const onScroll = () => { if (timer === 0) timer = setTimeout(flush, 400); };
-    scroller.addEventListener('scroll', onScroll, { passive: true });
-    return () => {
-      scroller.removeEventListener('scroll', onScroll);
-      // 切文章前把最后一次滚动落下来 —— 不 flush 的话「读到底就切走」那一下会丢
-      if (timer !== 0) { clearTimeout(timer); flush(); }
-    };
-  }, [selected?.article?.key]);
 
   /* ---- 文章大纲（0.44）------------------------------------------------
    * ★ 标题从**渲染后的 DOM** 里取，不从 HTML 字符串里正则匹配：`sanitizeHtml` 会丢掉
@@ -1810,7 +2354,7 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
    */
   const [speaking, setSpeaking] = useState(false);
   const [speechRate, setSpeechRate] = useState(() => {
-    const saved = Number(localStorage.getItem('npr.speechRate'));
+    const saved = Number(localStorage.getItem(SPEECH_RATE_KEY));
     return SPEECH_RATES.some((item) => item.rate === saved) ? saved : 1;
   });
   const speechRun = useRef(null);
@@ -1868,10 +2412,35 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
    *   0.54.0 存下的裸名字由 `parseSpeechVoice` 兼容成「本机语音」——
    *   不做兼容的话，升级后用户上次选的音色会静默失效，而界面看不出任何异常。
    */
-  const [speechVoice, setSpeechVoice] = useState(() => localStorage.getItem('npr.speechVoice') ?? '');
+  const [speechVoice, setSpeechVoice] = useState(() => localStorage.getItem(SPEECH_VOICE_KEY) ?? '');
   // 与语速同理：toggleSpeech 里那个闭包捕获的是点击那一刻的值，用 ref 才能即时生效
   const speechVoiceRef = useRef(speechVoice);
   useEffect(() => { speechVoiceRef.current = speechVoice; }, [speechVoice]);
+
+  /**
+   * 设置页也会改这两个值（0.76.1 起「朗读声音 / 语速」进了设置页）。
+   *
+   * ★ 本组件不会因此重新挂载 ⇒ state 恒旧：下拉还显示旧音色、语速按钮还亮着旧档，
+   *   而 `toggleSpeech` 里的 ref 已经指向新值 —— 界面与实际打架，且两处都不报错。
+   * ★ 为什么连 `npr-settings-changed` 一起听：那是设置页保存 Key 时派发的老事件，
+   *   顺手也会用到它；`SPEECH_PREFS_EVENT` 是专门为偏好改动加的，语义更窄。
+   * ★ `storage` 事件只在**别的窗口**改动时触发，本窗口内改不触发 —— 所以不能只靠它。
+   */
+  useEffect(() => {
+    const sync = () => {
+      setSpeechVoice(localStorage.getItem(SPEECH_VOICE_KEY) ?? '');
+      const saved = Number(localStorage.getItem(SPEECH_RATE_KEY));
+      setSpeechRate(SPEECH_RATES.some((item) => item.rate === saved) ? saved : 1);
+    };
+    window.addEventListener(SPEECH_PREFS_EVENT, sync);
+    window.addEventListener('npr-settings-changed', sync);
+    window.addEventListener('storage', sync);
+    return () => {
+      window.removeEventListener(SPEECH_PREFS_EVENT, sync);
+      window.removeEventListener('npr-settings-changed', sync);
+      window.removeEventListener('storage', sync);
+    };
+  }, []);
 
   /**
    * 下拉里的两组选项。
@@ -1880,17 +2449,7 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
    * ★ 没配 Key 时**不列出云端音色**（而不是列出来点了报错）：一个能选但选完就报
    *   「没填 Key」的下拉，比一个明确写着「去设置里填 Key」的提示更让人恼火。
    */
-  const voiceGroups = useMemo(() => {
-    const local = chineseVoices(voices).map((item) => ({
-      value: speechVoiceValue('system', item.name),
-      label: item.label,
-    }));
-    const remote = (cloud?.configured === true ? (cloud.voices ?? SILICON_VOICES) : []).map((item) => ({
-      value: speechVoiceValue('siliconflow', item.id),
-      label: `${item.label} · 云端`,
-    }));
-    return { local, remote };
-  }, [voices, cloud]);
+  const voiceGroups = useMemo(() => speechVoiceGroups({ voices, cloud }), [voices, cloud]);
 
   /**
    * 下拉里要显示的那一项。
@@ -1900,14 +2459,10 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
    * ★ 选过云端、但 Key 后来被清空时返回空串，界面上会补一条「云端音色（未配置）」
    *   的禁用项：如实说明「你选的那个现在用不了」，而不是悄悄跳到本机语音。
    */
-  const activeVoiceValue = useMemo(() => {
-    const parsed = parseSpeechVoice(speechVoice);
-    if (parsed.engine === 'siliconflow') {
-      return cloud?.configured === true ? speechVoiceValue('siliconflow', parsed.voice) : '';
-    }
-    const picked = pickVoice(voices, parsed.voice)?.name ?? '';
-    return picked === '' ? '' : speechVoiceValue('system', picked);
-  }, [speechVoice, voices, cloud]);
+  const activeVoiceValue = useMemo(
+    () => activeSpeechVoiceValue({ value: speechVoice, voices, cloud }),
+    [speechVoice, voices, cloud],
+  );
 
   /**
    * 云端播放器（0.55.0）。两个实例、各自一个 `<audio>`：
@@ -1987,7 +2542,8 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
    */
   const chooseVoice = (value) => {
     setSpeechVoice(value);
-    localStorage.setItem('npr.speechVoice', value);
+    // 写 + 广播同一处完成（`writeSpeechPrefs`）：电子书页和设置页要知道换了音色。
+    writeSpeechPrefs(localStorage, { voice: value });
     const cloudPlaying = mainPlayerRef.current !== null && mainPlayerRef.current.active;
     if (cloudPlaying || speaking || globalThis.speechSynthesis?.speaking) {
       stopSpeech();
@@ -2008,6 +2564,10 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
   };
 
   const toggleSpeech = () => {
+    // ★ 带音频的播客单集不提供「朗读这篇文章」：它已经有真人音频了，再合成一遍
+    //   只会让两条声音抢同一个场景（而且合成的是文字稿，根本不是这一集）。
+    //   按钮本身已 disabled，这里再挡一次是防别的入口（快捷键 / 旧调用点）误触发。
+    if (audioUrl) { notify('这一集自带音频，直接用播放条收听就好', true); return; }
     // ★ 读 ref 而不是 localStorage：换音色后同一会话内立刻生效，不用重开面板
     const parsed = parseSpeechVoice(speechVoiceRef.current);
 
@@ -2022,7 +2582,8 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
         if (speaking) { player.pause(); setSpeaking(false); } else { player.resume(); setSpeaking(true); }
         return;
       }
-      const chunks = speechChunks(proseRef.current?.innerText ?? '', SPEECH_CLOUD_CHUNK);
+      const chunks = speechChunksForReading(proseRef.current?.innerText ?? '', SPEECH_CLOUD_CHUNK,
+        isPronunciationEnabled(localStorage));
       if (chunks.length === 0) { notify('这篇没有可朗读的正文'); return; }
       player.play(chunks, { voice: parsed.voice, speed: speechRateRef.current });
       return;
@@ -2036,7 +2597,8 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     // 已经在念：点一下暂停；暂停中：点一下继续
     if (synth.speaking && !synth.paused) { synth.pause(); setSpeaking(false); return; }
     if (synth.paused) { synth.resume(); setSpeaking(true); return; }
-    const chunks = speechChunks(proseRef.current?.innerText ?? '');
+    const chunks = speechChunksForReading(proseRef.current?.innerText ?? '', 600,
+      isPronunciationEnabled(localStorage));
     if (chunks.length === 0) { notify('这篇没有可朗读的正文'); return; }
     const picked = pickVoice(synth.getVoices(), parsed.voice);
     // 没有中文语音就明说，不退回英语：那会把中文念成噪音，比不念更糟
@@ -2176,15 +2738,20 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
         // 书架整块换掉工作区。它自带同构的 `.npr-workarea > .npr-layout` 骨架，
         // 所以布局 CSS 与窗口拖动区（`.npr-sidebar-toolbar[data-window-drag]`）
         // 两边完全共用，不需要在这里额外铺一套。
-        <LibraryApp reading={reading} onExit={(next) => setMode(next === 'diary' ? 'diary' : 'feeds')} notify={notify}
+        <LibraryApp reading={reading} onExit={(next) => setMode(next === 'diary' || next === 'paper' ? next : 'feeds')} notify={notify}
           api={api} SessionProvider={SessionProvider} renderSlot={renderSlot}
           onWriteReflection={writeReflection} onReadingContext={setReadingCtx} intent={libraryIntent}
           onIntentDone={() => setLibraryIntent(null)} />
+      ) : mode === 'paper' ? (
+        /* 论文（2026-11-06）。它自带同一套 `.npr-workarea > .npr-layout` 骨架，
+           所以布局与窗口拖动区两边共用；阅读器那一半直接复用 `BookReader`。 */
+        <PapersApp reading={reading} onExit={(next) => setMode(next === 'library' || next === 'diary' ? next : 'feeds')}
+          notify={notify} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} />
       ) : mode === 'diary' ? (
         // 日记同理：自带同一套骨架 + 自己的 `[data-window-drag]` 顶栏。
         // ★ 它**不**接收 `onExit={() => setMode('feeds')}` 那种无参回调 —— 三个视图之后，
         //   「离开」有两个方向，回调必须带目标。
-        <DiaryApp reading={reading} onExit={(next) => setMode(next === 'library' ? 'library' : 'feeds')} notify={notify}
+        <DiaryApp reading={reading} onExit={(next) => setMode(next === 'library' || next === 'paper' ? next : 'feeds')} notify={notify}
           api={api} SessionProvider={SessionProvider} renderSlot={renderSlot}
           intent={diaryIntent} onOpenBook={openBookFromDiary} onOpenArticle={openArticleFromDiary} />
       ) : (
@@ -2335,7 +2902,7 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
           })()}
         </aside>
         <div className="npr-resize" role="separator" aria-orientation="vertical" onPointerDown={startDrag}
-          onDoubleClick={() => { setListWidth(300); localStorage.setItem('npr.listWidth', '300'); }} />
+          onDoubleClick={() => { setListWidth(saveSidebarWidth(SIDEBAR_WIDTH)); }} />
         {/* 同样不能带 tabIndex：`.npr-reader-toolbar` 就在这个 section 里面，
             祖先一旦命中宿主的 `[tabindex]` no-drag，工具栏的拖动区会被做差减掉。 */}
         <section className="npr-reader">
@@ -2391,8 +2958,13 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                   onClick={(event) => askContext ? openPicker(event) : setFocused((current) => !current)}><Icon name={askContext ? 'panel-left-open' : focused ? 'panel-left-open' : 'panel-left-close'} /></button>
                 <label className="npr-visually-hidden" htmlFor="npr-mode">阅读版本</label>
                 <div className="npr-version-switch"><span aria-hidden="true">版本</span><select id="npr-mode" className="npr-mode-select" value={active} onChange={(event) => { setPassage(null); setSelected((current) => ({ ...current, active: event.target.value })); }}>
-                  {['original', 'translation', 'rewrite'].map((kind) => {
-                    const available = kind === 'original' || versions?.[kind]?.available;
+                  {VERSION_ORDER.filter((kind) => kind !== 'contrast' || translationReady).map((kind) => {
+                    /**
+                     * ★ 「对照」没有 `versions.contrast` —— 直接查 `versions[kind]`
+                     *   会让它永远显示「（缺失）」，把一个能用的功能标成不可用。
+                     */
+                    const available = kind === 'original'
+                      || (kind === 'contrast' ? translationReady : versions?.[kind]?.available);
                     return <option key={kind} value={kind}>{VERSION_LABELS[kind]}{available ? '' : '（缺失）'}</option>;
                   })}
                 </select><Icon name="chevron-down" size={12} /></div>
@@ -2408,15 +2980,20 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                     aria-pressed={Boolean(activeArticle.article.read)} onClick={() => void setRead(activeArticle.article.key, !activeArticle.article.read)}>
                     <Icon name={activeArticle.article.read ? 'circle-check' : 'circle'} />
                   </button>
-                  <button type="button" className="npr-icon" title="AI 伴读" aria-label="AI 伴读" onClick={() => openCompanion(passage?.quote ?? '')}><Icon name="wand-sparkles" /></button>
-                  <button type="button" className="npr-icon" title={speaking ? '暂停朗读' : '朗读这篇文章'}
-                    aria-label={speaking ? '暂停朗读' : '朗读这篇文章'} aria-pressed={speaking}
+                  <button type="button" className="npr-icon" data-sep="1" title="AI 伴读" aria-label="AI 伴读" onClick={() => openCompanion(passage?.quote ?? '')}><Icon name="wand-sparkles" /></button>
+                  {/* 带音频的播客单集：朗读**灰掉并说明原因**（0.84.1）。
+                      之前是「看着能点、点了会冒出第二条声音」；disabled 只是属性，
+                      视觉上还得靠 .npr-icon:disabled 那两条规则才看得出是灰的。 */}
+                  <button type="button" className="npr-icon"
+                    title={audioUrl ? '这一集自带音频，用播放条收听（不需要朗读）' : (speaking ? '暂停朗读' : '朗读这篇文章')}
+                    aria-label={audioUrl ? '朗读已禁用：这一集自带音频' : (speaking ? '暂停朗读' : '朗读这篇文章')}
+                    aria-pressed={speaking} disabled={Boolean(audioUrl)}
                     onClick={toggleSpeech}><Icon name={speaking ? 'pause' : 'play'} /></button>
                   {/* 大纲：没有标题时**禁用并说明为什么** —— 点了什么都不发生的按钮
                       就是「看起来像功能」（本项目记过好几次）。
                       ★ 图标从 `type`（大写 T）换成 `list-tree`：T 在中文界面里只读得出
                         「字体 / 字号」，用户 2026-10-28 直接把它当阅读设置点了。 */}
-                  <button type="button" className="npr-icon npr-outline-toggle"
+                  <button type="button" className="npr-icon npr-outline-toggle" data-sep="1"
                     title={outline.length ? '文章大纲' : '这篇没有小标题，没有大纲'}
                     aria-label="文章大纲" aria-expanded={outlineOpen} disabled={outline.length === 0}
                     onClick={() => setOutlineOpen((current) => !current)}><Icon name="list-tree" /></button>
@@ -2427,8 +3004,14 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                   <button type="button" className="npr-icon" title="更多操作" aria-label="更多操作"
                     aria-haspopup="menu" aria-expanded={menuOpen} ref={menuButtonRef}
                     onClick={() => setMenuOpen((open) => !open)}><Icon name="ellipsis" /></button>
+                  {/* ★ 0.84.7：这里降级成 `group`，不是 `menu`。
+                      之前写了 `role="menu"` 却没有任何 `menuitem`、没有方向键、
+                      也没有 roving focus —— 读屏会宣布「菜单」，然后按 Tab 逐个走，
+                      用户的预期（方向键切换、Esc 关闭）全部落空。真正的菜单语义
+                      见上面右键菜单那处（`role="menu"` + 每项 `menuitem`）。
+                      要么做全、要么不承诺，中间态比不做更糟。 */}
                   {menuOpen && (
-                    <div className="npr-menu" role="menu" ref={menuRef}>
+                    <div className="npr-menu" role="group" aria-label="更多操作" ref={menuRef}>
                       <button type="button" onClick={() => { setMenuOpen(false); setAppearanceOpen(true); }}><Icon name="type" size={15} />阅读设置</button>
                       <button type="button" onClick={() => { setMenuOpen(false); openCompanion(passage?.quote ?? ''); }}><Icon name="wand-sparkles" size={15} />问 AI</button>
                       {/* ★ 只在**真的有选中**时才渲染，而不是常驻 + `disabled`：
@@ -2459,7 +3042,7 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                       )}
                       {menuItems.regenerate && (
                         <button type="button" disabled={Boolean(selected?.generating)}
-                          onClick={() => { setMenuOpen(false); void generate(active, true); }}>
+                          onClick={() => { setMenuOpen(false); void generate(active === 'contrast' ? 'translation' : active, true); }}>
                           <Icon name="refresh-cw" size={15} />{regenerateMenuLabel({ active, generating: selected?.generating })}
                         </button>
                       )}
@@ -2536,7 +3119,7 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                             <button key={item.rate} type="button"
                               className={item.rate === speechRate ? 'is-on' : ''}
                               aria-pressed={item.rate === speechRate}
-                              onClick={() => { setSpeechRate(item.rate); localStorage.setItem('npr.speechRate', String(item.rate)); }}>
+                              onClick={() => { setSpeechRate(item.rate); writeSpeechPrefs(localStorage, { rate: item.rate }); }}>
                               {item.label}
                             </button>
                           ))}
@@ -2588,20 +3171,78 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                   </nav>
                 )}
               </div>
-              <article className="npr-article">
-                <div className="npr-article-head">
-                  {activeArticle.article.channelName && <span>{activeArticle.article.channelName}</span>}
-                  {activeArticle.article.publishedAt && <span>{formatFullDay(activeArticle.article.publishedAt)}</span>}
-                  {activeArticle.article.author && <span>{activeArticle.article.author}</span>}
-                  <span className="npr-mode-chip">{VERSION_LABELS[active]}</span>
-                  {activeArticle.article.bodyMissing && <span title="订阅源只提供摘要，且没能从原文页抓到全文；可在「更多操作」里手动抓取">仅摘要</span>}
-                </div>
-                <h1>
-                  {activeArticle.article.url
-                    ? <a href={activeArticle.article.url} target="_blank" rel="noopener noreferrer">{title}</a>
-                    : title}
-                </h1>
-                {audioUrl && <MediaDock key={activeArticle.article.key} episode={{ ...activeArticle.article, audio: audioUrl }} />}
+              <article className="npr-article"
+                data-listen={listenMode && audioUrl ? 'true' : 'false'}
+                data-read-tab={audioUrl ? readTab : 'article'}>
+                {/*
+                  收听视图的头部（0.81.0）。放在 article **最前面** 是有意的：切到收听
+                  之后顺序就是「返回 + 标题 → 播放条 → 字幕」，而播放条本身在下面原来
+                  的位置没动 —— 不动它，`<audio>` 才不会因为换了一份兄弟树而被重建。
+                */}
+                {/*
+                  ★ 0.84.7：两套头部的**内容**必须一致。上一轮只统一了字号 / 间距，
+                    切到字幕 / 导读时作者、版本 chip、「仅摘要」会整块消失，标题
+                    还丢了原文链接 —— 看起来像「同一篇文章换了个人写的头」。
+                    现在两边用同一份字段，唯一允许的差别是收听态多一个「N 段字幕」。
+                  ★ 三态互斥：收听态**不渲染**另一套头，DOM 里不留一份被 CSS 隐藏的副本。
+                */}
+                {listenMode && audioUrl ? (
+                  <header className="npr-listen-head" data-listen-keep="true">
+                    <div className="npr-listen-meta">
+                      {activeArticle.article.channelName && <span>{activeArticle.article.channelName}</span>}
+                      {activeArticle.article.publishedAt && <span>{formatFullDay(activeArticle.article.publishedAt)}</span>}
+                      {activeArticle.article.author && <span>{activeArticle.article.author}</span>}
+                      <span className="npr-mode-chip">{VERSION_LABELS[active]}</span>
+                      {activeArticle.article.bodyMissing && <span title="订阅源只提供摘要，且没能从原文页抓到全文；可在「更多操作」里手动抓取">仅摘要</span>}
+                      {transcript.data?.paragraphs?.length ? <span>{transcript.data.paragraphs.length} 段字幕</span> : null}
+                    </div>
+                    <h1>
+                      {activeArticle.article.url
+                        ? <a href={activeArticle.article.url} target="_blank" rel="noopener noreferrer">{title}</a>
+                        : title}
+                    </h1>
+                  </header>
+                ) : (
+                  <>
+                    <div className="npr-article-head">
+                      {activeArticle.article.channelName && <span>{activeArticle.article.channelName}</span>}
+                      {activeArticle.article.publishedAt && <span>{formatFullDay(activeArticle.article.publishedAt)}</span>}
+                      {activeArticle.article.author && <span>{activeArticle.article.author}</span>}
+                      <span className="npr-mode-chip">{VERSION_LABELS[active]}</span>
+                      {activeArticle.article.bodyMissing && <span title="订阅源只提供摘要，且没能从原文页抓到全文；可在「更多操作」里手动抓取">仅摘要</span>}
+                    </div>
+                    <h1>
+                      {activeArticle.article.url
+                        ? <a href={activeArticle.article.url} target="_blank" rel="noopener noreferrer">{title}</a>
+                        : title}
+                    </h1>
+                  </>
+                )}
+                {/* 播放器在上、选项卡在下（0.84.2）。用户拿「播放条在上、下划线 tab
+                    在下」的截图做参考：tab 夹在标题与播放条之间时，它离自己控制的内容
+                    太远，而且胶囊按钮与播放条挤在一起像一组控件。
+                    ★ 两块都带 `data-listen-keep`：切到字幕/导读时 CSS 会隐掉 article 里
+                      所有没有 keep 的直接子元素，选项卡和播放器必须留着。
+                    ★ 只在有音频时出现：普通文章没有字幕与导读，多给两个 tab 只会
+                      多出两个点进去是空的按钮。 */}
+                {audioUrl && (
+                  <div className="npr-dock-slot" data-listen-keep="true">
+                    <MediaDock
+                      key={activeArticle.article.key}
+                      episode={{ ...activeArticle.article, audio: audioUrl }}
+                      onController={setAudioController}
+                    />
+                  </div>
+                )}
+                {audioUrl && (
+                  <div className="npr-readtabs" data-listen-keep="true" role="group" aria-label="阅读内容">
+                    {READ_TABS.map((tab) => (
+                      <button type="button" key={tab.id}
+                        aria-pressed={readTab === tab.id}
+                        onClick={() => setReadTab(tab.id)}>{tab.label}</button>
+                    ))}
+                  </div>
+                )}
                 {selected?.translating && (
                   <div className="npr-translating" role="status">
                     <Icon name="refresh-cw" size={14} />
@@ -2617,12 +3258,16 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                     （安全底线），于是正文是中英混排 —— 不解释一句，用户只会得出
                     「翻译质量真差」，不会知道「再点一次可能就全了」。 */}
                 <PartialTranslationNotice active={active} coverage={versions?.translation?.coverage} />
+                <ContrastStackedNotice mode={active === 'contrast' ? contrast?.mode : undefined} />
                 {bodyHtml
                   ? <div ref={proseRef} className="npr-prose" onMouseUp={captureSelection} onKeyUp={captureSelection} dangerouslySetInnerHTML={{ __html: bodyHtml }} />
                   : (
                     <div className="npr-missing">
                       这个版本还没有内容。
-                      {active !== 'original' && (
+                      {/* ★ 只给**真能生成**的版本这个按钮。「对照」是派生视图，
+                          没有「生成对照」这条路径 —— 把它放进来会点出一个
+                          宿主不认识的 kind。 */}
+                      {(active === 'translation' || active === 'rewrite') && (
                         <>
                           <br />
                           <button type="button" className="npr-more" style={{ display: 'inline-block' }}
@@ -2633,6 +3278,47 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
                       )}
                     </div>
                   )}
+                {/*
+                  收听视图的字幕区（0.81.0）。挂在 article **末尾**：上面那些正文、
+                  提示条在 `data-listen="true"` 时被 CSS 隐掉，于是视觉顺序就是
+                  「标题 → 播放条 → 字幕」，DOM 顺序却不影响播放条的位置。
+                */}
+                {listenMode && audioUrl && (
+                  <div className="npr-listen-body" data-listen-keep="true">
+                    {/*
+                      ★ 0.84.1：导读与字幕**都常驻**，靠 `data-read-tab` + CSS 二选一显隐。
+                        之前是「导读压在 120 段字幕上面」的一长页，用户要的是选项卡；
+                        但不能改成条件渲染 —— 那会在切 tab 时卸掉 TranscriptPanel，
+                        它订阅着 `audioController`，重建一次字幕高亮就要重新接一遍。
+                      ★ `data-read-panel` 的取值与 READ_TABS 的 id 同源。
+                    */}
+                    <div className="npr-readpanel" data-read-panel="digest">
+                      <EpisodeDigest
+                        state={digest}
+                        onGenerate={() => void generateDigest()}
+                        onJump={jumpToTime}
+                      />
+                    </div>
+                    <div className="npr-readpanel" data-read-panel="transcript">
+                      <TranscriptPanel
+                        transcript={transcript.data}
+                        status={transcript.status}
+                        error={transcript.error}
+                        controller={audioController}
+                        translation={translation}
+                        onTranslate={() => void translate()}
+                        langMode={langMode}
+                        onCycleLang={cycleLang}
+                        standalone
+                        asr={asr}
+                        onTranscribe={() => void transcribe()}
+                        onCancelTranscribe={() => void cancelTranscribe()}
+                        onFetch={() => void loadTranscript({ refresh: true })}
+                        focus={focus}
+                      />
+                    </div>
+                  </div>
+                )}
               </article>
             </>
           )}
@@ -2659,6 +3345,9 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
       {addMenu && (
         <>
           <div className="npr-addmenu-backdrop" onClick={() => setAddMenu(null)} />
+          {/* 这里**保持** `role="menu"`：子项确实都带 `menuitem`（0.84.7 核对过）。
+              与「更多操作」那处不同 —— 那个菜单的按钮全是裸 `<button>`，
+              没有任何菜单语义，才降级成 `group`。 */}
           <div className="npr-addmenu" style={{ left: addMenu.left, top: addMenu.top }} role="menu" aria-label="订阅菜单">
             <button type="button" role="menuitem" onClick={() => { setAddMenu(null); setShowAddFeed(true); }}>
               <Icon name="plus" size={15} />
@@ -2689,7 +3378,11 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
             创建的灵感怎么办？挂在书上的意义？」—— 意义是**回到现场**，与「是不是书」
             无关。以前只有书架页给 `readingCtx`，订阅页按 `L` 记的灵感连来源都没有，
             于是在日记里既回不去那篇文章，也不在任何分组里出现。 */}
-      {mode !== 'diary' && <QuickCapture open={quickOpen} onClose={() => setQuickOpen(false)} notify={notify}
+      {mode !== 'diary' && <QuickCapture open={quickOpen}
+        onClose={() => { setQuickOpen(false); setQuickSeed(''); }}
+        notify={notify}
+        onOpenDiary={() => setMode('diary')}
+        seed={quickSeed}
         context={mode === 'library' ? readingCtx : (activeArticle?.article ? {
           articleKey: activeArticle.article.key,
           articleTitle: readerTitle({ active, versions: activeArticle.versions, article: activeArticle.article }),
@@ -2713,17 +3406,19 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
           </button>
         </div>
       )}
-      {/* 提示条。`toast.action` 存在时多一颗按钮（撤销 / 查看）—— 它自己会关掉这条提示
-          再执行，否则「点了撤销、提示还挂着」会让人以为没生效。 */}
+      {/* 提示条。`toast.action` 存在时多出按钮（撤销 / 查看）—— 它自己会关掉这条提示
+          再执行，否则「点了撤销、提示还挂着」会让人以为没生效。
+          ★ `action` 可以是数组（见 `notify`）：灵感速记的回执同时给「撤销 / 去看看」。
+            这里统一折成数组再画，调用点多传一颗不需要改上面任何一处。 */}
       {toast && (
         <div role="status" aria-live="polite" className={`npr-toast${toast.isError ? ' is-error' : ''}`}>
           <span>{toast.message}</span>
-          {toast.action && (
-            <button type="button" className="npr-toast-action"
-              onClick={() => { const action = toast.action; setToast(undefined); clearTimeout(toastTimer.current); action.onClick(); }}>
-              {toast.action.label}
+          {(Array.isArray(toast.action) ? toast.action : toast.action ? [toast.action] : []).map((item) => (
+            <button key={item.label} type="button" className="npr-toast-action"
+              onClick={() => { setToast(undefined); clearTimeout(toastTimer.current); item.onClick(); }}>
+              {item.label}
             </button>
-          )}
+          ))}
         </div>
       )}
     </div>

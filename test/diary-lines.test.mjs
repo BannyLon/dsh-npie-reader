@@ -15,7 +15,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ENTRY_TITLE_MAX, entryLines } from '../src/client/diary-lines.js';
+import { ENTRY_TITLE_MAX, entryLines, plainSnippet } from '../src/client/diary-lines.js';
 
 /** 把两段拼回去（标题 + 分隔 + 摘要），用来验「一个字都没丢」。 */
 const rejoin = ({ title, rest }) => (rest === '' ? title : `${title}${rest}`);
@@ -79,5 +79,80 @@ describe('entryLines：标题 + 摘要', () => {
   test('* 英文句号不算句末：小数与版本号会被误切', () => {
     const lines = entryLines('GPT-4 在 3.5 版本上提升了 12.4%，主要是长文能力。');
     assert.match(lines.title, /12\.4%/, '标题在英文句号处被切断了');
+  });
+});
+
+/**
+ * `plainSnippet()` —— 预览层不许把 Markdown 标记印出来。
+ *
+ * ★ 用户 2026-11-11 的截图：时间轴上一条写着
+ *   `09:52 **真需求 = 高频 × 刚需 × 普遍。**`，而右边同一张便签是粗体。
+ *   左边把 preview 当纯文本印、右边走 `markdownToHtml()` —— 不剥就是两副面孔。
+ * ★ 反向对照写在这里：`2 * 3` 里的星号**不许**被当斜体吃掉。剥过头比不剥更难查：
+ *   内容少了一个字符，没有任何报错，只有原作者读得出来。
+ */
+describe('plainSnippet：预览层剥掉行内标记', () => {
+  test('★ 用户截图那条：加粗标记一个字都不许留在时间线上', () => {
+    assert.equal(plainSnippet('**真需求 = 高频 × 刚需 × 普遍。**'), '真需求 = 高频 × 刚需 × 普遍。');
+    // 走完整条路：切句之后标题里也不能带星号（`**。**` 会让句号前面挂两个星）。
+    const lines = entryLines('**真需求 = 高频 × 刚需 × 普遍。**');
+    assert.equal(lines.title, '真需求 = 高频 × 刚需 × 普遍。');
+    assert.equal(lines.rest, '');
+  });
+
+  test('★ 成对才剥：算式里的星号不是斜体', () => {
+    assert.equal(plainSnippet('2 * 3 * 4 = 24'), '2 * 3 * 4 = 24');
+    assert.equal(plainSnippet('粗体**在中间**的句子'), '粗体在中间的句子');
+  });
+
+  test('★ 删除线 / 行内代码 / 链接 / 行首标记', () => {
+    assert.equal(plainSnippet('~~删掉~~'), '删掉');
+    assert.equal(plainSnippet('命令 `npm test` 跑一下'), '命令 npm test 跑一下');
+    assert.equal(plainSnippet('[标题](https://example.com)'), '标题');
+    assert.equal(plainSnippet('![图](a.png)'), '图');
+    assert.equal(plainSnippet('## 小标题'), '小标题');
+    assert.equal(plainSnippet('- 一条'), '一条');
+  });
+
+  test('* 下划线故意不剥：snake_case 与文件名会被吃坏', () => {
+    // 中文内容里几乎不用 `_` 加粗，而代码/文件名里到处是下划线 —— 取舍写进注释。
+    assert.equal(plainSnippet('foo_bar_baz'), 'foo_bar_baz');
+    assert.match(plainSnippet('__不是粗体__'), /__/);
+  });
+
+  test('★ 纯文本原样通过（剥标记不能顺手改正文）', () => {
+    assert.equal(plainSnippet('今天什么都没想。'), '今天什么都没想。');
+    assert.equal(plainSnippet(''), '');
+    assert.equal(plainSnippet(null), '');
+    assert.equal(plainSnippet(undefined), '');
+  });
+});
+
+describe('plainSnippet：只有一张截图的灵感（0.73.0）', () => {
+  const url = '/api/dsh-npie-reader/diary/assets/0123456789abcdef.png';
+
+  test('没有 alt 的图给一句「［图片］」，不留空串', () => {
+    assert.equal(plainSnippet(`![](${url})`), '［图片］');
+  });
+
+  test('有 alt 就用 alt（作者写的话比占位符有信息）', () => {
+    assert.equal(plainSnippet(`![函数图像](${url})`), '函数图像');
+  });
+
+  test('★ 正文里夹一张图：前后的字都留着，只有地址消失', () => {
+    const text = plainSnippet(`这张图说明了问题\n![](${url})\n后面还有一句`);
+    assert.equal(text, '这张图说明了问题\n［图片］\n后面还有一句');
+    assert.doesNotMatch(text, /api\/dsh-npie-reader/);
+  });
+
+  test('★ 反向对照：被 60 字预览截断的图（没有右括号）也不能漏出网址', () => {
+    // 宿主给的是正文前 60 字，图片地址本身就有六十来字 —— 截断是常态，不是异常。
+    const truncated = `![](${url}`.slice(0, 60);
+    const text = plainSnippet(truncated);
+    assert.doesNotMatch(text, /dsh-npie-reader/, `截断的图漏出了网址：${text}`);
+  });
+
+  test('普通文字里的方括号与感叹号不受影响', () => {
+    assert.equal(plainSnippet('真的！[他说]这样'), '真的！[他说]这样');
   });
 });

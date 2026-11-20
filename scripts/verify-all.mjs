@@ -98,6 +98,22 @@ const HEAVY = [
   { name: 'bookrow-cover', script: 'scripts/check-bookrow-cover.mjs', timeout: 4 * 60_000, why: '书籍行封面位 + 状态角标（两种侧栏宽度 + 反向对照）' },
   { name: 'book-layout', script: 'scripts/check-book-panel-layout.mjs', timeout: 6 * 60_000, why: '书页面板版式' },
   { name: 'book-reading', script: 'scripts/check-book-reading-chrome.mjs', timeout: 6 * 60_000, why: '书页阅读区（顶栏 / 浮动列）' },
+  { name: 'transcript-layout', script: 'scripts/check-transcript-layout.mjs', timeout: 4 * 60_000, why: '单集播放条与字幕面板（两档宽度 + 四条反向对照）' },
+  { name: 'listen-view', script: 'scripts/check-listen-view.mjs', timeout: 4 * 60_000, why: '收听视图：正文整块让位、播放条与字幕仍在（两条反向对照）' },
+  // 0.84.1：文章 / 字幕 / 导读 三选一 + 带音频的播客把朗读按钮灰掉。
+  { name: 'read-tabs', script: 'scripts/check-read-tabs.mjs', timeout: 3 * 60_000, why: '阅读页三选一 + 播客朗读禁用 + 顶部两态逐项一致（真 Chrome + 六条反向对照）' },
+  // 控制器所有权：真 React 18 在真 Chrome 里挂两棵树（坏写法 / 修法）。
+  // 它守的是「父组件 effect 不许清掉子组件刚发布的控制器」——那个 bug 让字幕
+  // 永远不高亮、点段落也不跳，而每一行代码单看都是对的。
+  { name: 'audio-binding', script: 'scripts/check-audio-binding.mjs', timeout: 2 * 60_000, why: '字幕控制器的父子所有权（真 React 复现 + 修法）' },
+  // 播放条**真机**行为：真 Chrome + 真 MediaDock + 真 Range 中转。
+  // 它守的是「时长未知 ⇒ 进度条没有行程 ⇒ 拖不动 / ±15 不作用」这一整类回归 ——
+  // 假元素单测量不到它（它们测的是「调 seek 会不会写 currentTime」，而那一步本来是好的）。
+  { name: 'media-dock', script: 'scripts/check-media-dock.mjs', timeout: 5 * 60_000, why: '播放条真机：挂载即可拖 + 断点恢复 + ±15s + 重挂（一条反向对照）' },
+  // 字幕自动跟随**真机**：真 Chrome + 真 TranscriptPanel + 真样式（CSS 一定要真的，
+  // 用空 loader 打包量出来的是浏览器默认排版，判据会静默变成恒真式）。
+  // 它守的是「当前段沉到列表下面、高亮看得见但位置看不见」这一整类回归。
+  { name: 'transcript-follow', script: 'scripts/check-transcript-follow.mjs', timeout: 5 * 60_000, why: '字幕跟随：当前段必须贴顶（含末尾留白）+ 列表高度按窗口自适应（三条反向对照）' },
   { name: 'book-skill-mutants', script: 'scripts/verify-book-skill-mutants.mjs', timeout: 10 * 60_000, why: '技能包变异验证（会临时改源码）' },
   // 云端朗读的 12 条反向对照。归「重型」是因为它**会临时改写源码**再跑测试，
   // 与上面那条同一个理由：不能塞进默认门禁（跑一次要十来秒，而且中途被打断会留变异体
@@ -161,6 +177,24 @@ function tapExpect(floor) {
 mkdirSync(LOG_DIR, { recursive: true });
 console.log(`门禁：${selected.length} 项（日志在 test/.build/verify/）\n`);
 
+/**
+ * ★ 门禁子进程**不能**继承 `NODE_OPTIONS` 里的文件代理 shim（2026-11-18 实测）。
+ *
+ *   会话环境把 `node-brokered-fs-shim` 通过 NODE_OPTIONS 注进每个 node 进程，
+ *   它禁止「两路径文件操作」（rename / rm / cp）。而本项目被测代码自己就要做这些事：
+ *   - 原子写盘用 `rename(tmp, target)`（`diary-assets` / `prefetch-stats` / `backfill`）；
+ *   - `build.mjs` 每次重建前清 `lib/`；
+ *   - 两条变异门禁要临时改源码再还原。
+ *   继承注入时它们全部报 `CODEBUDDY_BROKER_DENY`：TAP 21 条红、构建失败却照跑旧产物。
+ *
+ *   ★ 这不是业务 bug：在用户自己的终端里跑 `npm test` 根本没有这层注入，
+ *     实测去掉之后 18 条写盘用例全绿。门禁要复现的就是「用户终端」的口径。
+ *   ★ 只去掉注入，**不动业务代码、不放宽任何断言**；TAP 的 #fail / #tests 下限
+ *     与各脚本自己的反向照旧全量生效。
+ */
+const childEnv = { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' };
+delete childEnv.NODE_OPTIONS;
+
 const results = [];
 for (const gate of selected) {
   const files = expand(gate.script);
@@ -171,7 +205,7 @@ for (const gate of selected) {
     encoding: 'utf8',
     timeout: gate.timeout,
     maxBuffer: 256 * 1024 * 1024,
-    env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+    env: childEnv,
   });
   const ms = Date.now() - started;
   const timedOut = run.error?.code === 'ETIMEDOUT' || (run.signal === 'SIGTERM' && run.status === null);

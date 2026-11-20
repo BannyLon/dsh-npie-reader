@@ -400,13 +400,23 @@ describe('ocr.json：一页一条，空文本不落盘', () => {
     // 手写一份修之前的实现：直接读、改、写，不排队。
     const bookId = 'l-ocr_race_mutant';
     const { writeFile } = await import('node:fs/promises');
-    const writeDirect = async (page) => {
-      await store.ensureDir(bookId);
-      const all = await store.readOcr(bookId);
-      all[page] = { text: `第${page}页`, at: Date.now(), ms: 600 };
-      await writeFile(store.ocrFileOf(bookId), JSON.stringify(all), 'utf8');
-    };
-    await Promise.all([1, 2, 3, 4, 5].map(writeDirect));
+    /**
+     * ★ 竞态要**显式**摆出来，别指望 `Promise.all` 自己交错出来（0.74.0 修）。
+     *
+     * 原来写的是「五个 `writeDirect` 丢进 `Promise.all`，断言只剩 1 页」。它在单跑
+     * 这个文件时必现（`await ensureDir` / `await readJson` 恰好都排在第一次写入之前），
+     * 但**全量跑**（`node --test test/*.test.mjs` 并行多文件、CPU 争用改变微任务顺序）
+     * 时会读到别人刚写好的文件，实际留下 2 页 —— 于是「反向对照失效」这条假红。
+     * 判据的意义是「基于旧快照的读-改-写会互相覆盖」，那就把「读」全部走完再写：
+     * 五个快照都是空的，谁也没看见别人的写入，覆盖必然发生。确定性，且与真实竞态
+     * 同形（真实竞态里那几个请求的时间窗本来就是这个形状）。
+     */
+    await store.ensureDir(bookId);
+    const snapshots = await Promise.all([1, 2, 3, 4, 5].map(() => store.readOcr(bookId)));
+    await Promise.all(snapshots.map((all, offset) => {
+      all[offset + 1] = { text: `第${offset + 1}页`, at: Date.now(), ms: 600 };
+      return writeFile(store.ocrFileOf(bookId), JSON.stringify(all), 'utf8');
+    }));
     const all = await store.readOcr(bookId);
     assert.equal(Object.keys(all).length, 1,
       `反向对照失效：不排队竟然没丢页（${JSON.stringify(Object.keys(all))}）`);

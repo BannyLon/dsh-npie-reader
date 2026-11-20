@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Icon } from './icons.jsx';
-import { BRAND_TITLE, SLOGAN_EN, SLOGAN_ZH } from './brand.js';
-import { ReadingControls } from './ReadingAppearance.jsx';
+import { BRAND_TITLE, BRAND_ZH, SLOGAN_EN, SLOGAN_ZH } from './brand.js';
+import { ReadingControls, ReadingSpecimen, ReadingReset } from './ReadingAppearance.jsx';
 import { OpmlImport } from './OpmlImport.jsx';
 import { SubscriptionManager } from './SubscriptionManager.jsx';
 import { groupNamesOf } from './groups.js';
@@ -12,6 +12,7 @@ import { fetchBooks, reloadLibrary } from './library-api.js';
 import { BookSources } from './BookSources.jsx';
 import { CacheSettings } from './CacheSettings.jsx';
 import { SpeechSettings } from './SpeechSettings.jsx';
+import { CaptionSettings } from './CaptionSettings.jsx';
 import { aiModelOptions, describeModelCatalog } from '../ai-model.js';
 import { pageOwnedPatch } from './settings-patch.js';
 
@@ -29,6 +30,7 @@ const VERSION = typeof __NPIE_READER_VERSION__ === 'string' ? __NPIE_READER_VERS
 const TABS = [
   { key: 'reading', label: '阅读体验', icon: 'book-open' },
   { key: 'library', label: '电子书书架', icon: 'layers-3' },
+  { key: 'captions', label: '字幕与识别', icon: 'languages' },
   { key: 'speech', label: '朗读', icon: 'podcast' },
   { key: 'sources', label: '订阅管理', icon: 'rss' },
   { key: 'prompts', label: '快捷提示词', icon: 'sparkles' },
@@ -224,100 +226,121 @@ export function SettingsPage({ api, onClose, notify, onSubscriptionsChanged, ini
   };
   return <div className="npr-settings-backdrop" onClick={onClose}>
     <section className="npr-settings-page" role="dialog" aria-modal="true" aria-label={`${BRAND_TITLE} 设置`} onClick={event => event.stopPropagation()}>
+      {/* ★ 抬头用「一枚印章 + 一行标题 + 一行品牌」：原来那行是
+          「澄境 | Limina │ 插件设置」，两段文字靠一条竖线分左右，谁也读不出
+          哪个是产品、哪个是这一屏的名字。印章是中文语境里最省字的「署名」，
+          也让这个弹窗和宿主自己的设置面板在气质上分开。 */}
       <header className="npr-settings-head">
-        <div><span>{BRAND_TITLE}</span><strong>插件设置</strong></div>
+        <div className="npr-settings-title">
+          <span className="npr-settings-seal" aria-hidden="true">澄</span>
+          <div><strong>插件设置</strong><span className="npr-settings-brand">{BRAND_TITLE}</span></div>
+        </div>
         <button type="button" className="npr-icon" title="关闭设置" aria-label="关闭设置" onClick={onClose}><Icon name="x" /></button>
       </header>
       <div className="npr-settings-body">
         <nav className="npr-settings-tabs" aria-label="设置分类">
           <span className="npr-settings-nav-caption">设置</span>
-          {TABS.map(({ key, label, icon }) => <button key={key} type="button" aria-current={tab === key ? 'page' : undefined} onClick={() => setTab(key)}><Icon name={icon} size={17} strokeWidth={1.8} />{label}</button>)}
+          {TABS.map(({ key, label, icon }) => <button key={key} type="button" aria-current={tab === key ? 'page' : undefined} onClick={() => setTab(key)}><Icon name={icon} size={16} strokeWidth={1.7} />{label}</button>)}
+          {/* 左栏底部原先空着 300px，看起来像没加载完。这里放的是**归属信息**
+              （这是谁、哪一版），不是装饰 —— 设置页是用户唯一会想确认版本的地方。 */}
+          <div className="npr-settings-nav-foot">
+            <strong>{BRAND_ZH} · v{VERSION}</strong>
+            <span>{SLOGAN_ZH}</span>
+          </div>
         </nav>
         <main className="npr-settings-content">
           {!settings && <p role="status">{message || '正在加载设置…'}</p>}
           {settings && tab === 'reading' && <section aria-label="阅读设置">
-            <div className="npr-settings-intro"><h2>阅读体验</h2><p>让文章以你喜欢的节奏和样式呈现。</p></div>
+            <div className="npr-settings-intro"><h2>阅读体验</h2><p>让文章以你喜欢的节奏和样式呈现。下面这块样张用的就是你此刻选中的字体与纸色。</p></div>
+            {/* 样张在最上面：这一屏的六项设置里有五项**只影响阅读视图**，
+                原先它们在设置页里没有任何可见后果 —— 调完字号得关掉弹窗、
+                打开一篇文章才知道改成了什么。 */}
+            <ReadingSpecimen settings={settings} />
             <div className="npr-settings-card npr-settings-reading-card">
-              <div className="npr-settings-card-head"><h3>文章外观</h3><p>字体、版心与颜色只影响阅读视图。</p></div>
+              {/* 「恢复默认」放在抬头右侧而不是卡片末尾：它管的是**整张卡**的范围
+                  （字体/字号/行距/版心/纸色/版本/图片），放在末尾时它会掉到「首屏」
+                  那一组下面，看着像只重置最后两行。 */}
+              <div className="npr-settings-card-head npr-settings-head-row">
+                <div><h3>文章外观</h3><p>字体、版心与颜色只影响阅读视图。</p></div>
+                <ReadingReset onChange={change} />
+              </div>
               <ReadingControls settings={settings} onChange={change} variant="page" />
             </div>
+            {/* ---- AI 与抓取：合成一张卡、五行 ----
+                ★ 原先这里是四张**等重的卡**（AI 补全 / 解读模型 / 自动翻译 / 抓取全文）。
+                  四张卡并排时，一个开关和「配一个模型」看起来一样重要，而实际上
+                  前三行是同一件事的三个开关（要不要用 AI、用哪个、什么时候自动用）。
+                ★ 顺序按「先总后分」：启用 → 翻译模型 → 解读模型 → 自动翻译 → 抓全文。 */}
             <div className="npr-settings-card">
               <div className="npr-settings-card-head">
-                <h3>AI 补全阅读版本</h3>
-                <p>文章缺少译文或改写时，用模型补全。翻译是量大、重复、也不需要很强模型的活，
-                  所以可以把它单独压到一个便宜的（或免费的）模型上，不动你在 Harness 里选的默认模型。</p>
+                <h3>AI 与正文抓取</h3>
+                <p>翻译是量大、重复、也不需要很强模型的活，可以单独压到一个便宜的（或免费的）模型上，不动你在 Harness 里选的默认模型。</p>
               </div>
-              <div className="npr-settings-toggle-row">
-                <div><h4>启用 AI 补全</h4><p>关掉之后，「生成中文版本」与「英文原文自动翻译」都会停用。</p></div>
-                <label className="npr-switch"><input type="checkbox" aria-label="AI 补全阅读版本" checked={settings.aiAssist !== false} onChange={event => change({ aiAssist: event.target.checked })} /><span aria-hidden="true" /></label>
-              </div>
-              <div className="npr-settings-model-row">
-                <div>
-                  <h4>翻译 / 改写用哪个模型</h4>
-                  <p>{describeModelCatalog(aiModels)}</p>
+              <div className="npr-set-list">
+                <div className="npr-settings-toggle-row">
+                  <div><h4>启用 AI 补全</h4><p>关掉之后，「生成中文版本」与「英文原文自动翻译」都会停用。</p></div>
+                  <label className="npr-switch"><input type="checkbox" aria-label="AI 补全阅读版本" checked={settings.aiAssist !== false} onChange={event => change({ aiAssist: event.target.checked })} /><span aria-hidden="true" /></label>
                 </div>
-                <select className="npr-ai-model" aria-label="翻译与改写使用的模型" value={settings.aiModel ?? ''}
-                  disabled={aiModels === null} onChange={event => change({ aiModel: event.target.value })}>
-                  <option value="">跟随 Harness 默认模型{defaultModelLabel ? `（${defaultModelLabel}）` : ''}</option>
-                  {aiModelOptions(aiModels).map(entry => (entry.models.length > 0
-                    ? <optgroup key={entry.id} label={entry.label}>
-                        {entry.models.map(model => <option key={model.value} value={model.value}>{model.label}</option>)}
-                      </optgroup>
-                    : <option key={entry.id} value={`__unavailable__${entry.id}`} disabled>
-                        {entry.label}（没读到模型{entry.error ? `：${entry.error}` : ''}）
-                      </option>))}
-                </select>
-              </div>
-              {/* ★ 已经存下的取值如果不在当前列表里，必须**显式说出来**。
-                  不然 <select> 会静默跳到第一项「跟随默认」——用户看到的是「我选的免费模型
-                  变成了默认模型」，却找不到任何解释，而设置文件里那个值其实还在。 */}
-              {missingModels.map(([label, value]) => (
-                <p className="npr-settings-hint" key={label}>
-                  已保存的{label}模型「{value}」不在当前读到的模型列表里。它会照旧被使用（列表可能只是没读全）；
-                  想换掉就选一个别的，或选「跟随 Harness 默认模型」。
-                </p>
-              ))}
-            </div>
-            {/* ---- 电子书解读用的模型 ----
-                ★ 单独一项而不是复用上面那个：解读是「一本书 N 章 × 每章几万字」，
-                  翻译是「一篇一次」。把两者压到同一个模型上，必然有一边用错档 ——
-                  用户会想「翻译用好模型、解读先拿免费的跑一遍看看」。 */}
-            <div className="npr-settings-card">
-              <div className="npr-settings-card-head">
-                <h3>电子书解读用哪个模型</h3>
-                <p>逐章生成解读是这本书里最贵的一步（一本书几十次调用），所以它有自己的模型设置。
-                  留空则跟随 Harness 默认模型；也可以把它压到一个便宜或免费的模型上。</p>
-              </div>
-              <div className="npr-settings-model-row">
-                <div>
-                  <h4>解读用哪个模型</h4>
-                  <p>{describeModelCatalog(aiModels)}</p>
+                <div className="npr-settings-model-row">
+                  <div>
+                    <h4>翻译 / 改写用哪个模型</h4>
+                    <p>{describeModelCatalog(aiModels)}</p>
+                  </div>
+                  <span className="npr-set-field is-select">
+                    <select className="npr-ai-model" aria-label="翻译与改写使用的模型" value={settings.aiModel ?? ''}
+                      disabled={aiModels === null} onChange={event => change({ aiModel: event.target.value })}>
+                      <option value="">跟随 Harness 默认模型{defaultModelLabel ? `（${defaultModelLabel}）` : ''}</option>
+                      {aiModelOptions(aiModels).map(entry => (entry.models.length > 0
+                        ? <optgroup key={entry.id} label={entry.label}>
+                            {entry.models.map(model => <option key={model.value} value={model.value}>{model.label}</option>)}
+                          </optgroup>
+                        : <option key={entry.id} value={`__unavailable__${entry.id}`} disabled>
+                            {entry.label}（没读到模型{entry.error ? `：${entry.error}` : ''}）
+                          </option>))}
+                    </select>
+                  </span>
                 </div>
-                <select className="npr-ai-model" aria-label="电子书解读使用的模型" value={settings.digestModel ?? ''}
-                  disabled={aiModels === null} onChange={event => change({ digestModel: event.target.value })}>
-                  <option value="">跟随 Harness 默认模型{defaultModelLabel ? `（${defaultModelLabel}）` : ''}</option>
-                  {aiModelOptions(aiModels).map(entry => (entry.models.length > 0
-                    ? <optgroup key={entry.id} label={entry.label}>
-                        {entry.models.map(model => <option key={model.value} value={model.value}>{model.label}</option>)}
-                      </optgroup>
-                    : <option key={entry.id} value={`__unavailable__${entry.id}`} disabled>
-                        {entry.label}（没读到模型{entry.error ? `：${entry.error}` : ''}）
-                      </option>))}
-                </select>
+                {/* ★ 电子书解读单独一个模型，而不是复用上面那个：解读是「一本书 N 章 ×
+                    每章几万字」，翻译是「一篇一次」。压到同一个模型上，必然有一边用错档。 */}
+                <div className="npr-settings-model-row">
+                  <div>
+                    <h4>电子书解读用哪个模型</h4>
+                    <p>逐章生成解读是这本书里最贵的一步（一本书几十次调用）。留空则跟随 Harness 默认模型；也可以把它压到一个便宜或免费的模型上。</p>
+                  </div>
+                  <span className="npr-set-field is-select">
+                    <select className="npr-ai-model" aria-label="电子书解读使用的模型" value={settings.digestModel ?? ''}
+                      disabled={aiModels === null} onChange={event => change({ digestModel: event.target.value })}>
+                      <option value="">跟随 Harness 默认模型{defaultModelLabel ? `（${defaultModelLabel}）` : ''}</option>
+                      {aiModelOptions(aiModels).map(entry => (entry.models.length > 0
+                        ? <optgroup key={entry.id} label={entry.label}>
+                            {entry.models.map(model => <option key={model.value} value={model.value}>{model.label}</option>)}
+                          </optgroup>
+                        : <option key={entry.id} value={`__unavailable__${entry.id}`} disabled>
+                            {entry.label}（没读到模型{entry.error ? `：${entry.error}` : ''}）
+                          </option>))}
+                    </select>
+                  </span>
+                </div>
+                {/* ★ 已经存下的取值如果不在当前列表里，必须**显式说出来**。
+                    不然 <select> 会静默跳到第一项「跟随默认」——用户看到的是「我选的免费模型
+                    变成了默认模型」，却找不到任何解释，而设置文件里那个值其实还在。 */}
+                {missingModels.map(([label, value]) => (
+                  <p className="npr-settings-hint" key={label}>
+                    已保存的{label}模型「{value}」不在当前读到的模型列表里。它会照旧被使用（列表可能只是没读全）；
+                    想换掉就选一个别的，或选「跟随 Harness 默认模型」。
+                  </p>
+                ))}
+                <div className="npr-settings-toggle-row">
+                  <div><h4>英文原文自动翻译成中文</h4><p>打开后，打开一篇<strong>英文原文</strong>的文章时直接用 Harness 模型生成中文版本并显示，不需要在伴读框里打字让它翻。中文、日文/韩文原文不动；每篇只在没有中文版本时翻一次，之后走缓存。</p></div>
+                  <label className="npr-switch"><input type="checkbox" aria-label="英文原文自动翻译成中文" checked={settings.autoTranslate === true} onChange={event => change({ autoTranslate: event.target.checked })} /><span aria-hidden="true" /></label>
+                </div>
+                <div className="npr-settings-toggle-row">
+                  <div><h4>抓取原文全文</h4><p>订阅源只给摘要时，去原文页抽取正文。关闭后只显示订阅源自己提供的内容。</p></div>
+                  <label className="npr-switch"><input type="checkbox" aria-label="抓取原文全文" checked={settings.fullText !== false} onChange={event => change({ fullText: event.target.checked })} /><span aria-hidden="true" /></label>
+                </div>
               </div>
-              <p className="npr-settings-hint">
-                在阅读器的目录面板里也可以临时换模型；那里换的结果会写回这里，下次打开还是它。
-              </p>
+              <p className="npr-settings-hint">AI 伴读使用 Harness 的原生对话与默认工作区。模型可在右侧对话框中切换；解读模型也可以在阅读器的目录面板里临时换，那里换的结果会写回这里。</p>
             </div>
-            <div className="npr-settings-card npr-settings-toggle-row">
-              <div><h3>英文原文自动翻译成中文</h3><p>打开后，打开一篇<strong>英文原文</strong>的文章时直接用 Harness 模型生成中文版本并显示，不需要在伴读框里打字让它翻。中文、日文/韩文原文不动；每篇只在没有中文版本时翻一次，之后走缓存。</p></div>
-              <label className="npr-switch"><input type="checkbox" aria-label="英文原文自动翻译成中文" checked={settings.autoTranslate === true} onChange={event => change({ autoTranslate: event.target.checked })} /><span aria-hidden="true" /></label>
-            </div>
-            <div className="npr-settings-card npr-settings-toggle-row">
-              <div><h3>抓取原文全文</h3><p>订阅源只给摘要时，去原文页抽取正文。关闭后只显示订阅源自己提供的内容。</p></div>
-              <label className="npr-switch"><input type="checkbox" aria-label="抓取原文全文" checked={settings.fullText !== false} onChange={event => change({ fullText: event.target.checked })} /><span aria-hidden="true" /></label>
-            </div>
-            <p className="npr-settings-hint">AI 伴读使用 Harness 的原生对话与默认工作区。模型可在右侧对话框中切换。</p>
           </section>}
           {settings && tab === 'library' && <section aria-label="电子书书架设置">
             <div className="npr-settings-intro"><h2>电子书书架</h2><p>配好书源、生成书单，然后在插件里直接读原版式 PDF。</p></div>
@@ -398,14 +421,27 @@ export function SettingsPage({ api, onClose, notify, onSubscriptionsChanged, ini
              * `pageOwnedPatch`，而 API Key 登记在 `LIVE_WRITTEN_SETTINGS` 里，
              * 本来就不会被它提交）。所以这里没有 `settings &&` 这个前置条件。
              */}
+          {settings && tab === 'captions' && <section aria-label="字幕与识别设置">
+            <div className="npr-settings-intro">
+              <h2>字幕与识别</h2>
+              <p>订阅源没给字幕时，用本机模型把这一集听写出来；字幕不是中文时，再逐句译成中文。</p>
+            </div>
+            <CaptionSettings
+              api={api}
+              settings={settings}
+              onChange={change}
+              notify={(text, isError) => { setMessage(text); if (isError) notify?.(text, true); }}
+            />
+          </section>}
           {tab === 'speech' && <section aria-label="朗读设置">
             <div className="npr-settings-intro"><h2>朗读</h2><p>本机语音免费、离线，但机械；云端神经语音自然得多，按字数计费。</p></div>
             <SpeechSettings notify={notify} />
           </section>}
           {tab === 'prompts' && <section aria-label="快捷提示词设置">
-            <div className="npr-settings-intro"><h2>快捷提示词</h2><p>把常用的阅读提问放在手边。文章伴读与电子书伴读各自一套，互不影响。</p></div>
+            <div className="npr-settings-intro"><h2>快捷提示词</h2><p>把常用的阅读提问放在手边。文章、电子书、论文三种伴读各自一套，互不影响。</p></div>
             <div className="npr-settings-card"><PromptManager notify={setMessage} startAdding={startAddingPrompt} scope="article" /></div>
             <div className="npr-settings-card"><PromptManager notify={setMessage} scope="book" /></div>
+            <div className="npr-settings-card"><PromptManager notify={setMessage} scope="paper" /></div>
           </section>}
           {tab === 'about' && <section aria-label={`关于 ${BRAND_TITLE}`}>
             <div className="npr-settings-intro"><h2>关于 {BRAND_TITLE}</h2><p>为 DeepSeek Harness 打造的安静阅读空间。</p></div>
@@ -424,8 +460,8 @@ export function SettingsPage({ api, onClose, notify, onSubscriptionsChanged, ini
         </main>
       </div>
       <footer className="npr-settings-footer">
-        <span role="status">{message}</span>
-        {(tab === 'reading' || tab === 'library' || tab === 'sources') ? <button type="button" disabled={!settings || saving} onClick={() => void save()}>{saving ? '保存中…' : '保存设置'}</button> : null}
+        <span className="npr-settings-status" role="status">{message}</span>
+        {(tab === 'reading' || tab === 'library' || tab === 'sources' || tab === 'captions') ? <button type="button" disabled={!settings || saving} onClick={() => void save()}>{saving ? '保存中…' : '保存设置'}</button> : null}
       </footer>
     </section>
   </div>;

@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  DIARY_MODULES, ENTRY_KINDS, LEGACY_KINDS, MOODS, REFLECTION_TEMPLATE, appendEntryText, buildDay,
+  DIARY_MODULES, ENTRY_KINDS, LEGACY_KINDS, MOODS, NOTE_TONES, REFLECTION_TEMPLATE, appendEntryText, buildDay,
   buildFrontmatter, dateKey, dayCharCount, dayFileName, entryAt, entryBlock, entryHeading,
   isValidDateKey, isValidMonthKey, metaLine, monthGrid, monthKeyOf, moodScore, normalizeMeta,
   parseDay, parseMetaLine, parseMonthKey, parseSource, parseTags, removeEntryText, shiftMonth, sourceLabel, splitFrontmatter,
@@ -710,5 +710,49 @@ describe('情绪（MOODS / moodScore）', () => {
     assert.equal(moodScore(undefined), null);
     // 反向对照：最低那一档**不是** null（否则「没记」和「低落」会被画成同一个点）
     assert.notEqual(moodScore('😔'), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 便签墙的纸色（0.64.0）
+//
+// ★ 元数据白名单是一个**只增不减**的表，加一个字段的代价不在代码，在数据：
+//   写进去的必须是色名，不能是 `#rrggbb` —— 颜色要跟着主题走，存死一个十六进制
+//   等于把「写这条时用的主题」焊进文件。所以这一组测的不是「能不能存」，
+//   是「**存进去的东西有没有被限制在那一小张表里**」。
+// ---------------------------------------------------------------------------
+describe('便签纸色（NOTE_TONES / meta.tone）', () => {
+  it('六个色名，互不重复，第一个是默认色', () => {
+    assert.equal(NOTE_TONES.length, 6);
+    assert.equal(new Set(NOTE_TONES).size, 6, '有重复色名 —— 两面便签会撞色，界面上看不出来');
+    assert.equal(NOTE_TONES[0], 'amber', '默认色变了：写字卡的初始纸色会跟着换，而它没有任何提示');
+    for (const tone of NOTE_TONES) assert.match(tone, /^[a-z]+$/, `${tone} 不是纯色名`);
+  });
+
+  it('★ 白名单之外的值一律丢弃，且不抛错', () => {
+    // 用户手改 Markdown 是常态：写个 `"tone": "红色"`、`"#ffcc00"` 都不该让这条日记读不出来。
+    for (const bad of ['红色', '#ffcc00', 'AMBER', '', null, 42, {}, []]) {
+      assert.equal(normalizeMeta({ tone: bad }).tone, undefined, `${JSON.stringify(bad)} 被当成了纸色`);
+    }
+    assert.equal(normalizeMeta({ tone: 'rose' }).tone, 'rose');
+    // 反向对照：不是「全都丢掉」——合法值必须真的留下，否则上面那串断言毫无约束力。
+    for (const tone of NOTE_TONES) assert.equal(normalizeMeta({ tone }).tone, tone);
+  });
+
+  it('★ 往返：写进 .md 的那行注释读回来还是同一个色名', () => {
+    const line = metaLine({ tone: 'lilac' });
+    assert.match(line, /"tone":"lilac"/, 'tone 没写进元数据行');
+    assert.equal(parseMetaLine(line).tone, 'lilac');
+    // 整天的往返（坏一个字段就整条读不出来，是这组最该防的事）
+    const entries = [entry({ body: '一张紫色便签 #灵感', meta: { tone: 'lilac' } })];
+    assert.deepEqual(parseDay(buildDay('2026-11-03', entries)).entries, entries);
+  });
+
+  it('★ 没有纸色的老条目不会被凭空写上 tone', () => {
+    // 老文件里根本没有这个字段。若 `normalizeMeta` 给了默认值，下一次写回就会
+    // 给每一年的每一条都补上 `"tone":"amber"` —— 那是**改写历史**，不是升级。
+    assert.equal(metaLine({ mood: '😄' }).includes('tone'), false);
+    assert.equal(metaLine({}).includes('tone'), false);
+    assert.equal(normalizeMeta({ mood: '😄' }).tone, undefined);
   });
 });

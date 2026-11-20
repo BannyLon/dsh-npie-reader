@@ -1832,3 +1832,261 @@ describe('缓存端点', () => {
     assert.equal(res.status, 501);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 划词翻译（POST /translate）
+// ---------------------------------------------------------------------------
+
+/**
+ * ★ 这条路的失败**全都会被用户当成同一句话**：「点了翻译没反应」。
+ *
+ *   所以在用例层必须把三种失败分开断言：
+ *     · 501 —— 这个版本没接上（缺依赖），不是请求错；
+ *     · 415 —— 客户端忘了带 JSON 头（客户端 bug，一下就看得出来）；
+ *     · 502 —— 模型侧失败（限流 / 超时 / 未配置），请求本身没错。
+ *   合并成 500 的话，用户拿到的错误话术与真实原因无关，无从自查。
+ */
+describe('划词翻译', () => {
+  const post = (body, headers = { 'content-type': 'application/json' }) => fakeReq({
+    url: `${API}/translate`, method: 'POST', headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+  it('把选中的原文交给宿主，回译文（不落盘、不带书 id —— 这一步与「翻一节」无关）', async () => {
+    const seen = [];
+    const { api } = harness({
+      translatePassage: async (payload) => { seen.push(payload); return { text: '注意力就是你所需要的一切' }; },
+    });
+    const res = fakeRes();
+    await api.handler(post({ text: 'Attention is all you need', context: 'Attention Is All You Need' }), res);
+
+    assert.equal(res.status, 200);
+    assert.equal(res.json.text, '注意力就是你所需要的一切');
+    // ★ 原文必须**原样**过去：模型侧要按原文匹配回填（分段一错就会英文残留）。
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].text, 'Attention is all you need');
+    assert.equal(seen[0].context, 'Attention Is All You Need');
+  });
+
+  it('模型返回空串 ⇒ 仍然是 200 + 空文本（由客户端判成「没返回译文」，不在这里编造）', async () => {
+    const { api } = harness({ translatePassage: async () => ({ text: '' }) });
+    const res = fakeRes();
+    await api.handler(post({ text: 'x' }), res);
+    assert.equal(res.status, 200);
+    assert.equal(res.json.text, '');
+  });
+
+  it('缺 `translatePassage` ⇒ 501（不是 500：这个版本就没接这条能力）', async () => {
+    const { api } = harness();
+    const res = fakeRes();
+    await api.handler(post({ text: 'x' }), res);
+    assert.equal(res.status, 501);
+  });
+
+  it('不带 JSON 头 ⇒ 415（客户端 bug 要一眼看得出）', async () => {
+    const { api } = harness({ translatePassage: async () => ({ text: 'y' }) });
+    const res = fakeRes();
+    await api.handler(post({ text: 'x' }, { 'content-type': 'text/plain' }), res);
+    assert.equal(res.status, 415);
+  });
+
+  it('GET ⇒ 405', async () => {
+    const { api } = harness({ translatePassage: async () => ({ text: 'y' }) });
+    const res = fakeRes();
+    await api.handler(fakeReq({ url: `${API}/translate`, method: 'GET' }), res);
+    assert.equal(res.status, 405);
+  });
+
+  it('模型侧抛错 ⇒ 502，并把原始 message 带回去（用户要能看到「未配置模型」这种话）', async () => {
+    const { api } = harness({
+      translatePassage: async () => {
+        const error = new Error('dsh 里还没有选择模型');
+        error.code = 'NO_MODEL';
+        throw error;
+      },
+    });
+    const res = fakeRes();
+    await api.handler(post({ text: 'x' }), res);
+    assert.equal(res.status, 502);
+    assert.equal(res.json.error, 'dsh 里还没有选择模型');
+    assert.equal(res.json.code, 'NO_MODEL');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 页级按需翻译（POST /translate-page，D 档）
+// ---------------------------------------------------------------------------
+
+/**
+ * ★ 与 `/translate` 分开测：那边翻一小段、回 `{text}`；这边翻一页十几段、
+ *   回 `[{id,text}]`。合并成一条路由的话，「某一段漏翻」在前端无从判断。
+ * ★ 失败姿势全是「点了翻译没反应」，所以状态码必须能区分原因。
+ */
+describe('页级按需翻译', () => {
+  const paragraphs = [
+    { id: 'p1', text: 'Attention is all you need.' },
+    { id: 'p2', text: 'The transformer is simple.' },
+  ];
+  const post = (body, headers = { 'content-type': 'application/json' }) => fakeReq({
+    url: `${API}/translate-page`, method: 'POST', headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+  it('整页段落原样交给宿主，回按 id 的译文', async () => {
+    const seen = [];
+    const { api } = harness({
+      translatePageParagraphs: async (payload) => {
+        seen.push(payload);
+        return payload.paragraphs.map((item) => ({ id: item.id, text: `译文 ${item.id}` }));
+      },
+    });
+    const res = fakeRes();
+    await api.handler(post({ paragraphs }), res);
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json.translations, [
+      { id: 'p1', text: '译文 p1' },
+      { id: 'p2', text: '译文 p2' },
+    ]);
+    // ★ id 必须原样过去：排版层靠它把译文放回对应的段落框。
+    assert.deepEqual(seen[0].paragraphs, paragraphs);
+  });
+
+  it('模型一条都没翻出来 ⇒ 200 + 空数组（由客户端判「没翻成」，不是 HTTP 错误）', async () => {
+    const { api } = harness({ translatePageParagraphs: async () => [] });
+    const res = fakeRes();
+    await api.handler(post({ paragraphs }), res);
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json.translations, []);
+  });
+
+  it('缺 `translatePageParagraphs` ⇒ 501（这个版本没接上，不是请求错）', async () => {
+    const { api } = harness();
+    const res = fakeRes();
+    await api.handler(post({ paragraphs }), res);
+    assert.equal(res.status, 501);
+  });
+
+  it('paragraphs 不是 1–40 条数组 ⇒ 400（挡住把整本书塞进来）', async () => {
+    const { api } = harness({ translatePageParagraphs: async () => [] });
+    for (const body of [{}, { paragraphs: [] }, { paragraphs: 'x' }, { paragraphs: new Array(41).fill({ id: 'a', text: 'x' }) }]) {
+      const res = fakeRes();
+      await api.handler(post(body), res);
+      assert.equal(res.status, 400, `不该放行：${JSON.stringify(body).slice(0, 60)}`);
+    }
+    // 正对照：40 条是允许的，别把上限写成 < 40。
+    const ok = fakeRes();
+    await api.handler(post({ paragraphs: Array.from({ length: 40 }, (_, i) => ({ id: `p${i}`, text: 'x' })) }), ok);
+    assert.equal(ok.status, 200);
+  });
+
+  it('不带 JSON 头 ⇒ 415；GET ⇒ 405', async () => {
+    const { api } = harness({ translatePageParagraphs: async () => [] });
+    const bad = fakeRes();
+    await api.handler(post({ paragraphs }, { 'content-type': 'text/plain' }), bad);
+    assert.equal(bad.status, 415);
+    const wrongMethod = fakeRes();
+    await api.handler(fakeReq({ url: `${API}/translate-page`, method: 'GET' }), wrongMethod);
+    assert.equal(wrongMethod.status, 405);
+  });
+
+  it('模型侧抛错 ⇒ 502，并把 code 带回去（未配置模型 / 限流要看得出区别）', async () => {
+    const { api } = harness({
+      translatePageParagraphs: async () => {
+        const error = new Error('dsh 里还没有选择模型');
+        error.code = 'NO_MODEL';
+        throw error;
+      },
+    });
+    const res = fakeRes();
+    await api.handler(post({ paragraphs }), res);
+    assert.equal(res.status, 502);
+    assert.equal(res.json.code, 'NO_MODEL');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 页译文落盘缓存（0.71.0）：逐页按需与整本一次翻完共用
+// ---------------------------------------------------------------------------
+
+describe('GET/POST /page-translation/:id', () => {
+  const PAGE = {
+    paragraphs: [{ id: 'p1', text: 'Attention is all you need.' }],
+    translations: [{ id: 'p1', text: '注意力就是你所需要的一切。' }],
+  };
+  /** 内存版 store：只验路由接线与状态码，真正的文件行为在 page-translation-store.test.mjs。 */
+  function fakeStore() {
+    const data = new Map();
+    return {
+      data,
+      list: async (id) => Object.fromEntries(data.get(id) ?? []),
+      putPage: async (id, page, input) => {
+        if (!Number.isInteger(Number(page)) || Number(page) < 1) {
+          const error = new Error('页码不合法');
+          error.code = 'BAD_PAGE_TRANSLATION';
+          throw error;
+        }
+        const rows = data.get(id) ?? new Map();
+        rows.set(String(page), { page: Number(page), ...input });
+        data.set(id, rows);
+        return { page: Number(page) };
+      },
+      clearBook: async (id) => {
+        const rows = data.get(id) ?? new Map();
+        data.delete(id);
+        return { removed: rows.size };
+      },
+    };
+  }
+  const url = `${API}/page-translation/paper-1`;
+  const req = (method, body, headers = { 'content-type': 'application/json' }) => fakeReq({
+    url, method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+  it('缺 store ⇒ 501，且不影响别的路由（测试夹具常态）', async () => {
+    const { api } = harness();
+    const res = fakeRes();
+    await api.handler(req('GET'), res);
+    assert.equal(res.status, 501);
+    const books = fakeRes();
+    await api.handler(fakeReq({ url: `${API}/books` }), books);
+    assert.equal(books.status, 200);
+  });
+
+  it('写单页 → 整本读回；清空 → 空', async () => {
+    const { api } = harness({ pageTranslationStore: fakeStore() });
+    const put = fakeRes();
+    await api.handler(req('POST', { op: 'put', page: 3, ...PAGE }), put);
+    assert.equal(put.status, 200);
+    assert.equal(put.json.page, 3);
+    const get = fakeRes();
+    await api.handler(req('GET'), get);
+    assert.equal(get.json.pages['3'].translations[0].text, '注意力就是你所需要的一切。');
+    const clear = fakeRes();
+    await api.handler(req('POST', { op: 'clear' }), clear);
+    assert.equal(clear.json.removed, 1);
+    const after = fakeRes();
+    await api.handler(req('GET'), after);
+    assert.deepEqual(after.json.pages, {});
+  });
+
+  it('只认 put / clear 两个 op；别的 op、坏页码、非 JSON、PUT 都要挡住', async () => {
+    const { api } = harness({ pageTranslationStore: fakeStore() });
+    for (const [method, body, headers] of [
+      ['POST', { op: 'overwrite-all', pages: {} }],
+      ['POST', { op: 'put', page: 0, ...PAGE }],
+      ['POST', { op: 'put', page: 1, ...PAGE }, { 'content-type': 'text/plain' }],
+      ['PUT', { op: 'clear' }],
+    ]) {
+      const res = fakeRes();
+      await api.handler(req(method, body, headers), res);
+      assert.ok(res.status >= 400, `不该放行：${method} ${JSON.stringify(body).slice(0, 50)}`);
+    }
+  });
+
+  it('bookId 走路径白名单，带斜杠的 id 落到 404 而不是拼进磁盘路径', async () => {
+    const { api } = harness({ pageTranslationStore: fakeStore() });
+    const res = fakeRes();
+    await api.handler(fakeReq({ url: `${API}/page-translation/..%2Fevil` }), res);
+    assert.equal(res.status, 404);
+  });
+});

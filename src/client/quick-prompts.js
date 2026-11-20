@@ -1,18 +1,22 @@
 /**
- * 快捷提示词，**按伴读场景分两套**：
+ * 快捷提示词，**按伴读场景分三套**：
  *
  * - `article` —— RSS 文章伴读（`AskArticle`）。存在 `npr.quick-prompts.v1`，
  *   与历史数据无缝衔接（这个键从单套时代就在用，改键会让老用户丢一次配置）。
  * - `book` —— 电子书伴读（`BookCompanion`）。存在 `npr.book-quick-prompts.v1`。
+ * - `paper` —— 论文伴读（同一个 `BookCompanion`，`kind === 'paper'`）。
+ *   存在 `npr.paper-quick-prompts.v1`。
  *
- * 两套刻意**不共用**：文章的提问以「这篇 / 选段」为单位（翻译全文、追问证据），
- * 书的提问以「当前这一页」为单位（解释这一页、梳理要点）—— 混在一起会让
- * 「翻译全文」出现在只有一页扫描件的伴读里，点出去就是答非所问。
+ * 三套刻意**不共用**：文章的提问以「这篇 / 选段」为单位（翻译全文、追问证据），
+ * 书以「当前这一页讲了什么」为单位，论文则以**论证结构**为单位（这一页在整篇里
+ * 承担什么、证据够不够、值不值得精读）。混在一起会让「翻译全文」出现在只有一页
+ * 扫描件的伴读里，点出去就是答非所问；论文用书那套则会让模型把它当成一本散文。
  */
 
 const STORAGE_KEYS = {
   article: 'npr.quick-prompts.v1',
   book: 'npr.book-quick-prompts.v1',
+  paper: 'npr.paper-quick-prompts.v1',
 };
 
 export const DEFAULT_PROMPTS = [
@@ -29,7 +33,24 @@ export const BOOK_DEFAULT_PROMPTS = [
   { id: 'question', title: '挑一个值得问的问题', body: '读完当前这一页，挑一个最值得继续追问的问题，说明它为什么值得问，并给出你自己的初步回答。' },
 ];
 
+/**
+ * 论文伴读的默认三条。
+ *
+ * ★ 三条分别对应读论文时**真正会卡住的三件事**，不是把书那套换个说法：
+ *   1. 这一页在整篇论证里的位置（论文是拼图，单页常常只有半句前提）；
+ *   2. 方法与证据强度（「作者声称」和「实验支持」必须分开）；
+ *   3. 要不要继续投入时间（读论文的最大成本是时间，不是理解）。
+ * ★ 措辞里都带「当前这一页 / 这一篇」，因为宿主只给了这一页正文 + 元数据，
+ *   让模型去答「整篇的创新点」等于逼它编。
+ */
+export const PAPER_DEFAULT_PROMPTS = [
+  { id: 'position', title: '这一页在讲什么位置', body: '请说明当前这一页在整篇论文里承担什么：它属于问题陈述、方法、实验还是讨论？这一页要支撑的论断是哪一个？' },
+  { id: 'evidence', title: '方法与证据够不够', body: '请把这一页涉及的方法与实验讲清楚：输入输出、对比基线、评价指标。哪些结论是这一页的数据直接支持的，哪些只是作者的推断？' },
+  { id: 'worth', title: '值不值得精读', body: '结合标题、摘要与当前这一页，判断这一篇值不值得精读：给出理由，并列出精读时应该重点核对的三个点。' },
+];
+
 function defaultsOf(scope) {
+  if (scope === 'paper') return PAPER_DEFAULT_PROMPTS;
   return scope === 'book' ? BOOK_DEFAULT_PROMPTS : DEFAULT_PROMPTS;
 }
 

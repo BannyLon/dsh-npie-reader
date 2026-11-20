@@ -102,6 +102,61 @@ function mediaAssetOf(node) {
   return asset;
 }
 
+/**
+ * 单集时长（`<itunes:duration>`）→ 秒。
+ *
+ * ★ 这个字段有三种写法，全都真实存在：`3723`（秒）、`62:03`、`1:02:03`。
+ *   只认一种的话，界面上就会出现「2:03:00」被显示成「123 秒」这类错位 ——
+ *   而进度条、剩余时间、倍速全部由它派生。
+ * ★ 认不出来就不写这个字段（`undefined`），不要写成 0：0 秒会被界面当成
+ *   「这一集是空的」。
+ */
+function durationOf(node) {
+  const raw = textOf(firstChild(node, 'duration')).trim();
+  if (raw === '') return undefined;
+  let seconds;
+  if (raw.includes(':')) {
+    const parts = raw.split(':');
+    if (parts.length > 3) return undefined;
+    seconds = 0;
+    for (const part of parts) {
+      const value = Number(part);
+      if (!Number.isFinite(value) || value < 0) return undefined;
+      seconds = seconds * 60 + value;
+    }
+  } else {
+    seconds = Number(raw);
+  }
+  // 27 小时以上的「单集时长」只可能是写坏了（把发布日期塞进了这个字段）。
+  return Number.isFinite(seconds) && seconds > 0 && seconds <= 100_000 ? seconds : undefined;
+}
+
+/**
+ * `<podcast:transcript url="…" type="text/vtt"/>` → `{ url, type }`。
+ *
+ * ★ 一个条目可能有**多条** transcript（不同语言、不同格式）。P0 只取第一条能用的：
+ *   界面上没有语言选择器，多语言并存时按「第一条」展示是确定的，而不是随机一条。
+ * ★ 只认 `https:`：这段地址来自第三方 feed，会被插件当文本抓回来展示。
+ *   `http:` 允许中间人替换成任意内容 —— 判据与音频地址（`media.js`）同一条。
+ * ★ 不给 `type` 时保留空串，由 `parseTranscript` 按内容嗅探。
+ */
+function transcriptOf(node) {
+  for (const item of childrenOf(node, 'transcript')) {
+    const url = attrOf(item, 'url');
+    if (!url) continue;
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      continue;
+    }
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) continue;
+    const type = attrOf(item, 'type');
+    return { url: parsed.href, type: typeof type === 'string' ? type.toLowerCase() : '' };
+  }
+  return undefined;
+}
+
 function dateOf(node, isAtom) {
   const raw = textOf(isAtom ? firstChild(node, 'updated') ?? firstChild(node, 'published') : firstChild(node, 'pubdate') ?? firstChild(node, 'date'));
   const parsed = raw ? new Date(raw) : undefined;
@@ -136,6 +191,12 @@ function normalizeItem(node, isAtom, feedUrl, keepBody) {
     url: link,
     image: asset.image ?? (html ? firstImageUrl(html, link) : undefined),
     audio: asset.audio,
+    /**
+     * 播客那两个字段（`undefined` 时 JSON 序列化会直接丢掉，所以旧数据结构不变）。
+     * `duration` = 秒；`transcript` = `{ url, type }`，供字幕面板按需抓取。
+     */
+    duration: durationOf(node),
+    transcript: transcriptOf(node),
     // 正文被丢掉的条目也要有摘要：退回原始 HTML 再抽，否则列表里会出现空白行。
     summary: excerptOf(html || rawHtml),
     html,

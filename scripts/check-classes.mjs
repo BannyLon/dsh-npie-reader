@@ -101,6 +101,21 @@ const NOT_CLASSES = new Set([
   // `hsl(var(--npr-cover-h) …)` 消费。它永远不会有 `.npr-cover-h` 这样的类选择器 ——
   // 加进来是因为检查器把 `var(--npr-cover-h, 212)` 的兜底值读成了一个 token。
   'npr-cover-h',
+  // 设置页滑杆（0.66.0）：`--npr-range-fill` 是 **CSS 自定义属性**，由 `ReadingControls`
+  // 按当前值算成百分比写在 `<input type=range>` 的行内 style 上，CSS 侧用
+  // `linear-gradient(… var(--npr-range-fill) …)` 画「已填充段」。
+  // 纯 CSS 读不到 input 的值，这是唯一不额外引一次渲染的做法 —— 它没有类选择器。
+  'npr-range-fill',
+  // 播客播放条（0.79）：`--npr-progress` 是 **CSS 自定义属性**，由 `MediaDock`
+  // 按 `currentTime / duration` 算成百分比写在 `<input type=range>` 的行内 style 上，
+  // CSS 侧用 `linear-gradient(… var(--npr-progress) …)` 画「已播段」。
+  // 与上面 `npr-range-fill` 同一个套路：纯 CSS 读不到 input 的值。
+  'npr-progress',
+  // 朗读偏好（0.50）：这两个是 `addEventListener` 的**自定义事件名**，不是类名。
+  // `article-speech.js` 派发 `npr-speech-prefs-changed`、`ebook-speech.js` 监听
+  // `npr-speech-rate-changed` —— 检查器扫字符串字面量时会把它们当类名，
+  // 但它们永远不会出现在 CSS 选择器里。与上面 `npr-prompts-changed` 同类。
+  'npr-speech-prefs-changed', 'npr-speech-rate-changed',
 ]);
 
 // 有意保留的语义钩子：只用于在 DOM 上标记区块边界，没有对应样式。
@@ -111,8 +126,12 @@ const NOT_CLASSES = new Set([
  * 0.37 就是给它们写了 `display: none`，把「AI 面板一开侧栏就消失」变成了产品行为。
  * 但它们必须留在 DOM 上：拖动分隔条时要按 `.npr-diary-nav` 的**真实宽度**算正文下限
  * （见 DiaryApp 的 onPointerMove），删掉这句查询，面板拖宽就会吃掉导航的位置。
+ *
+ * `npr-ct-stack`（0.57.0 文章对照的 stacked 分支）：它只是一个包住整段译文的容器，
+ * 样式全部落在内部的 `.npr-ct-zh` 上。给它 padding / margin 反而会与上面那条
+ * `.npr-ct-split` 分隔线叠出一条空缝 —— 这里刻意留成纯钩子。
  */
-const HOOK_ONLY = new Set(['npr-settings-sources-card', 'npr-width-options', 'npr-diary-layout', 'npr-diary-nav']);
+const HOOK_ONLY = new Set(['npr-settings-sources-card', 'npr-width-options', 'npr-diary-layout', 'npr-diary-nav', 'npr-ct-stack']);
 
 const missing = [...used].filter((n) => !defined.has(n) && !NOT_CLASSES.has(n) && !HOOK_ONLY.has(n)).sort();
 const unused = [...defined].filter((n) => !used.has(n)).sort();

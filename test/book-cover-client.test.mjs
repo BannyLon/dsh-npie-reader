@@ -40,10 +40,16 @@ test('封面小字去掉书名号并截断', () => {
   assert.equal(coverCaption(''), '');
 });
 
-test('封面来源的判定：只有 epub / pdf 有真封面', () => {
+test('封面来源的判定：epub 与 MOBI 系有宿主真封面，pdf 走客户端，其余生成式', () => {
   assert.equal(coverKind({ ext: 'epub' }), 'epub');
+  // ★ `ebook` 与 `epub` 分开：0.71.6 起宿主也能解 MOBI / AZW / AZW3 的封面
+  //   （EXTH 201 + MOBI 头 0x5C），但 `data-kind` 要能区分「这是哪一类容器」，
+  //   否则用户报「封面是花的」时分不清是 OPF 挑错图还是 EXTH 偏移算错。
+  assert.equal(coverKind({ ext: 'mobi' }), 'ebook');
+  assert.equal(coverKind({ ext: 'AZW3' }), 'ebook', '大写后缀没被识别');
+  assert.equal(coverKind({ ext: 'azw' }), 'ebook');
   assert.equal(coverKind({ ext: 'PDF' }), 'pdf', '大写后缀没被识别（书单里两本书都是 `PDF`）');
-  for (const ext of ['mobi', 'azw3', 'txt', 'docx', '']) {
+  for (const ext of ['txt', 'docx', '']) {
     assert.equal(coverKind({ ext }), 'made', `${ext} 被当成了有真封面 —— 它没有`);
   }
 });

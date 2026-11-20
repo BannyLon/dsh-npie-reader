@@ -26,6 +26,10 @@
  *     - PDF 原生注释要写回文件，那是改用户的文件，本项目不干；
  *     - 偏移 + 摘录原文，渲染时用 Range 重新算矩形，缩放后自然跟着走；
  *       万一文字层变了（换过文件），还能用 `quote` 兜底找回或如实标为失配。
+ *
+ * ★ 最后那半句从 0.75.x 起**真的实现了**：`createAnnotationStore` 可注入
+ *   `relocate`，`list / add / update / remove` 的返回值都经它投影一次，见本文件
+ *   的 `present()` 与共用层 `annotation-relocate.js`。投影只在内存里，不回写磁盘。
  */
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
@@ -99,7 +103,7 @@ async function writeJsonAtomic(path, value) {
 /**
  * @param options.rootDir - 插件数据目录（`pluginDataDir()`）。
  */
-export function createAnnotationStore({ rootDir, log = () => {} } = {}) {
+export function createAnnotationStore({ rootDir, log = () => {}, relocate } = {}) {
   if (typeof rootDir !== 'string' || rootDir === '') throw new TypeError('annotation-store: 需要 rootDir');
 
   const dir = join(rootDir, 'annotations');
@@ -124,6 +128,27 @@ export function createAnnotationStore({ rootDir, log = () => {} } = {}) {
     // 队列本身不该把失败传染给下一个操作，也不该让 Map 无限长。
     chains.set(bookId, next.catch(() => {}));
     return next;
+  }
+
+  /**
+   * 把落盘坐标投影成「当前正文下」的坐标。
+   *
+   * ★ 只改**返回值，不回写磁盘**：重定位结果是「这一版正文下的投影」，正文再变
+   *   就该重算；写回去反而把一次猜测固化成事实，还会让 GET 请求有了写副作用、
+   *   与 add 的串行队列抢同一份文件。`mismatch` 同理只在内存里，不进 JSON。
+   * ★ 重定位失败不能让划线读不出来：按原坐标返回 + 记一句日志，不静默吞。
+   * ★ 没有注入 `relocate`（PDF 书 / 老夹具）时原样返回，PDF 的文字层坐标系
+   *   与电子书的块模型完全不同，绝不能混着算。
+   */
+  async function present(bookId, items) {
+    if (typeof relocate !== 'function' || items.length === 0) return items;
+    try {
+      const result = await relocate(bookId, items);
+      return Array.isArray(result?.items) ? result.items : items;
+    } catch (error) {
+      log(`[划线] ${bookId} 的位置重定位没跑完，先按原坐标显示：${error?.message ?? error}`);
+      return items;
+    }
   }
 
   async function readAll(bookId) {
@@ -171,7 +196,7 @@ export function createAnnotationStore({ rootDir, log = () => {} } = {}) {
 
   /** 这本书全部划线（按页码 + 位置排序）。文件不存在 ⇒ `[]`，不是错误。 */
   async function list(bookId) {
-    return await readAll(bookId);
+    return await present(bookId, await readAll(bookId));
   }
 
   /**
@@ -183,12 +208,12 @@ export function createAnnotationStore({ rootDir, log = () => {} } = {}) {
       const items = await readAll(bookId);
       const same = items.find(item => item.page === Number(input?.page)
         && item.start === Number(input?.start) && item.end === Number(input?.end));
-      if (same !== undefined) return { items, item: same, duplicate: true };
+      if (same !== undefined) return { items: await present(bookId, items), item: same, duplicate: true };
       if (items.length >= MAX_ITEMS) throw fail(`这本书的划线已经到 ${MAX_ITEMS} 条上限`);
       const item = normalizeAnnotation(input);
       const next = [...items, item].sort(compare);
       await writeAll(bookId, next);
-      return { items: next, item, duplicate: false };
+      return { items: await present(bookId, next), item, duplicate: false };
     });
   }
 
@@ -207,7 +232,7 @@ export function createAnnotationStore({ rootDir, log = () => {} } = {}) {
       const list = [...items];
       list[index] = next;
       await writeAll(bookId, list);
-      return { items: list, item: next };
+      return { items: await present(bookId, list), item: next };
     });
   }
 
@@ -217,7 +242,7 @@ export function createAnnotationStore({ rootDir, log = () => {} } = {}) {
       const items = await readAll(bookId);
       const next = items.filter(item => item.id !== id);
       if (next.length !== items.length) await writeAll(bookId, next);
-      return { items: next, removed: next.length !== items.length };
+      return { items: await present(bookId, next), removed: next.length !== items.length };
     });
   }
 

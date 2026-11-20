@@ -199,12 +199,51 @@ describe('密钥来源：钥匙串优先，失败退回文件', () => {
     assert.equal(await second.decrypt(blob), '昨天的日记');
   });
 
-  it('钥匙串超时（code -2）当不可用，退回文件而不是抛错', async () => {
+  it('★ 钥匙串超时（code -2）且没有文件密钥 ⇒ fail-closed，绝不新建（0.84.7）', async () => {
+    // 这条以前写的是「超时就退回文件」—— 那正是缺陷：退回文件会**新建**一把随机密钥，
+    // 而钥匙串里可能正躺着一把能解开旧日记的钥匙。一次 5 秒超时就永久分家，
+    // 用户只看到「解密失败」。现在改成：不确定就不许造新钥匙。
     const secret = createDiarySecret({
       run: async () => ({ code: -2, stdout: '', stderr: '钥匙串调用超时' }),
       keyPath: keyPathOf('k.key'),
     });
-    assert.equal((await secret.status()).mode, 'file');
+    await assert.rejects(() => secret.encrypt('新的一条'), (error) => error.code === 'KEYCHAIN_UNAVAILABLE');
+    // 关键断言：磁盘上**没有**多出一把新密钥（旧逻辑会在这里落一把）
+    await assert.rejects(() => stat(keyPathOf('k.key')), (error) => error.code === 'ENOENT');
+    // status() 是报告函数：不 reject，把失败如实写在 mode 里
+    const status = await secret.status();
+    assert.equal(status.mode, 'error');
+    assert.match(status.error, /读不到|超时/);
+  });
+
+  it('★ 钥匙串超时但已有文件密钥 ⇒ 用文件密钥，不新建第三把', async () => {
+    // 场景：这台机器历史上就是文件模式（钥匙串一直不可用），某次忽然超时。
+    // 已有的文件密钥就是真钥匙，用它 —— 不能因为这次读不到就再建一把。
+    const chain = fakeKeychain({ available: false });
+    const first = createDiarySecret({ run: chain.run, keyPath: keyPathOf('k2.key') });
+    const blob = await first.encrypt('旧日记');
+    const timedOut = createDiarySecret({
+      run: async () => ({ code: -2, stdout: '', stderr: '钥匙串调用超时' }),
+      keyPath: keyPathOf('k2.key'),
+    });
+    assert.equal(await timedOut.decrypt(blob), '旧日记', '已有的文件密钥必须还能解开旧内容');
+    assert.equal((await timedOut.status()).mode, 'file');
+  });
+
+  it('★ 钥匙串报未知错误（权限被拒）⇒ 一次 add 都不做，也不建文件', async () => {
+    // 反向对照的关键：`add-generic-password -U` 会**覆盖**已有条目。
+    // 权限被拒不是「不存在」；一旦被当成不存在，用户原来的密钥就被换掉。
+    let adds = 0;
+    const secret = createDiarySecret({
+      run: async (args) => {
+        if (args[0] === 'add-generic-password') adds += 1;
+        return { code: 36, stdout: '', stderr: 'User interaction is not allowed.' };
+      },
+      keyPath: keyPathOf('k3.key'),
+    });
+    await assert.rejects(() => secret.encrypt('x'), (error) => error.code === 'KEYCHAIN_UNAVAILABLE');
+    assert.equal(adds, 0, '不确定时必须一次 add 都不做');
+    await assert.rejects(() => stat(keyPathOf('k3.key')), (error) => error.code === 'ENOENT');
   });
 
   it('★ 钥匙串里有条目但长度不对 ⇒ 报错且**绝不覆盖**', async () => {

@@ -106,10 +106,10 @@ describe('接线：自动翻译真的被接上去了', () => {
     assert.match(reader, /api\.generateVersion\(key, 'translation'\)/, 'ReaderPage 没有真的去生成译文');
   });
 
-  it('★ ReaderPage 读的是 readingRef，不是首渲染闭包里的 reading', () => {
-    // 「恢复上次阅读位置」那个 effect 依赖是 []，它拿到的是首渲染的 openArticle。
-    // 直接读 state 的话，开着开关重启应用、恢复到上次那篇英文文章时翻译不触发，
-    // 而且没有任何报错 —— 开关看着是开的。
+  it('★ ReaderPage 读的是 readingRef，不是点开那一刻的旧闭包', () => {
+    // openArticle 是 async 的，shouldAutoTranslate 在 await 正文之后才读开关。
+    // 直接读闭包里的 state 拿到的是点开那一刻的旧值：用户刚改过设置时按旧值判断，
+    // 自动翻译不按最新设置触发，而且没有任何报错 —— 开关看着是开的。
     assert.match(reader, /shouldAutoTranslate\(readingRef\.current, data\)/);
     assert.doesNotMatch(reader, /shouldAutoTranslate\(reading, data\)/);
     assert.match(reader, /const readingRef = useRef\(reading\)/, '缺少 readingRef 镜像');

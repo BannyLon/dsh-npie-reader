@@ -24,10 +24,12 @@
  *   所以优先复用上一份书单里同源同文件的 id（`previousIds`），只有全新的文件才现算。
  */
 
-import { readdir, stat } from 'node:fs/promises';
+import { open, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { BOOK_EXTENSIONS, bookIdFromPath, normalizeExtension, titleFromFilename } from '../library.js';
+import { decodeTextBuffer } from './ebook/plain.js';
+import { inspectText } from '../text-filter.js';
 
 /** 一次扫描最多产出多少本。挡住「不小心把整个磁盘配成源」。 */
 export const MAX_SCAN_BOOKS = 20_000;
@@ -45,6 +47,27 @@ const PAN_SCAN_CONCURRENCY = 4;
 /** 网盘列目录每页条数与最多翻几页（1000 × 30 = 3 万条上限）。 */
 const PAN_PAGE_SIZE = 1_000;
 const PAN_MAX_PAGES = 30;
+
+/**
+ * TXT 抽样只取开头 64 KB。
+ *
+ * ★ 不整本读：一本几 MB 的 TXT 乘上几千本，扫描时会把内存吃满。判据看的是
+ *   「行特征 + 句子密度」，开头几千字足够稳定，不需要读到最后一行。
+ * ★ 截断处可能把一个多字节汉字切成两半，严格 UTF-8 会失败、走解码链的下一步；
+ *   这只影响抽样末尾几个字，不影响整段的行特征。
+ */
+export const TEXT_SAMPLE_BYTES = 64 * 1024;
+
+async function sampleTextFile(full, limit = TEXT_SAMPLE_BYTES) {
+  const handle = await open(full, 'r');
+  try {
+    const buffer = Buffer.alloc(limit);
+    const { bytesRead } = await handle.read(buffer, 0, limit, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
 
 function expandHome(path) {
   if (path === '~') return homedir();
@@ -160,9 +183,26 @@ export async function scanLocalRoots(roots, options = {}) {
           fileInfo = await stat(full);
         } catch { skipped += 1; continue; }
 
+        /**
+         * 只标 `suspect`，**不排除**：书照常进书单、照常能打开，由用户在书单里
+         * 看到那枚「可能不是书」自己决定。把判定放在「打开书」那一刻更糟 ——
+         * 那会让已入库的书突然打不开。
+         * ★ 只对本地 TXT 抽样：网盘文件要判定就得把整本正文下载下来，为了一个
+         *   「可能是假书」的提示花掉一本书的流量不值，所以网盘一律不标。
+         * ★ 抽不到样 / 解码炸了就当没判定：漏标一本假书，好过把真书标成假书。
+         */
+        let textSuspect = null;
+        if (ext === 'txt') {
+          try {
+            const verdict = inspectText(decodeTextBuffer(await sampleTextFile(full)).text);
+            if (verdict.suspect) textSuspect = { suspect: true, suspectReason: verdict.reason };
+          } catch { /* 读不到就不猜，扫描照常进行 */ }
+        }
+
         const relpath = relative(root, full);
         const key = `local:${full}`;
         books.push({
+          ...(textSuspect ?? {}),
           id: previousIds.get(key) ?? bookIdFromPath('l', full),
           filename: entry.name,
           abspath: full,

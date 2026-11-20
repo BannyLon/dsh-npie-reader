@@ -19,10 +19,11 @@
 import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join, sep } from 'node:path';
 import {
-  DIARY_API_PREFIX, ENTRY_KINDS, META_OPEN, appendEntryText, buildDay, dateKey, dayCharCount, dayFileName,
+  DIARY_API_PREFIX, DIARY_MODULES, ENTRY_KINDS, META_OPEN, appendEntryText, buildDay, dateKey, dayCharCount, dayFileName,
   isValidDateKey, isValidMonthKey, moodScore, normalizeMeta, parseDay, parseTags, removeEntryText, updateEntryText,
-  splitFrontmatter, timeKey,
+  splitFrontmatter, stripInlineTargets, timeKey,
 } from '../diary-format.js';
+import { snippetAround } from './search.js';
 import { createDiaryGate } from './diary-gate.js';
 import { createDiarySecret } from './diary-secret.js';
 import { pluginDataDir } from './store.js';
@@ -125,6 +126,34 @@ export function diaryFilePath(key) {
 export function diaryPrivateFilePath(key) {
   if (!isValidDateKey(key)) throw coded('BAD_DATE', `无效的日期：${key}`);
   return join(diaryPrivateDir(), `${dayFileName(key)}.enc`);
+}
+
+/**
+ * 「现在在哪个模块」→ 导出 / 搜索的作用域。
+ *
+ * ★ 这张表**只有一份**（`DIARY_MODULES`）。界面上那三个选项卡的 `value` 与这里的
+ *   `kind` 本来是同一件事；宿主再抄一份映射，迟早漂成「界面写着读后感、导出的
+ *   却是灵感」—— 而文件名看起来完全正常，用户要到打开文件才发现。
+ * ★ 认不出的模块返回 `null`：这里**不猜**。猜错的后果是一份不是用户要的文件
+ *   已经落进下载目录了（而下载目录还会被 iCloud 同步走）。
+ *   调用方（路由层）负责把非法值拒成 400。
+ */
+export function moduleScope(value) {
+  const found = DIARY_MODULES.find((item) => item.value === value);
+  return found ? { module: found.value, label: found.label, kind: found.kind, vis: found.vis } : null;
+}
+
+/**
+ * 某一条属不属于这个模块（只用于公开那半边：灵感与读后感同处一个 `.md`）。
+ *
+ * ★ 灵感用**排除法**（`kind !== '读后感'`），不是「等于灵感」：0.30 之前写过的
+ *   「书摘」条目还躺在文件里（`LEGACY_KINDS`）。按等于判，它们会在模块导出里
+ *   凭空消失，而用户只看到「导出的比写的少」，无从知道少了什么。
+ * ★ 这条口径与界面的 `inspirationEntries`、`append()` 的 `listedCount` 同源。
+ */
+export function inModule(mod, entry) {
+  if (mod.module === 'inspiration') return entry.kind !== '读后感';
+  return entry.kind === mod.kind;
 }
 
 /** 读一天。文件不存在时 `exists: false`，**不是错误** —— 那天就是还没写。 */
@@ -262,8 +291,9 @@ export function createDiaryStore(options = {}) {
 
   /**
    * 追加一条到某一天（默认今天）。
-   * @returns `{ date, time, index, chars, path, scope, kind, kindAsked, kindFellBack }`
+   * @returns `{ date, time, index, chars, path, scope, kind, kindAsked, kindFellBack, listedCount }`
    *   —— `index` 是这一条在**它自己那一半**里的序号，界面靠它做「删掉刚写的那条」；
+   *   `listedCount` 见下（回执里「今天第 N 条」用它，**不要**用 `index + 1`）；
    *   `kindFellBack` 表示「调用方给的类型不认识、已按 `kind` 存下」，回执必须说出来。
    */
   async function append(input = {}) {
@@ -293,9 +323,20 @@ export function createDiaryStore(options = {}) {
       if (privateSide) await writePrivateAtomic(key, nextText, secret);
       else await writeDayAtomic(key, nextText);
       log(`[日记] 追加 ${key} ${entry.time} ${entry.kind}（${entry.body.length} 字${privateSide ? '，私密' : ''}）`);
+      /*
+       * ★ `listedCount` = **界面上那个模块会列出来的条数**（0.72.0）。
+       *   灵感速记的回执要说「今天第 N 条」，而 `index + 1` 是公开侧**全部**条目的
+       *   序号 —— 灵感模块的列表排除「读后感」（`DiaryApp` 的 `inspirationEntries`）。
+       *   今天写过一篇读后感时两个数就差 1：回执说「第 3 条」而界面显示 2 条，
+       *   是一句可以被当场证伪的话。
+       * ★ 口径只在这里算一次，客户端不重算：白名单/过滤规则分散到两处，迟早漂开。
+       */
+      const listedCount = privateSide
+        ? entries.length
+        : entries.filter((item) => item.kind !== '读后感').length;
       return {
         date: key, time: entry.time, index: entries.length - 1, chars, path: file, scope: entry.vis,
-        kind: entry.kind, kindAsked: asked, kindFellBack,
+        kind: entry.kind, kindAsked: asked, kindFellBack, listedCount,
       };
     });
   }
@@ -317,6 +358,73 @@ export function createDiaryStore(options = {}) {
       if (privateSide) await writePrivateAtomic(key, result.text, secret);
       else await writeDayAtomic(key, result.text);
       return { date: key, entries: result.entries.length, chars: dayCharCount(result.entries), scope: input.scope === 'private' ? 'private' : 'public' };
+    });
+  }
+
+  /**
+   * 删掉某一天的**全部记录**（0.75.0）。
+   *
+   * 用户 2026-11-11：「我需要一个删除某天的全部记录」。
+   *
+   * ★ 为什么不写成「循环调用 `removeEntry`」：那是 N 次「读整份 → 删一条 → 整份写回」，
+   *   中途任何一次失败都会留下**删了一半**的一天 —— 界面上看起来是「有些没了、
+   *   有些还在」，而且没有任何一条路径能把它恢复到之前的样子。
+   *   整天删除必须是一次原子动作：一次 `rename`。
+   * ★ **先挪后删，绝不 `unlink`**：移到 `diary/_trash/`，原文件消失、界面立刻清空，
+   *   但磁盘上那一天还是完整的 Markdown。删一整天与删一条的量级不同 ——
+   *   误点一次就是一天的东西永久没了，而这里没有撤销栈能救回来。
+   *   文件名带删除时刻（`2026-11-11@2026-11-11T13-36-37-901Z.md`），
+   *   想找回时一眼看得出「哪一次删的、删的是哪天」。
+   * ★ 只动**这一半**：公开与私密是两个文件（`daily/*.md` 与 `private/*.md.enc`），
+   *   调用方必须用 `scope` 说明删哪一半 —— 与 `removeEntry` 同一条理由，猜错一次
+   *   就是删错文件。
+   * ★ 解不开的私密文件**仍然允许删**：`readPrivateDay` 在密钥不可用 / 信封损坏时
+   *   会抛 `DECRYPT_FAILED`，若据此拒绝删除，那个文件就会永远赖在那里，而用户要的
+   *   正是把它清掉。这种情况下条目数报 0、并用 `unreadable` 如实说明
+   *   （回执不能编一个数字）。
+   */
+  async function removeDay(input = {}) {
+    const key = input.date;
+    if (!isValidDateKey(key)) throw coded('BAD_DATE', `无效的日期：${key}`);
+    const privateSide = input.scope === 'private';
+    const file = privateSide ? diaryPrivateFilePath(key) : diaryFilePath(key);
+    return await enqueue(file, async () => {
+      let current;
+      let unreadable = false;
+      if (privateSide) {
+        try {
+          current = await readPrivateDay(key);
+        } catch {
+          unreadable = true;
+          // 解不开 ≠ 不存在：文件在那里，只是读不出条目。删除照做，数字不编。
+          current = { exists: true, entries: [], chars: 0 };
+        }
+      } else {
+        current = await readDay(key);
+      }
+      if (!current.exists) throw coded('ENTRY_NOT_FOUND', `${key} 还没有日记`);
+      const entries = current.entries.length;
+      const chars = current.chars;
+
+      const trashDir = join(diaryRoot(), '_trash');
+      await mkdir(trashDir, { recursive: true });
+      // 毫秒级时间戳：同一毫秒删同一天不可能发生（第一次已经把文件挪走了）。
+      const stamp = now().toISOString().replace(/[:.]/g, '-');
+      // ★ `dayFileName()` 自带 `.md`，这里要的是**去掉后缀的日期**：
+      //   直接拼会得到 `2026-11-02.md@…md`（第一版就是这么写的，被测试当场抓住）。
+      const base = dayFileName(key).replace(/\.md$/, '');
+      const name = `${base}@${stamp}${privateSide ? '.md.enc' : '.md'}`;
+      await rename(file, join(trashDir, name));
+
+      return {
+        date: key,
+        scope: privateSide ? 'private' : 'public',
+        entries,
+        chars,
+        unreadable,
+        // 相对 `diary/` 的落点，回执与确认框都要用它告诉用户「去哪儿找回来」。
+        trashed: `_trash/${name}`,
+      };
     });
   }
 
@@ -911,11 +1019,28 @@ export function createDiaryStore(options = {}) {
     const limit = Number.isFinite(asked) && asked > 0
       ? Math.min(Math.floor(asked), SEARCH_RESULT_MAX)
       : SEARCH_RESULT_DEFAULT;
+    /*
+     * ★ 「在哪个模块里搜」是作用域，不是排序建议（0.86.0）：
+     *   在读后感里搜一本书，返回一堆灵感 —— 用户点进去发现是一句话便签，
+     *   那比「没搜到」更让人困惑（他会以为读后感丢了）。
+     * ★ 不传 `module` 时**不过滤**：工具（`diary_search`）与老调用点仍能看到全部，
+     *   这条默认值是「模型侧不该被界面的选项卡限制」。
+     */
+    const mod = moduleScope(input.module);
     const hits = [];
     const scan = await scanDays(({ date, scope, index, entry }) => {
-      const hay = `${entry.kind} ${entry.source} ${entry.body}`.toLowerCase();
+      if (mod !== null) {
+        // 私密模块只搜私密那半边，公开模块连解密都不该发生（`includePrivate` 由路由层关掉）。
+        if (mod.vis === 'private' ? scope !== 'private' : scope !== 'public') return;
+        if (mod.vis === 'public' && !inModule(mod, entry)) return;
+      }
+      // ★ 匹配用的是**剥掉链接地址之后**的正文（0.73.1）。不剥的话，一条贴过图的
+      //   灵感会因为正文里含 `![](/api/dsh-npie-reader/diary/assets/3f2a…png)`
+      //   而被 `assets`、`api`、`png`、甚至那串哈希本身命中 —— 搜索变成索引噪音。
+      //   而用户真正想搜的「图」反而一条也搜不到（正文里没有那个字）。
+      const plain = stripInlineTargets(entry.body);
+      const hay = `${entry.kind} ${entry.source} ${plain}`.toLowerCase();
       if (!hay.includes(needle)) return;
-      const at = hay.indexOf(needle);
       hits.push({
         date,
         scope,
@@ -923,7 +1048,10 @@ export function createDiaryStore(options = {}) {
         time: entry.time,
         kind: entry.kind,
         source: entry.source,
-        snippet: entry.body.replace(/\s+/g, ' ').slice(Math.max(0, at - 40), at + 120),
+        // ★ 摘要必须**在正文自己里**定位（0.73.1）。原来拿 `hay.indexOf(needle)`
+        //   的下标去切 `entry.body` —— 那个下标带着 `kind`/`source` 的前缀长度，
+        //   一条「读后感 · 《某本书》」就整体偏了七八个字，摘出来的是错的片段。
+        snippet: snippetAround(plain, needle, 60),
       });
       if (hits.length >= limit) return false;
     }, { includePrivate: input.includePrivate === true });
@@ -933,7 +1061,33 @@ export function createDiaryStore(options = {}) {
   }
 
   /**
-   * 全部导出：`{ files: [{ name, text }] }`。
+   * 全部日记正文里出现过的图片名（0.73.1，给 `diaryAssets.prune()` 当白名单）。
+   *
+   * ★ **只扫公开的 `daily/`**，这是有意的：私密条目禁止贴图（见 `DiaryComposer`
+   *   里的说明），且私密正文是加密的，宿主本来也读不出 url。将来若允许私密贴图，
+   *   **这里必须一起扫**，否则私密里引用的图会被当成孤儿删掉 —— 那是「图凭空消失」
+   *   的经典成因，而且只在用户翻旧私密日记时才发现。
+   * ★ 扫文件**原文**而不是 `parseDay()` 的结果：图可能出现在任何位置，而 `parseDay()`
+   *   只认 `## HH:MM 类型` 开头的那几块。一份被手动改过、格式不再规整的日记不会
+   *   因为这一点就失去保护 —— 宁可多留一张图，不可删掉一张还在用的。
+   * ★ 正则限定成 `ASSET_NAME_PATTERN` 的形状（16 位小写十六进制 + 认识的扩展名）：
+   *   匹配宽一点不会出事（宽出来的只是「不删」），但两份正则不一致会让「被引用的
+   *   那张图」永远对不上号。改任一边都要同时改另一边，判据里有一条对账。
+   */
+  async function referencedAssets() {
+    const names = new Set();
+    for (const item of await readDirQuiet(diaryDailyDir())) {
+      if (!item.endsWith('.md') || !isValidDateKey(item.slice(0, -3))) continue;
+      const text = await readFile(join(diaryDailyDir(), item), 'utf8').catch(() => '');
+      for (const hit of text.matchAll(/\/assets\/([a-f0-9]{16}\.(?:png|jpg|gif|webp))/g)) {
+        names.add(hit[1]);
+      }
+    }
+    return names;
+  }
+
+  /**
+   * 导出：`{ files: [{ name, text }], total, entries, skippedPrivate, scope }`。
    *
    * ★ 取消「移入 Obsidian」之后，这是日记**唯一**的出口。没有它，重装 DSH 就是全丢，
    *   而 `~/.dsh/storages/` 不是用户会去翻的地方。
@@ -941,33 +1095,80 @@ export function createDiaryStore(options = {}) {
    * ★ **默认不含私密日记**：导出是往浏览器下载目录里写明文，那正好是加密层要防的
    *   第一件事。要导出私密部分必须显式传 `includePrivate: true`，且由界面把后果
    *   说清楚 —— 不能让一次「点导出」把加密悄悄拆了。
+   *
+   * ★ `module`（0.86.0）：用户 2026-11-19 的反馈是「明明我切到读后感了，点击下载
+   *   下载的还是日记」。这不是文件名写错，是**这条路径没有作用域** —— 它一直导的是
+   *   整个 `daily/` 目录。三个模块共用一份 `daily/*.md`，所以「按模块导出」必须
+   *   按 `kind` 拆条目重拼：整天原样搬的写法在这里不成立。
+   *   · 不传 `module` ⇒ **老行为逐字节不变**（整天文件原样、可逆），工具与老调用点不受影响；
+   *   · `inspiration` / `reflection` ⇒ 只留该类的条目，一天没有该类内容就整天不出现
+   *     （否则导出里会有「2026-11-11.md」却一个字都没有的块，看起来像那天丢了）；
+   *   · `private` ⇒ 只导出私密那半边（解密后一天一份），并**不**夹带公开日记。
    */
   async function exportAll(input = {}) {
+    const mod = moduleScope(input.module);
     const files = [];
-    for (const name of (await readDirQuiet(diaryDailyDir()))
-      .filter((item) => item.endsWith('.md') && isValidDateKey(item.slice(0, -3)))
-      .sort()) {
-      const text = await readFile(join(diaryDailyDir(), name), 'utf8').catch(() => '');
-      if (text !== '') files.push({ name, text });
+    let entries = 0;
+    /*
+     * 公开那半边。灵感与读后感同处 `daily/YYYY-MM-DD.md`，靠标题行的 `kind` 分家
+     * （见 `diary-format.js` 的 `ENTRY_LINE`）—— 所以「按模块导出」在这里只能是
+     * 按条目重拼，不能整天搬。
+     */
+    if (mod === null || mod.vis === 'public') {
+      const pubNames = (await readDirQuiet(diaryDailyDir()))
+        .filter((item) => item.endsWith('.md') && isValidDateKey(item.slice(0, -3)))
+        .sort();
+      for (const name of pubNames) {
+        const text = await readFile(join(diaryDailyDir(), name), 'utf8').catch(() => '');
+        if (text === '') continue;
+        if (mod === null) {
+          // ★ 「全部日记」这条路径**一个字节都不重排**：每块前面那行
+          //   `<!-- 2026-10-26.md -->` 说明它原来叫什么文件，用户按注释切回去
+          //   就能还原成一天一个 `.md`。重排一次这个性质就没了。
+          files.push({ name, text });
+          entries += parseDay(text).entries.length;
+          continue;
+        }
+        const key = name.slice(0, -3);
+        const kept = parseDay(text).entries.filter((entry) => inModule(mod, entry));
+        if (kept.length === 0) continue;
+        // 走 `buildDay()` 而不是手拼：条目块（标题行 + 元数据行 + 正文）的排版
+        // 只该有一份实现，手拼一份就会和「追加 / 改写」写出的文件长得不一样。
+        files.push({ name, text: buildDay(key, kept), count: kept.length });
+        entries += kept.length;
+      }
     }
-    let skippedPrivate = 0;
+    /*
+     * 私密那半边。
+     *
+     * ★ `skippedPrivate` 的两种含义都要如实说，不能混成一个「跳过 N 天」：
+     *   · 全部导出时 = 「没勾含私密，所以留在磁盘上的天数」；
+     *   · 私密模块时 = 「本该导出、但解不开的天数」（这是**失败**，不是越界）。
+     */
     const privNames = (await readDirQuiet(diaryPrivateDir()))
       .filter((item) => item.endsWith('.md.enc') && isValidDateKey(item.slice(0, -7)))
       .sort();
-    skippedPrivate = privNames.length;
-    if (input.includePrivate === true) {
+    const wantPrivate = mod === null ? input.includePrivate === true : mod.vis === 'private';
+    let skippedPrivate = mod === null && !wantPrivate ? privNames.length : 0;
+    if (wantPrivate) {
       for (const name of privNames) {
         const key = name.slice(0, -7);
         try {
           const text = await secret.decrypt(await readFile(join(diaryPrivateDir(), name), 'utf8'));
           files.push({ name: `${key}.private.md`, text });
-          skippedPrivate -= 1;
+          entries += parseDay(text).entries.length;
         } catch {
           // 解不开就留在「没导出」的计数里，让界面如实说「有 N 天没导出」。
+          skippedPrivate += 1;
         }
       }
     }
-    const result = { files, total: files.length, skippedPrivate };
+    /*
+     * `total` 一直是「几天」：界面文案、老调用点都按它写。条数另给 `entries` ——
+     * 两者的关系是「N 天 / M 条」，把条数塞进 `total` 会让回执变成一句假话。
+     * `scope` 原样回给客户端拼文件名与文案：客户端若自己再抄一份模块表，就会漂。
+     */
+    const result = { files, total: files.length, entries, skippedPrivate, scope: mod };
     return result;
   }
 
@@ -1033,9 +1234,11 @@ export function createDiaryStore(options = {}) {
     append,
     updateEntry,
     removeEntry,
+    removeDay,
     listMonth,
     dashboard,
     search,
+    referencedAssets,
     tags,
     timeline,
     byBook,

@@ -140,7 +140,12 @@ describe('0.44：朗读 —— 组件接线（纯函数表达不了的部分）'
 
   it('用纯函数挑声音与切块，不把策略写在组件里', () => {
     assert.match(readerSource, /pickVoice\(/);
-    assert.match(readerSource, /speechChunks\(/);
+    /* 0.75.x 起朗读切块统一走 speechChunksForReading（内含发音修正）。
+       判据跟着换，且比原来更严：播放路径不许再出现裸 speechChunks( ——
+       只改一处漏一处时，症状是「电子书读对了、文章还读错」。 */
+    assert.match(readerSource, /speechChunksForReading\(/);
+    assert.doesNotMatch(readerSource, /speechChunks\(/,
+      '朗读正文又绕回了裸切块，发音修正会在这条路径上静默失效');
   });
 });
 
@@ -237,18 +242,24 @@ describe('0.54：试听文本', () => {
 });
 
 describe('0.54：组件接线 —— 能选、能记住、换完立刻生效', () => {
-  it('菜单里有朗读声音那一行，且用 chineseVoices 铺选项', () => {
+  it('菜单里有朗读声音那一行，选项来自共用的 speechVoiceGroups', () => {
     assert.match(readerSource, /aria-label="朗读声音"/, '菜单里没有朗读声音那一行');
     assert.match(readerSource, /className="npr-menu-select"/, '没有下拉');
-    assert.match(readerSource, /chineseVoices\(voices\)/, '下拉没有用 chineseVoices 铺选项');
+    // 0.76.1 起分组逻辑抽到 article-speech.js（设置页与阅读页共用一份），
+    // 所以这里断了 chineseVoices 而改断 speechVoiceGroups —— 但强度不变：
+    // 仍然要求「下拉真的被铺了选项」，而不是只画出个空壳 <select>。
+    assert.match(readerSource, /speechVoiceGroups\(\{ voices, cloud \}\)/, '下拉没有铺选项');
   });
 
-  /* ★ 核心：这个 key 以前只读不写。断言必须落在 setItem 上 ——
-     只断言「读了 npr.speechVoice」在 bug 版本里同样成立（那正是 bug 本身）。 */
+  /* ★ 核心：这个 key 以前只读不写。断言必须落在「写」上 ——
+     只断言「读了 npr.speechVoice」在 bug 版本里同样成立（那正是 bug 本身）。
+     ★ 0.76.1 起写盘挪进 `writeSpeechPrefs`（它内部写 SPEECH_VOICE_KEY 并广播）。
+       这里核「确实调了它且把选中的值传进去」；「它真写对了键」由
+       `test/speech-prefs.test.mjs` 用假 storage 真跑逐条断言。 */
   it('★ 选中后真的写进 localStorage', () => {
     assert.match(
       readerSource,
-      /localStorage\.setItem\('npr\.speechVoice'/,
+      /writeSpeechPrefs\(localStorage, \{ voice: value \}\)/,
       '没有任何地方写 npr.speechVoice —— 偏好是死的，用户选了等于没选',
     );
   });

@@ -494,7 +494,10 @@ describe('splitByHeadings', () => {
     // 卷标题页并进「一、起点」那页，于是两页；三条目录一条不丢。
     assert.equal(ebook.sections.length, 2, '一个 XHTML 里的三个标题没有拆成两页');
     assert.deepEqual(ebook.toc.map(item => item.section), [1, 1, 2]);
-    assert.equal(ebook.v, 2, '缓存版本没跟着变 —— 老缓存会被继续用');
+    // ★ 缓存版本快照。0.62.0 把「语种」算进解析结果（`script`）⇒ 形状变了，
+    //   `EBOOK_CACHE_VERSION` 2 → 3。这条断言就是「改了形状必须记得抬版本」的
+    //   提醒物：抬了版本却忘了改这里的字面量，它就会红。
+    assert.equal(ebook.v, 3, '缓存版本没跟着变 —— 老缓存会被继续用');
     assert.deepEqual(ebook.toc.map(item => item.depth), [0, 1, 1], '目录层级没算对');
   });
 });

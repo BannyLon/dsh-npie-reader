@@ -11,6 +11,7 @@
  *
  *   GET    /days?month=YYYY-MM        某月哪几天有日记、各有几条
  *   GET    /day/:date                 某一天的全部条目（公开 + 私密）
+ *   DELETE /day/:date?scope=private   删掉这一天的**全部**记录（移到 `diary/_trash/`）
  *   POST   /day/:date/append          追加一条（body: { time?, kind?, source?, meta?, vis?, body }）
  *   PATCH  /day/:date/entry/:index?scope=private   改写某一条（body 里给要改的字段）
  *   DELETE /day/:date/entry/:index?scope=private   删掉某一条（按序号 + 归属哪一半）
@@ -23,6 +24,12 @@
  *   GET    /stats                     多少天、占多少字节、目录在哪、密钥在哪
  *   GET    /secret                    密钥状态（会触发取密钥，只在真正需要时调）
  *   POST   /reveal                    在访达/资源管理器里打开日记目录
+ *
+ * ★ 0.86.0：「跟着选项卡走」的作用域参数，三条路由统一叫 `module`
+ *   （`inspiration` / `private` / `reflection`，见 `DIARY_MODULES`）。
+ *   `/search?module=`、`/export?module=`、`/reveal` 的 body `{ module }`。
+ *   不传 = 原来的「全部」语义；**传错 = 400**，不静默降级（降级的后果是一份
+ *   看起来正常、其实含另两个模块内容的导出文件，而它已经落到下载目录了）。
  *   GET    /gate                      口令闸门状态（有没有设、现在解没解锁）
  *   POST   /gate                      第一次设置口令（body: { passphrase }）
  *   POST   /gate/unlock               解锁（body: { passphrase }）；错口令 401
@@ -48,7 +55,8 @@
  *   就少一次「手滑点错」。
  */
 
-import { DIARY_API_PREFIX, isValidDateKey, isValidMonthKey } from '../diary-format.js';
+import { DIARY_API_PREFIX, DIARY_MODULES, isValidDateKey, isValidMonthKey } from '../diary-format.js';
+import { ASSET_MAX_BYTES } from './diary-assets.js';
 import { isTrustedLocalRequest } from './trust.js';
 
 export { DIARY_API_PREFIX };
@@ -101,10 +109,18 @@ function diaryErrorStatus(error) {
   if (code === 'DISK_IO' || code === 'DISK_BAD_PATH' || code === 'EIO') return 500;
   if (code === 'ENTRY_NOT_FOUND' || code === 'ENOENT') return 404;
   if (code === 'EMPTY_ENTRY' || code === 'BAD_DATE' || code === 'BAD_MONTH' || code === 'BAD_BOOK') return 400;
+  // 贴图（0.73.0）：类型不认识 / 名字不合法都是**请求不对**（400），
+  // 只有「太大」是 413。全落到 500 的话，用户看到「插件坏了」，
+  // 而真正该做的是换张图或缩一下。
+  if (code === 'IMAGE_TOO_LARGE') return 413;
+  if (code === 'BAD_IMAGE' || code === 'BAD_ASSET_NAME') return 400;
   // ★ 0.47：按来源查灵感时「一个 book / article 都没给」（`BAD_SOURCE`）与
   //   「文章 key 长得不像 key」（`BAD_ARTICLE`）都是**请求不对**。落在默认的 500 上，
   //   用户看到的是「插件坏了」，而真正该改的是那次请求。
   if (code === 'BAD_SOURCE' || code === 'BAD_ARTICLE') return 400;
+  // 0.86.0：模块名认不出是**请求不对**（400）。落到 500 的话，用户看到的是
+  // 「插件坏了」，而真正要改的是那个 `module=` 参数。
+  if (code === 'BAD_MODULE') return 400;
   // 口令闸门：弱口令是**请求不对**（400），锁着是**没权限**（403），
   // 口令文件读不出来是**我们自己坏了**（500，别让用户去改口令试）。
   if (code === 'GATE_WEAK' || code === 'GATE_UNSET') return 400;
@@ -142,6 +158,48 @@ async function readBody(req, limit = JSON_BODY_LIMIT) {
   return parsed;
 }
 
+/**
+ * 读**二进制**请求体（贴图用，0.73.0）。
+ *
+ * ★ 不能复用 `readBody`：它把整段 `.toString('utf8')` 之后再 `JSON.parse`。
+ *   一张 PNG 走一遍 UTF-8 解码，非法字节会被换成 U+FFFD —— 内容**不可逆地损坏**，
+ *   而且 `JSON.parse` 会先抛一个和真实原因毫无关系的语法错。
+ * ★ 超限就**当场抛**，不把后面的块继续读进内存：那正是这个上限要防的事。
+ */
+async function readRawBody(req, limit) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) {
+      const error = new Error(`这张图超过 ${(limit / 1024 / 1024).toFixed(0)} MB —— 先缩一下再贴`);
+      error.code = 'IMAGE_TOO_LARGE';
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
+ * 回二进制内容（图）。
+ *
+ * ★ `cache-control: immutable` 在这里是**成立**的，不是图省事：文件名是内容哈希，
+ *   同一个名字永远是同一份字节。换成时间戳命名的文件就不成立（同名可能换了内容）。
+ * ★ `nosniff` 必须有：客户端的 `content-type` 我们已经不信了，那就更不能让浏览器
+ *   自己去猜 —— 它会猜出可执行类型。
+ */
+function sendBinary(res, status, { buffer, mime }) {
+  res.writeHead(status, {
+    'content-type': mime,
+    'content-length': String(buffer.length),
+    'cache-control': 'public, max-age=31536000, immutable',
+    'x-content-type-options': 'nosniff',
+    'referrer-policy': 'no-referrer',
+  });
+  res.end(buffer);
+}
+
 /** 路径段解码。日期是白名单字符，解码失败一律当非法（由 `isValidDateKey` 兜住）。 */
 function segment(value) {
   try {
@@ -152,10 +210,33 @@ function segment(value) {
 }
 
 /**
+ * 从查询串 / 请求体里取「当前模块」，不合法就 Reject 成 `BAD_MODULE`。
+ *
+ * ★ **不把非法值当「没给」**：把 `module=reflektion` 悄悄降级成「全部」，
+ *   用户拿到的是一份看起来正常、实际含全部内容（含他没想看的那两个模块）的
+ *   导出文件 —— 而文件已经在下载目录里了。宁可 400 让他改。
+ * ★ 空串 = 没给（老调用点 / 工具），保持原来的「全部」语义。
+ */
+function readModule(value) {
+  if (value === undefined || value === null || value === '') return '';
+  const text = String(value).trim();
+  if (text === '') return '';
+  if (!DIARY_MODULES.some((item) => item.value === text)) {
+    const allowed = DIARY_MODULES.map((item) => item.value).join(' / ');
+    const error = new Error(`没有这个模块：${text}（只能是 ${allowed}）`);
+    error.code = 'BAD_MODULE';
+    throw error;
+  }
+  return text;
+}
+
+/**
  * @param handlers.read - `async (date) => { date, exists, text, entries, chars }`（只公开半边）
  * @param handlers.readFull - `async (date) => { date, exists, entries, chars, publicCount, privateCount }`
  *   可选；给了就用它（合并公开 + 私密）。没给则退回 `read`，行为与 0.30.0 一致。
- * @param handlers.append - `async ({ date, time, kind, source, meta, vis, body }) => { date, time, index, chars, path, scope }`
+ * @param handlers.append - `async ({ date, time, kind, source, meta, vis, body }) => { date, time, index, chars, path, scope, listedCount }`
+ *   —— `listedCount` 可选（0.72.0）：那个模块**界面上会列出的条数**，回执里的
+ *   「今天第 N 条」用它。路由层不参与计算，只原样透传（`...result`）。
  * @param handlers.removeEntry - `async ({ date, index, scope }) => { date, entries, chars, scope }`
  * @param handlers.updateEntry - 可选，`async ({ date, index, scope, body, time, kind, source, meta }) => { date, index, time, kind, chars, scope }`
  * @param handlers.listMonth - `async (month) => { month, days, total }`
@@ -175,15 +256,19 @@ function segment(value) {
  * @param handlers.exportAll - `async ({ includePrivate }) => { files: [{ name, text }], total, skippedPrivate }`
  * @param handlers.stats - `async () => { days, bytes, root, privateDays, secret }`
  * @param handlers.secretStatus - 可选，`async () => { mode, keyPath }`。**会触发取密钥**。
- * @param handlers.reveal - 可选，`async () => void`，在系统文件管理器里打开日记目录。
+ * @param handlers.reveal - 可选，`async ({ module }) => { dir, file }`，在系统文件管理器里
+ *   打开日记目录（0.86.0 起带模块：私密落在 `private/`，灵感与读后感同处 `daily/`）。
  *   缺了就 501（不能因为「没有这个按钮」让整个前缀挂掉）。
+ * @param handlers.assets - 可选（0.73.0），灵感里贴的图：
+ *   `{ save({ buffer, mime }) => { name, mime, bytes }, read(name) => { buffer, mime } }`。
+ *   缺了就 501（只影响贴图，不影响其它路由）。
  * @param handlers.log - 记一行日志。
  * @returns WebRoute
  */
 export function makeDiaryRoutes(handlers = {}) {
   const {
     read, readFull, append, updateEntry, removeEntry, listMonth, dashboard, search, tags, timeline, byBook, bySource,
-    reflections,
+    reflections, assets, removeDay,
     exportAll, stats, secretStatus, reveal, gate,
     log = () => {},
   } = handlers;
@@ -291,19 +376,121 @@ export function makeDiaryRoutes(handlers = {}) {
         }
       }
 
-      // ---- GET /search?q=…&limit=… -----------------------------------------
+      // ---- POST /assets -----------------------------------------------------
+      //   贴图（0.73.0）：请求体**就是图片本身**，不是 base64 的 JSON。
+      //   ★ 为什么不用 JSON + base64：base64 大 33%，8 MB 的图要先变 11 MB 字符串，
+      //     再被 JSON 转义一遍 —— 上限、内存、耗时三样都白花，换来的只是「和别的
+      //     接口长得一样」。这里一致性是次要的。
+      //   ★ 类型以**文件自己的 magic bytes** 为准（见 `diary-assets.js`）：
+      //     `content-type` 只是客户端的一句话，而扩展名会跟着它写进文件名。
+      if (parts.length === 1 && parts[0] === 'assets') {
+        if (method !== 'POST') return methodNotAllowed(res);
+        if (!assets || typeof assets.save !== 'function') {
+          return sendJson(res, 501, { ok: false, error: '贴图没有接上' });
+        }
+        const mime = (req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+        try {
+          const buffer = await readRawBody(req, ASSET_MAX_BYTES);
+          const saved = await assets.save({ buffer, mime });
+          return sendJson(res, 200, {
+            ok: true,
+            name: saved.name,
+            mime: saved.mime,
+            bytes: saved.bytes,
+            // 给客户端直接插进 markdown 的那条地址。**必须是带前缀的绝对路径**：
+            // 日记正文渲染时没有传 `baseUrl`，相对路径会按页面地址（`dsh-app://app`）
+            // 解析 —— 症状是「存进去了，显示一张碎图」。
+            url: `${DIARY_API_PREFIX}/assets/${saved.name}`,
+          });
+        } catch (error) {
+          return fail(res, error);
+        }
+      }
+
+      // ---- POST /assets/prune ------------------------------------------------
+      //   清掉没被任何条目引用的图（0.73.1）。
+      //   ★ **默认 `dryRun: true`**：不显式传 `{ dryRun: false }` 就只报数不删。
+      //     删文件这类动作，调用方必须先拿到「删几张、一共多少 MB」给人看一眼；
+      //     把默认值设成「真删」，第一个手滑的调用就把图清干净了。
+      //   ★ 白名单由 `assets.referenced()` 提供（= `store.referencedAssets()`）：
+      //     路由不认识日记格式，不该由它去扫 `.md`。
+      if (parts.length === 2 && parts[0] === 'assets' && parts[1] === 'prune') {
+        if (method !== 'POST') return methodNotAllowed(res);
+        if (!assets || typeof assets.prune !== 'function') {
+          return sendJson(res, 501, { ok: false, error: '清理没有接上' });
+        }
+        let body = {};
+        try { body = await readBody(req); } catch (error) { return fail(res, error); }
+        try {
+          const keep = typeof assets.referenced === 'function' ? await assets.referenced() : [];
+          const result = await assets.prune({ keep, dryRun: body?.dryRun !== false });
+          return sendJson(res, 200, {
+            ok: true,
+            dryRun: result.dryRun,
+            scanned: result.scanned,
+            kept: result.kept,
+            freed: result.freed,
+            keepDays: result.keepDays,
+            removed: result.removed,
+            // 删不掉的（权限 / 只读卷）。**必须单独回**：把失败的算进 removed 与 freed，
+            // 回执就会说「清掉 3 张，腾出 1.2 MB」而实际一张都没删。
+            failed: result.failed ?? [],
+            // ★ 恒为 true，而且必须一路传到界面上：私密日记的正文是**加密的**，
+            //   宿主读不到里面的 url ⇒ `referencedAssets()` 只覆盖公开日记。
+            //   当前私密条目没有贴图入口，这一格通常是空集；但「通常」不等于「一定」，
+            //   而漏判的后果是「一张图凭空消失」。让用户按「清掉」之前知道有这个盲区，
+            //   比事后解释一句「可能被清理了」便宜得多。
+            privateUnchecked: true,
+          });
+        } catch (error) {
+          return fail(res, error);
+        }
+      }
+
+      // ---- GET /assets/<name> -----------------------------------------------
+      if (parts.length === 2 && parts[0] === 'assets') {
+        if (method !== 'GET') return methodNotAllowed(res);
+        if (!assets || typeof assets.read !== 'function') {
+          return sendJson(res, 501, { ok: false, error: '贴图没有接上' });
+        }
+        try {
+          return sendBinary(res, 200, await assets.read(segment(parts[1])));
+        } catch (error) {
+          // 图没了（手动删了 assets 目录 / 导出时被清理）：说人话，别把
+          // `ENOENT: no such file or directory, open '…'` 端给界面。
+          if (error?.code === 'ENOENT') {
+            return sendJson(res, 404, { ok: false, error: '这张图不在了', code: 'ENOENT' });
+          }
+          return fail(res, error);
+        }
+      }
+
+      // ---- GET /search?q=…&limit=…&module=… --------------------------------
       if (parts.length === 1 && parts[0] === 'search') {
         if (method !== 'GET') return methodNotAllowed(res);
         const query = url.searchParams.get('q') ?? '';
         // 空查询回空结果、**不回 400**：界面上搜索框每敲一个字都会发一次，
         // 清空输入框时那一次不该变成一条红字。
         try {
+          /*
+           * ★ `module`（0.86.0）让搜索**跟着选项卡走**：在读后感里搜，就只搜读后感。
+           *   在此之前三个模块共用一个搜索，在读后感里搜到一条灵感、点进去是一句
+           *   便签 —— 用户以为读后感丢了。
+           *
+           * ★ `includePrivate` 与模块**联动**，而不是恒为 `gateAllow()`：
+           *   灵感 / 读后感是公开那半边，私密模块以外没有任何理由去解密一条私密日记
+           *   （解密本身是这把密钥唯一该被用到的地方）。私密模块仍然要过闸门 ——
+           *   锁着时 `includePrivate: false`，搜不到任何东西，这是正确形态。
+           */
+          const moduleValue = readModule(url.searchParams.get('module'));
+          const askPrivate = moduleValue === 'private' ? gateAllow()
+            : moduleValue === '' ? gateAllow() : false;
           // ★ `includePrivate: true` 只出现在**路由层**。工具（`diary_search`）不传，
           //   所以模型永远看不到私密条目；而在这里看的人是这台机器的用户本人，
           //   界面上每条私密条目都带小锁 —— 看得见「这是私密的」才是正确形态。
           return sendJson(res, 200, {
             ok: true,
-            ...(await search({ query, limit: url.searchParams.get('limit'), includePrivate: gateAllow() })),
+            ...(await search({ query, limit: url.searchParams.get('limit'), module: moduleValue, includePrivate: askPrivate })),
           });
         } catch (error) {
           return fail(res, error);
@@ -426,23 +613,30 @@ export function makeDiaryRoutes(handlers = {}) {
         return sendJson(res, 404, { ok: false, error: `没有这条口令路由：${rest}` });
       }
 
-      // ---- GET /export ------------------------------------------------------
+      // ---- GET /export?private=1&module=… -----------------------------------
       //
       // ★ 取消「移入 Obsidian」之后这是日记**唯一**的出口。它只读、只拼内存字符串，
       //   不往任何用户目录写文件 —— 落盘由浏览器下载完成（用户自己选位置）。
       // ★ 默认**不含**私密日记：导出写的是浏览器下载目录里的明文，那正是加密层
       //   要防的第一件事。要包含必须显式 `?private=1`，界面负责把后果说清楚。
+      // ★ `module`（0.86.0）：用户 2026-11-19「明明我切到读后感了，点击下载下载的
+      //   还是日记」。作用域移到这一层，是为了让**权限判断与作用域在同一个地方**：
+      //   私密模块的导出必须和 `?private=1` 走同一条闸门，而不是在客户端另开一条路。
       if (parts.length === 1 && parts[0] === 'export') {
         if (method !== 'GET') return methodNotAllowed(res);
-        const includePrivate = url.searchParams.get('private') === '1';
-        // ★ 锁着时连「导出」也不给：导出的落点是浏览器下载目录里的**明文**，
-        //   那正是加密层要防的第一件事，而锁着的闸门不该被一个 GET 绕过。
-        if (includePrivate && !gateAllow()) {
-          return sendJson(res, 403, { ok: false, error: '私密日记还是锁着的，先解锁再导出', code: 'GATE_LOCKED' });
-        }
         try {
-          const payload = await exportAll({ includePrivate });
-          log(`[日记] 导出 ${payload.total} 天${includePrivate ? '（含私密）' : ''}`);
+          const moduleValue = readModule(url.searchParams.get('module'));
+          // 私密模块**就是**「导出私密」：不用再让客户端多传一个 `private=1`
+          // （两个参数各说一半，迟早出现「模块=私密、private 忘了传」⇒ 导出一份
+          // 空文件，而文件名还写着私密）。
+          const includePrivate = moduleValue === 'private' || url.searchParams.get('private') === '1';
+          // ★ 锁着时连「导出」也不给：导出的落点是浏览器下载目录里的**明文**，
+          //   那正是加密层要防的第一件事，而锁着的闸门不该被一个 GET 绕过。
+          if (includePrivate && !gateAllow()) {
+            return sendJson(res, 403, { ok: false, error: '私密日记还是锁着的，先解锁再导出', code: 'GATE_LOCKED' });
+          }
+          const payload = await exportAll({ includePrivate, module: moduleValue });
+          log(`[日记] 导出 ${payload.total} 天 / ${payload.entries} 条${moduleValue ? `（${moduleValue}）` : ''}${includePrivate ? '（含私密）' : ''}`);
           return sendJson(res, 200, { ok: true, ...payload });
         } catch (error) {
           return fail(res, error);
@@ -450,15 +644,27 @@ export function makeDiaryRoutes(handlers = {}) {
       }
 
       // ---- POST /reveal -----------------------------------------------------
+      //
+      // ★ 0.86.0 起带 `module`：三个模块共用一个 `diary/` 根目录，但私密那半边在
+      //   `diary/private/`（与 `daily/` 平级）。原来一律打开根目录 —— 用户在私密
+      //   日记里点「打开文件夹」，看到的是一堆公开日记的文件，而私密日记在隔壁。
+      //   灵感 / 读后感仍然指向同一个 `daily/`（它们本来就同处一个 `.md`，
+      //   这一点无法靠「换个目录」假装分开，界面文案要如实说）。
       if (parts.length === 1 && parts[0] === 'reveal') {
         if (method !== 'POST') return methodNotAllowed(res);
         if (typeof reveal !== 'function') {
           return sendJson(res, 501, { ok: false, error: '打开文件夹没有接上' });
         }
         try {
+          // 容忍空 body：老客户端（以及命令行里的 curl）不带 JSON。
+          const body = await readBody(req).catch((error) => {
+            if (error?.code === 'ENTRY_TOO_LARGE') throw error;
+            return {};
+          });
+          const moduleValue = readModule(body?.module);
           // ★ 把目录带回去：界面上要能显示「东西在哪」，而用户点这个按钮的时候
           //   往往正是第一次想确认这件事。只回 `{ok:true}` 就等于把路径藏起来了。
-          const result = await reveal();
+          const result = await reveal({ module: moduleValue });
           return sendJson(res, 200, { ok: true, ...(result ?? {}) });
         } catch (error) {
           return fail(res, error);
@@ -522,6 +728,28 @@ export function makeDiaryRoutes(handlers = {}) {
         }
 
         // GET /day/:date
+        // DELETE /day/:date?scope=private（0.75.0：删掉这一天的全部记录）
+        if (parts.length === 2 && method === 'DELETE') {
+          /*
+           * ★ 整天删除是**破坏性**动作，锁着时必须先解锁 —— 与 `DELETE /entry` 同一条
+           *   理由：否则拿到本机端口的人能在没有口令的情况下把私密日记一天一天删空。
+           * ★ 公开那半边不设闸：它本来就在明面上（`daily/*.md` 任何编辑器都能直接改），
+           *   在这个入口上再加一道锁只会让「记乱了想清掉重来」多按一次。
+           */
+          const scope = url.searchParams.get('scope') === 'private' ? 'private' : 'public';
+          if (typeof removeDay !== 'function') {
+            return sendJson(res, 501, { ok: false, error: '删整天没有接上' });
+          }
+          if (scope === 'private' && !gateAllow()) {
+            return sendJson(res, 403, { ok: false, error: '私密日记还是锁着的，解锁后才能删', code: 'GATE_LOCKED' });
+          }
+          try {
+            return sendJson(res, 200, { ok: true, ...(await removeDay({ date, scope })) });
+          } catch (error) {
+            return fail(res, error);
+          }
+        }
+
         if (parts.length === 2) {
           if (method !== 'GET') return methodNotAllowed(res);
           try {

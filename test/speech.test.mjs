@@ -443,10 +443,17 @@ describe('0.55：密钥不出宿主进程', () => {
     const out = publicSettings({ ...READING_DEFAULTS, speechApiKey: raw });
     assert.equal(out.speechApiKey, undefined);
     assert.ok(!JSON.stringify(out).includes(raw));
-    // 反向对照：不能为了删一个字段把整份设置删空
+    // 反向对照：不能为了删密钥把整份设置删空。
+    // ★ 口径按「剔掉的正好是所有 *ApiKey 字段」，不写死 -1：0.84.0 又加了
+    //   asrApiKey（云端识别的 Key，同一条纪律），删两个才对。写死 -1 会在
+    //   新增密钥字段时假红，而真漏删（某个 Key 出了宿主）反而没人管。
     assert.equal(out.fontSize, READING_DEFAULTS.fontSize);
     assert.equal(out.readingTheme, READING_DEFAULTS.readingTheme);
-    assert.ok(Object.keys(out).length >= Object.keys(READING_DEFAULTS).length - 1);
+    const secretKeys = Object.keys(READING_DEFAULTS).filter((key) => key.endsWith('ApiKey'));
+    assert.ok(secretKeys.length >= 1, '前置条件：默认值里至少有一个密钥字段');
+    assert.ok(secretKeys.includes('speechApiKey') && secretKeys.includes('asrApiKey'));
+    for (const key of secretKeys) assert.equal(out[key], undefined, `${key} 不该出宿主进程`);
+    assert.equal(Object.keys(out).length, Object.keys(READING_DEFAULTS).length - secretKeys.length);
   });
 
   it('★ speechApiKey 登记在 LIVE_WRITTEN_SETTINGS 里（否则点一次保存就清空）', () => {
@@ -588,10 +595,14 @@ describe('0.55：界面接线', () => {
   });
 
   it('★ 没配 Key 时不列出云端音色（而不是列出来点了报错）', async () => {
+    /* 0.76.1 起这段逻辑搬到 `article-speech.js` 的 `speechVoiceGroups`（设置页与
+       阅读页共用一份）。这里守「实现里那条件还在」，**真正的行为判据**在
+       `test/speech-prefs.test.mjs`：用假 voices / 假 cloud 真跑，断言 remote 为空。
+       两条一起才是完整判据 —— 只留静态那条的话，把条件写反也能骗过它。 */
     const { readFile } = await import('node:fs/promises');
-    const source = await readFile(new URL('../src/client/ReaderPage.jsx', import.meta.url), 'utf8');
-    const block = /const voiceGroups = useMemo\(\(\) => \{([\s\S]*?)\n  \}, \[voices, cloud\]\);/.exec(source)?.[1] ?? '';
-    assert.ok(block.length > 0, '没找到 voiceGroups 的实现（改名了？这条断言会静默失效）');
+    const source = await readFile(new URL('../src/client/article-speech.js', import.meta.url), 'utf8');
+    const block = /export function speechVoiceGroups\(([\s\S]*?)\n\}/.exec(source)?.[1] ?? '';
+    assert.ok(block.length > 0, '没找到 speechVoiceGroups 的实现（改名了？这条断言会静默失效）');
     assert.match(block, /cloud\?\.configured === true \? \(cloud\.voices \?\? SILICON_VOICES\) : \[\]/);
   });
 

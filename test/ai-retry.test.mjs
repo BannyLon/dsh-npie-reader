@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
 import {
   GENERATION_MAX_ATTEMPTS, RETRYABLE_FAILURE_CODES,
-  cancellableSleep, generateRewrite, generateTranslation, retryDelay,
+  cancellableSleep, classifyRawFailure, generateRewrite, generateTranslation, retryDelay,
 } from '../src/host/ai.js';
 import { createFakeContext } from './helpers/fake-ctx.mjs';
 
@@ -283,5 +283,80 @@ describe('失败文案：用户要能读出「发生了什么」和「我该干�
     assert.match(overflow.message, /上下文更长的模型/);
     // 三种失败的补救动作必须互不相同 —— 都写「请稍后重试」等于没说。
     assert.notEqual(auth.message, overflow.message);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.84.1：宿主不给结构化码时，按上游原文补归类
+//
+// 用户截图里的两条真实报错：
+//   ① agnes-ai/agnes-3.0-flash · INVALID_REQUEST · "max_tokens 不能超过 65536"
+//   ② OpenCode 通道 · **没有 code** · "OpenCode free quota window is open …
+//      Free usage limit reached … retry after 2026-11-19T00:00:00.353Z"
+// 第 ② 条原本会被 `describeFailure` 原样吐回给用户（认不出 code 就 return error），
+// 于是「换个模型」被当成解法 —— 但同一通道共用额度，换模型一点用都没有。
+// 第 ① 条虽然有码，却粗分成了 INVALID_REQUEST，旧文案把它赖到「文章太长」上。
+describe('失败归因：宿主没给结构化码时按原文补归类（0.84.1）', () => {
+  const FREE_QUOTA_RAW = 'OpenCode free quota window is open. Free usage limit reached, retry after 2026-11-19T00:00:00.353Z';
+  const OUTPUT_LIMIT_RAW = '400: {"code":"INVALID_REQUEST","message":"max_tokens 不能超过 65536"}';
+
+  test('★ 逐条取值：两条真实原文各自归到对应的类，未知原文落回 null', () => {
+    assert.equal(classifyRawFailure({ aiFailureMessage: FREE_QUOTA_RAW }), 'FREE_QUOTA');
+    assert.equal(classifyRawFailure({ aiFailureMessage: OUTPUT_LIMIT_RAW }), 'OUTPUT_LIMIT');
+    assert.equal(classifyRawFailure({ message: 'quota window is open' }), 'FREE_QUOTA');
+    assert.equal(classifyRawFailure({ message: 'maximum number of tokens exceeded' }), 'OUTPUT_LIMIT');
+    // 未知取值必须落回兜底，不能硬凑一个分类出来。
+    assert.equal(classifyRawFailure({ aiFailureMessage: 'boom' }), null);
+    assert.equal(classifyRawFailure({}), null);
+  });
+
+  test('★ 不看 stack / name：插件自己的路径不能把自己命中（自指假阳性）', () => {
+    const error = new Error('boom');
+    error.stack = 'at classifyRawFailure (/.../src/host/ai.js) free quota max_tokens';
+    error.name = 'FREE_QUOTA OUTPUT_LIMIT';
+    assert.equal(classifyRawFailure(error), null);
+  });
+
+  test('★ 端到端：无 code 的免费额度报错要说出「额度」和「换模型没用」', async () => {
+    const { ctx } = createFakeContext({ llmChunks: alwaysFails(undefined, FREE_QUOTA_RAW) });
+    const error = await rejectionOf(
+      () => generateTranslation(ctx, ARTICLE, { model: 'p/m', sleep: async () => true }),
+    );
+    assert.match(error.message, /免费额度用完/);
+    assert.match(error.message, /换模型没用/);
+    assert.match(error.message, /换一个通道|填自己的 API Key/);
+    // 原始英文必须留着当证据，不能只留一句翻译过的结论。
+    assert.match(error.message, /Free usage limit reached/);
+    assert.equal(error.aiFailureCode, 'FREE_QUOTA');
+  });
+
+  test('★ 端到端：INVALID_REQUEST + max_tokens 细化为输出上限，不再赖文章太长', async () => {
+    const { ctx } = createFakeContext({ llmChunks: alwaysFails('INVALID_REQUEST', OUTPUT_LIMIT_RAW) });
+    const error = await rejectionOf(
+      () => generateTranslation(ctx, ARTICLE, { model: 'p/m', sleep: async () => true }),
+    );
+    assert.match(error.message, /输出长度/);
+    assert.match(error.message, /不是文章太长/);
+    assert.equal(error.aiFailureCode, 'OUTPUT_LIMIT');
+  });
+
+  test('★ 反向对照：结构化码优先，关键词不能把限流改判成额度', async () => {
+    // 同一段英文散文、但宿主这次给了 RATE_LIMIT：重试判据仍按 RATE_LIMIT 走。
+    const { ctx, state } = createFakeContext({ llmChunks: alwaysFails('RATE_LIMIT', FREE_QUOTA_RAW) });
+    const error = await rejectionOf(
+      () => generateTranslation(ctx, ARTICLE, { model: 'p/m', sleep: async () => true }),
+    );
+    assert.equal(state.llmCalls.length, GENERATION_MAX_ATTEMPTS, '结构化码仍要参与重试判据');
+    assert.match(error.message, /模型服务限流/);
+    assert.equal(error.aiFailureCode, 'RATE_LIMIT');
+  });
+
+  test('★ 反向对照：把关键词拿掉，同一条无 code 报错就原样透出（不硬编故事）', async () => {
+    const { ctx } = createFakeContext({ llmChunks: alwaysFails(undefined, 'boom') });
+    const error = await rejectionOf(
+      () => generateTranslation(ctx, ARTICLE, { model: 'p/m', sleep: async () => true }),
+    );
+    assert.match(error.message, /model call failed: boom/);
+    assert.equal(error.aiFailureCode, undefined);
   });
 });

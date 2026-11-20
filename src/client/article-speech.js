@@ -1,3 +1,6 @@
+import { applyPronunciation } from '../speech-pronunciation.js';
+import { SILICON_VOICES, parseSpeechVoice, speechVoiceValue } from '../speech.js';
+
 /**
  * 朗读（Read aloud）的两条纯逻辑。
  *
@@ -164,6 +167,26 @@ export function speechChunks(text, maxLength = 600) {
 }
 
 /**
+ * **朗读专用**的切块入口：先做发音修正，再按句子切。
+ *
+ * ★ 为什么不是改 `speechChunks` 本身：那个函数在测试里被断言「拼回去等于原文」，
+ *   也是别处可能复用的纯切块工具。发音修正是**朗读策略**，不该混进切块语义。
+ * ★ 为什么变换在切块**之前**：按句边界硬切时，一个词可能被切在两块之间，
+ *   切完再逐块变换就会漏掉它。替换等长，所以先变换不会挪动任何块边界。
+ * ★ 这是文章云端、文章本机、电子书云端、电子书本机四条播放路径的**唯一汇合点**。
+ *   少接一条就会出现「电子书里读对了、文章里还读错」这种只改一道门的漏。
+ *
+ * @param {string} text 正文纯文本
+ * @param {number} [maxLength] 每块上限
+ * @param {boolean} [enabled] 发音修正开关（由调用点现读 localStorage）
+ * @returns {string[]}
+ */
+export function speechChunksForReading(text, maxLength = 600, enabled = true) {
+  const source = String(text ?? '');
+  return speechChunks(enabled ? applyPronunciation(source) : source, maxLength);
+}
+
+/**
  * 语速档位。数字是 `SpeechSynthesisUtterance.rate` 的取值。
  *
  * ★ 上限只到 2：再快中文就听不清了（Chromium 允许到 10，但那是给无障碍场景的
@@ -175,3 +198,80 @@ export const SPEECH_RATES = [
   { rate: 1.3, label: '快' },
   { rate: 1.7, label: '很快' },
 ];
+
+/**
+ * 朗读偏好在浏览器里的两个键。
+ *
+ * ★ **全插件只在这里定义一次**。设置页、文章阅读页、电子书页三处都从这里取 ——
+ *   同一个键手写三遍，改一处忘两处的结果是「设置里选了云端音色、阅读页还在用本机」，
+ *   而三个文件各自看都对。
+ */
+export const SPEECH_VOICE_KEY = 'npr.speechVoice';
+export const SPEECH_RATE_KEY = 'npr.speechRate';
+
+/**
+ * 朗读偏好被改动时广播的事件名。
+ *
+ * ★ 三个入口（设置页 / 阅读页 ⋯ 菜单 / 电子书 FAB）改完都要派发它，另两处监听后
+ *   重读。少了这一步，用户在设置页把语速调成「很快」，回来点听本节仍按「正常」念，
+ *   而按钮上的词已经变了 —— 界面说谎比报错更难查。
+ */
+export const SPEECH_PREFS_EVENT = 'npr-speech-prefs-changed';
+
+/**
+ * 声音下拉里的两组选项。
+ *
+ * ★ 云端排前面：用户的抱怨是「本机的都不自然」，那一组是他已经试遍的。
+ * ★ 没配 Key 时**不列出云端音色**（而不是列出来点了报错）：一个能选但选完就报
+ *   「没填 Key」的下拉，比一个明确写着「去设置里填 Key」的提示更让人恼火。
+ * ★ 抽成函数、不留在组件里（0.76.1）：设置页和阅读页各要一个下拉，抄两份的话
+ *   以后加一个音色只改一处，两个下拉就不一致。
+ */
+export function speechVoiceGroups({ voices = [], cloud = null } = {}) {
+  const local = chineseVoices(voices).map((item) => ({
+    value: speechVoiceValue('system', item.name),
+    label: item.label,
+  }));
+  const remote = (cloud?.configured === true ? (cloud.voices ?? SILICON_VOICES) : [])
+    .map((item) => ({
+      value: speechVoiceValue('siliconflow', item.id),
+      label: `${item.label} · 云端`,
+    }));
+  return { local, remote };
+}
+
+/**
+ * 下拉里应该显示的那一项。
+ *
+ * ★ 用户没选过时显示 `pickVoice` 自动挑中的那个，而不是空 —— 否则下拉是空值，
+ *   用户以为「没选就没在用」，而实际上朗读一直在用某个音色。
+ * ★ 选过云端、但 Key 后来被清空时返回空串：界面上补一条禁用的「当前选的音色现在
+ *   用不了」，如实说明，而不是悄悄跳到本机语音。
+ */
+export function activeSpeechVoiceValue({ value = '', voices = [], cloud = null } = {}) {
+  const parsed = parseSpeechVoice(value);
+  if (parsed.engine === 'siliconflow') {
+    return cloud?.configured === true ? speechVoiceValue('siliconflow', parsed.voice) : '';
+  }
+  const picked = pickVoice(voices, parsed.voice)?.name ?? '';
+  return picked === '' ? '' : speechVoiceValue('system', picked);
+}
+
+/**
+ * 写朗读偏好 + 广播。
+ *
+ * ★ 写失败（隐私模式 / 配额满）时**不广播**：别处监听后会重读，读到的还是旧值，
+ *   于是「我刚选的音色一刷新就回去了」—— 那比不广播更让人困惑。调用方拿到 `false`
+ *   后应把界面回滚。
+ */
+export function writeSpeechPrefs(storage, patch = {}, env = globalThis) {
+  if (typeof storage?.setItem !== 'function') return false;
+  try {
+    if ('voice' in patch) storage.setItem(SPEECH_VOICE_KEY, String(patch.voice));
+    if ('rate' in patch) storage.setItem(SPEECH_RATE_KEY, String(patch.rate));
+  } catch { return false; }
+  try {
+    if (typeof env?.Event === 'function') env.dispatchEvent?.(new env.Event(SPEECH_PREFS_EVENT));
+  } catch { /* 没有 Event 构造器 / dispatch 抛错：不算写失败，值已经落盘了 */ }
+  return true;
+}

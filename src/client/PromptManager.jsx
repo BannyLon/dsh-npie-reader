@@ -21,6 +21,10 @@ const SCOPE_META = {
     heading: '电子书伴读',
     intro: '显示在电子书伴读输入框上方，点击后直接发送。提问以「当前这一页」为单位；扫描页（无文字层）会禁用。',
   },
+  paper: {
+    heading: '论文伴读',
+    intro: '显示在论文阅读的伴读输入框上方，点击后直接发送。提问按论证结构组织（这一页的位置、证据够不够、值不值得精读）；扫描页会禁用。',
+  },
 };
 
 export function PromptManager({ notify, startAdding = false, scope = 'article' }) {

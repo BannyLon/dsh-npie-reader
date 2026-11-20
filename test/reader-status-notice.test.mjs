@@ -266,10 +266,16 @@ describe('★ 0.10.2「更多操作」里的重新生成条目：文案', () => 
 
 describe('★ 反向对照：文案装置真的能抓到「写死成当前视图那一版」', () => {
   it('把标签来源从 `generating` 换成 `active` 之后，必须给出错文案', async () => {
+    /**
+     * ★ 0.57.0 起锚点变了：函数体内先过一道 `kind()`（把「对照」映回「译文」，
+     *   因为对照没有自己的产物）。**变异点没变** —— 仍然是把 `generating` 换成
+     *   `active`，仍然要求「换掉之后文案会错」。锚点不跟着改的话这条反向对照
+     *   会因为「替换没命中」而报错，看起来像装置坏了。
+     */
     const label = await loadMenuLabel({
       plugins: [mutateReaderPage(
-        'if (generating) return `正在重新生成${VERSION_LABELS[generating]}…`;',
-        'if (generating) return `正在重新生成${VERSION_LABELS[active]}…`;',
+        'if (generating) return `正在重新生成${VERSION_LABELS[kind(generating)]}…`;',
+        'if (generating) return `正在重新生成${VERSION_LABELS[kind(active)]}…`;',
       )],
     });
     assert.notEqual(label({ active: 'original', generating: 'translation' }), '正在重新生成译文…',

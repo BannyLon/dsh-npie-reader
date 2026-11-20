@@ -27,6 +27,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FIND_LIMIT_MAX } from '../book-find.js';
+import { blockSegments, mapOfEntries } from '../ebook-translate.js';
 import { formatBytes, isEbookExtension, stateOf } from '../library.js';
 import { AnnotationPanel } from './AnnotationPanel.jsx';
 import { BookCompanion } from './BookCompanion.jsx';
@@ -42,15 +43,22 @@ import { insidePanel, peekNext, peekOnLeave } from './book-peek.js';
 import {
   anchorOfSelection, blockSpans, marksForBlock, splitByOverlays,
 } from './ebook-marks.js';
+import { withoutMismatch } from '../annotation-relocate.js';
+import { useEbookExport } from './ebook-export.js';
 import { outlineEntries, runningHead } from './ebook-outline.js';
 import { Icon } from './icons.jsx';
 import {
-  fetchAnnotations, fetchEbookFind, fetchEbookIndex, fetchEbookSection, postAnnotation,
-  postDigestEbook, saveBookState,
+  fetchAnnotations, fetchEbookFind, fetchEbookIndex, fetchEbookSection,
+  fetchEbookTranslation, fetchEbookTranslationIndex, postAnnotation, postDigestEbook,
+  postEbookTranslation, saveBookState,
 } from './library-api.js';
 import { fabStack } from './book-view.js';
-import { fontStack } from '../reading-settings.js';
+import {
+  EBOOK_READ_MODES, EBOOK_READ_MODE_ORDER, fontStack, normalizeEbookReadMode,
+} from '../reading-settings.js';
 import { useBookDigest } from './use-digest.js';
+import { nextSleepMinutes, nextSpeechRate, sleepLabel, useEbookSpeech } from './ebook-speech.js';
+import { useTranslateJobs } from './translate-hub.js';
 
 /**
  * 纸色档位 → `[背景, 前景]`。
@@ -90,9 +98,18 @@ const PREFETCH = 1;
  * ★ 每个块都带 `data-block={index}`，**划线锚点靠它**认出「这个选区落在第几块」
  *   （见 `ebook-marks.js`）。删掉它等于把划线功能整个废掉，而且不会报错 ——
  *   只会表现为「拖选了却划不出线」。
+ *
+ * @param {'bilingual'|'translation'} mode 只有这两种会传进来（`original` 时
+ *   `zhMap` 恒为 `null`，等于老行为）。两者的差别只有一句：
+ *   **`translation` 用译文替换正文，`bilingual` 把译文接在正文下面。**
+ *
+ * ★ 导出只为测试：`test/book-hooks-render.test.mjs` 拿它**真渲**三种读法
+ *   （纯函数、无副作用）。它不是对外 API，别从别处 import。
  */
-function renderBlocks(blocks, marksByIndex, findsByBlock) {
+export function renderBlocks(blocks, marksByIndex, findsByBlock, zhMap, mode = 'bilingual') {
   const out = [];
+  /** 全中文模式：有译文的块整块换成译文，没有的块保留原文（见下面 `inZh`）。 */
+  const zhOnly = mode === 'translation';
   /** 正在收集的连续 `li`；遇到非列表块就整组封成一个 `<ul>`。 */
   let items = [];
   let listKey = 0;
@@ -133,19 +150,63 @@ function renderBlocks(blocks, marksByIndex, findsByBlock) {
     const text = String(block?.x ?? '');
     if (text === '') return;
     const kind = String(block?.k ?? 'p');
-    const content = fill(index, text);
+    /**
+     * 这一块的译文（对照 / 全中文都用它）。
+     *
+     * ★ 键是**块下标**，与 `blocks` 的下标同源 —— 跳过空块不会让后面的译文前移一格
+     *   （见 `src/ebook-translate.js` 文件头）。
+     * ★ 译文是纯文本，不是 HTML：来源是模型返回的一段字，这里只当文本渲染，
+     *   所以书里那套「XSS 面为零」的边界在对照模式下同样成立。
+     */
+    const zhText = (() => {
+      const value = zhMap?.get?.(index);
+      return typeof value === 'string' && value.trim() !== '' ? value.trim() : '';
+    })();
+    /**
+     * ★ 全中文模式：**有译文就用译文当正文**。
+     *
+     * 为什么不是「没有译文就留空」：一本 36 节只译了 30 节的书，缺的那 6 节
+     * 会变成**整页空白** —— 用户会以为书坏了，而丢掉的恰恰是整段内容。
+     * 退回原文时读者至少还能读，且界面顶部会写清「本节 N 段、译出 M 段」。
+     *
+     * ★ 这里**不套 `fill()`**：划线 / 搜索命中的偏移都是按**原文**算的，
+     * 拿去切译文会把高亮落在完全不相干的字上（而且看起来很正常）。
+     * 译文段落上的划线因此不可用 —— 要划线就切回「对照」，见工具条那颗按钮的说明。
+     */
+    const inZh = zhOnly && zhText !== '' && kind !== 'pre';
+    const content = inZh ? zhText : fill(index, text);
+    /** 对照模式才在原文下面接一段；全中文模式下译文就是正文本身。 */
+    const zhNode = (!zhOnly && zhText !== '' && kind !== 'pre')
+      ? <span className="npr-ebook-zh">{zhText}</span>
+      : null;
     if (kind === 'li') {
       if (items.length === 0) listKey = index;
-      items.push(<li key={`li-${index}`} className="npr-ebook-li" data-block={index}>{content}</li>);
+      /* ★ 译文放在 `<li>` **内部**：复制一个 `<li>` 会让有序列表变成 1,2,3,4。 */
+      items.push(<li key={`li-${index}`} className="npr-ebook-li" data-block={index}>{content}{zhNode}</li>);
       return;
     }
     flushList();
-    if (kind === 'h1') { out.push(<h1 key={index} className="npr-ebook-h1" data-block={index}>{content}</h1>); return; }
-    if (kind === 'h2') { out.push(<h2 key={index} className="npr-ebook-h2" data-block={index}>{content}</h2>); return; }
-    if (kind === 'h3') { out.push(<h3 key={index} className="npr-ebook-h3" data-block={index}>{content}</h3>); return; }
-    if (kind === 'q') { out.push(<blockquote key={index} className="npr-ebook-quote" data-block={index}>{content}</blockquote>); return; }
-    if (kind === 'pre') { out.push(<pre key={index} className="npr-ebook-pre" data-block={index}>{content}</pre>); return; }
-    out.push(<p key={index} className="npr-ebook-p" data-block={index}>{content}</p>);
+    /*
+     * 标题的译名是一个**独立的段落**，不是另一个 `<h1>`：两个 h1 会让目录 / 读屏
+     * 都以为这一章有两个标题。样式上用 `npr-ebook-zh-head` 把字号拉回标题感。
+     * ★ 全中文模式下标题直接换掉（`content` 已是译名），所以仍然只有一个 h1。
+     */
+    if (kind === 'h1') { out.push(<h1 key={index} className="npr-ebook-h1" data-block={index}>{content}</h1>); }
+    else if (kind === 'h2') { out.push(<h2 key={index} className="npr-ebook-h2" data-block={index}>{content}</h2>); }
+    else if (kind === 'h3') { out.push(<h3 key={index} className="npr-ebook-h3" data-block={index}>{content}</h3>); }
+    else if (kind === 'q') { out.push(<blockquote key={index} className="npr-ebook-quote" data-block={index}>{content}</blockquote>); }
+    else if (kind === 'pre') { out.push(<pre key={index} className="npr-ebook-pre" data-block={index}>{content}</pre>); }
+    else out.push(<p key={index} className="npr-ebook-p" data-block={index}>{content}</p>);
+    /*
+     * `pre` 不贴译文：代码块本来就不该翻（`blockSegments` 也不送它），
+     * 这里再挡一次是为了让「旧缓存里混进一条 pre 译文」也不会渲染出来。
+     */
+    if (!zhOnly && zhText !== '' && kind !== 'pre') {
+      out.push(
+        <p key={`zh-${index}`} className={`npr-ebook-zh npr-ebook-zh-block${/^h[1-6]$/.test(kind) ? ' npr-ebook-zh-head' : ''}`}
+          data-zh={index} lang="zh-CN">{zhText}</p>,
+      );
+    }
   });
   flushList();
   return out;
@@ -184,6 +245,45 @@ export function BookEbook({
   const [sectionError, setSectionError] = useState('');
   const [pageDraft, setPageDraft] = useState('1');
   const [attempt, setAttempt] = useState(0);
+  /**
+   * 对照模式（0.57.0）：`on` 是开关，`status` 是这一节的状态。
+   *
+   * ★ `n` 是**这份译文属于第几节**，缺了它就会有一帧错位：
+   *   翻到第 4 节时 `section` 先变成第 4 节、而 `zhState` 还停在第 3 节
+   *   （effect 在渲染**之后**才跑），那一帧会用第 3 节的译文 map 去套第 4 节的
+   *   块下标 —— 块数相近时两次都「看起来正常」，只是每一段都文不对题。
+   *   渲染前用 `zhState.n === page` 挡一道，这一帧就退回「无译文」。
+   * ★ `status` 有五种，且**每一种都要画出来**：
+   *   `idle` 未开启 · `loading` 正在翻 · `ready` 有译文 · `skip` 这一节不需要对照 ·
+   *   `error` 失败（带原因与重试）。
+   *   只画「ready」的后果是：翻一节要等几十秒，而这段时间页面上什么都没有，
+   *   用户会以为按钮没生效，于是反复点 —— 每次都触发一次请求（服务端有单飞，
+   *   但这仍然是最糟的体感）。
+   * ★ `map` 的键是**块下标**，见 `src/ebook-translate.js` 文件头。
+   */
+  /**
+   * 读哪种语言（0.65.0）：`original` / `bilingual` / `translation`。
+   *
+   * ★ 这是**用户意图**，不一定等于当下真正生效的读法 —— 中文书会被强制回 `original`
+   *   （见下面 `readMode`）。把两件事分开存，是为了「用户上次选了译文、这次打开
+   *   一本中文书、之后又打开英文书」时，那个选择还在，而不是被中文书悄悄改掉。
+   * ★ 它是全局偏好（落在宿主设置 `ebookReadMode` 里），与字号、纸色同一层。
+   */
+  const [modeWanted, setModeWanted] = useState('original');
+  /** 「原文 / 对照 / 译文」那颗菜单有没有展开。 */
+  const [modeOpen, setModeOpen] = useState(false);
+  const [zhState, setZhState] = useState({ n: null, status: 'idle', error: '', map: null, coverage: null });
+  /** 重试计数：只为了让「重试」按钮能重新触发同一个 effect。 */
+  const [zhAttempt, setZhAttempt] = useState(0);
+  /** 这本书已译过几节（工具栏与提示行的副信息）。`null` = 还没问过。 */
+  const [zhDone, setZhDone] = useState(null);
+  /*
+   * ★ 这里**故意没有** `job` / `jobBusy` / `jobError` 三个 state（0.60.0 搬走了）。
+   *   整本翻译的状态活在 `translate-hub.js` 里：它跨书、跨页面，是模块级单例。
+   *   在阅读器里再存一份的后果是两份会漂开 —— 尤其是「用户停在第 3 节读书、
+   *   任务在后台翻完」这种情况，两份状态谁是对的没有判据。
+   *   阅读器只从任务台**读** `jobRunning`，见下面那段 effect。
+   */
 
   const [tocOpen, setTocOpen] = useState(false);
   const [digestOpen, setDigestOpen] = useState(false);
@@ -256,6 +356,29 @@ export function BookEbook({
 
   const current = stateOf(states, book.id);
   const total = Array.isArray(index?.sections) ? index.sections.length : 0;
+  /**
+   * 这本书是不是中文书（0.62.0）。
+   *
+   * ★ 判据来自宿主：解析整本时按**字符量**算汉字占比，≥ 0.7 记 `zh`
+   *   （见 `bookScript`）。为什么不在这里现算：阅读器手里只有目录，正文是一节一节
+   *   取回来的；而「打开一本书就该知道对照能不能用」，不该等用户翻三节才够样本。
+   * ★ `script` 缺失（老宿主 / 老缓存）→ 不当中文书，按钮照旧可点。
+   *   「不知道」不该被读成「不能翻」。
+   */
+  const chineseBook = index?.script === 'zh';
+  /**
+   * 真正生效的读法（0.65.0）。
+   *
+   * ★ 中文书一律 `original`：这本书没有「译文」可言，选「对照」或「译文」只会得到
+   *   一句「这一节没有需要翻译的英文」—— 那不是选项，是一个已知结论。
+   * ★ 但**不改** `modeWanted`：用户上次给英文书选的读法要留着，否则打开一本中文书
+   *   就把他刚设的「全中文」清掉了，回到英文书还得再设一次。
+   */
+  const readMode = chineseBook ? 'original' : modeWanted;
+  /** 要不要译文（`bilingual` 与 `translation` 都要，只是摆放位置不同）。 */
+  const zhOn = readMode !== 'original';
+  /** 全中文：译文替换正文。 */
+  const zhOnly = readMode === 'translation';
   /**
    * 页脚百分比 = **当前翻到的页** / 总页数。
    *
@@ -368,6 +491,104 @@ export function BookEbook({
     }
   }, [section, page, total, onPageChange]);
 
+  /**
+   * 对照模式：换到哪一节就译哪一节。
+   *
+   * 顺序刻意是「先问缓存、再决定翻不翻」：
+   *   ① 缓存命中 ⇒ 立刻画（毫秒级），翻回上一页是**零成本**的；
+   *   ② 这一节压根没有可翻的块（纯中文 / 只有代码）⇒ `skip`，**一个请求都不发**；
+   *   ③ 其余才发那个几十秒的 POST。
+   *
+   * ★ `alive` 是必须的：用户翻页比模型快得多，迟到的结果若照常 `setState`，
+   *   第 3 节的译文会被画进第 5 节 —— 而且看起来完全正常，只是文不对题。
+   * ★ 依赖里带 `zhAttempt`：它只被「重试」按钮 +1，作用就是让同一个节号能重新跑一遍。
+   */
+  useEffect(() => {
+    if (!zhOn || status !== 'ready' || section === null || section.n !== page) return undefined;
+    setZhState({ n: page, status: 'loading', error: '', map: null, coverage: null });
+    let alive = true;
+    (async () => {
+      try {
+        const cached = await fetchEbookTranslation(book.id, page);
+        if (!alive) return;
+        if (cached.available === true) {
+          setZhState({
+            n: page,
+            status: 'ready',
+            error: '',
+            map: mapOfEntries(cached.entries),
+            coverage: cached.coverage ?? null,
+          });
+          setZhDone((prev) => (prev === null ? prev : (prev.includes(page) ? prev : [...prev, page].sort((a, b) => a - b))));
+          return;
+        }
+        // 没有可翻的块：说「这一节不需要对照」，不发请求。
+        if (blockSegments(section.blocks).length === 0) {
+          setZhState({ n: page, status: 'skip', error: '', map: null, coverage: null });
+          return;
+        }
+        const fresh = await postEbookTranslation(book.id, page);
+        if (!alive) return;
+        setZhState({
+          n: page,
+          status: 'ready',
+          error: '',
+          map: mapOfEntries(fresh.entries),
+          coverage: fresh.coverage ?? null,
+        });
+        setZhDone((prev) => (prev === null ? prev : (prev.includes(page) ? prev : [...prev, page].sort((a, b) => a - b))));
+      } catch (error) {
+        if (!alive) return;
+        // 服务端明确说「没有可翻的英文」⇒ 不是错误，是这一节不需要对照。
+        if (error?.code === 'EBOOK_NO_TEXT') {
+          setZhState({ n: page, status: 'skip', error: '', map: null, coverage: null });
+          return;
+        }
+        setZhState({ n: page, status: 'error', error: String(error?.message ?? error), map: null, coverage: null });
+      }
+    })();
+    return () => { alive = false; };
+  }, [zhOn, page, section, status, book.id, zhAttempt]);
+
+  /** 打开对照时问一次「这本书已译了几节」——只用于提示行的副信息，失败就静默。 */
+  useEffect(() => {
+    if (!zhOn || zhDone !== null) return undefined;
+    let cancelled = false;
+    fetchEbookTranslationIndex(book.id).then(
+      (body) => { if (!cancelled) setZhDone(Array.isArray(body.sections) ? body.sections : []); },
+      () => { if (!cancelled) setZhDone([]); },
+    );
+    return () => { cancelled = true; };
+  }, [zhOn, zhDone, book.id]);
+
+  // ---- 整本预翻（0.60.0）：状态搬进「翻译助手」了 ------------------------
+  //
+  // ★ 0.59.0 这里有三条 effect 和一个 `job` state：初始快照、轮询、收尾。
+  //   0.60.0 全部搬去了 `translate-hub.js`（模块级任务台）与
+  //   `TranslateAssistant.jsx`（右下角浮层）。理由是**任务的生命周期比这本书长**：
+  //   翻一本要几十分钟，人会换书、会切到订阅页，而挂在阅读组件上的状态一换书就断线，
+  //   任务还在宿主里跑，界面上却什么都看不见。
+  //   阅读器这边只剩**一个**职责：任务停下来的那一刻，这一节的译文该换新的了。
+  const jobEntry = useTranslateJobs().find((entry) => entry.bookId === String(book.id)) ?? null;
+  const jobRunning = jobEntry?.job?.state === 'running';
+
+  /**
+   * 任务停下来的那一拍收尾：让当前这一节重新取一次译文。
+   *
+   * ★ 必须做：整本翻的过程中，用户很可能就停在第 3 节上读。翻完那一刻第 3 节
+   *   已经有缓存了，但 `zhState` 还停在「正在翻译这一节…」—— 不刷新的话，
+   *   他得手动翻走再翻回来才能看到译文，而这正是这个功能想省掉的动作。
+   * ★ `done` / `stopped` / `failed` 都触发：三种都意味着「磁盘上可能多了几节」。
+   */
+  const jobWasRunning = useRef(false);
+  useEffect(() => {
+    if (jobRunning) { jobWasRunning.current = true; return; }
+    if (!jobWasRunning.current) return;
+    jobWasRunning.current = false;
+    setZhDone(null);
+    setZhAttempt((value) => value + 1);
+  }, [jobRunning]);
+
   // ---- 划线 / 笔记 -------------------------------------------------------
   //
   // 与 PDF 那边**同一份数据、同一个面板**（`annotations/<bookId>.json`、
@@ -396,7 +617,8 @@ export function BookEbook({
   /** 这一页的划线 → 每块的块内偏移（渲染时按它切碎片）。 */
   const marksByIndex = useMemo(() => {
     const map = new Map();
-    const onPage = annotationsOnPage(annotations, page);
+    // ★ 失配的划线**不参与切字**：坐标已经不可信，照旧画出来就是「线画到别的字上」。
+    const onPage = withoutMismatch(annotationsOnPage(annotations, page));
     if (onPage.length === 0 || spans.length === 0) return map;
     for (const span of spans) {
       const marks = marksForBlock(onPage, span, span.end - span.start);
@@ -455,7 +677,8 @@ export function BookEbook({
       return;
     }
     const text = quote.text;
-    const covering = coveringAnnotation(annotations, { page, ...anchor });
+    // 失配项不该拦着用户「重新划一次」：它此刻并没有画在正文上。
+    const covering = coveringAnnotation(withoutMismatch(annotations), { page, ...anchor });
     quoteAnchorRef.current = null;
     setQuote(null);
     selection?.removeAllRanges?.();
@@ -522,6 +745,12 @@ export function BookEbook({
         family: fontStack(settings),
         theme: typeof settings.readingTheme === 'string' ? settings.readingTheme : 'auto',
       });
+      /*
+       * 读法（0.65.0）与外观一起读回来。★ 走 `normalizeEbookReadMode` 而不是信任
+       * 那个字段：老设置文件里没有它，手改坏了也可能写成 `'zh'` 之类 ——
+       * 落到 `original` 是唯一「不会自己开始花钱」的兜底。
+       */
+      setModeWanted(normalizeEbookReadMode(settings.ebookReadMode));
     }).catch(() => {
       // 读不到设置 ⇒ 用默认值继续读。为了一个外观设置卡住整本书不值得。
     });
@@ -783,6 +1012,26 @@ export function BookEbook({
     });
   }, [api]);
 
+  /**
+   * 换读法（0.65.0）：原文 / 对照 / 译文。
+   *
+   * ★ 关掉译文时**立刻清掉 `zhState`**：留着的话，下次切回对照会先闪一下上一节
+   *   的译文再换成本节的 —— 看起来像串页（0.57.0 起的老规矩）。
+   * ★ 选区也一起收掉：全中文下划不了线（偏移锚在原文上），而气泡里少了「划线」
+   *   那颗按钮，留着它只会让人以为按钮被吞了。
+   * ★ 落盘失败**不提示**：读法写不进去只会导致「下次打开回到原文」，
+   *   而眼下这一次切换仍然是对的 —— 为它弹一条错误提示不值得。
+   */
+  const chooseReadMode = useCallback((next) => {
+    setModeOpen(false);
+    setModeWanted(next);
+    if (next === 'original') {
+      setZhState({ n: null, status: 'idle', error: '', map: null, coverage: null });
+      setQuote(null);
+    }
+    api?.saveSettings?.({ ebookReadMode: next }).catch(() => {});
+  }, [api]);
+
   // ---- 键盘 --------------------------------------------------------------
   /**
    * ★ 挂在 window 上、不依赖焦点（容器不许带 `tabIndex`，见文件头）。
@@ -873,7 +1122,7 @@ export function BookEbook({
   useEffect(() => () => clearTimeout(fabHoverTimer.current), []);
 
   const stack = useMemo(
-    () => fabStack({ count: 5, height: frame.height, top: frame.top }),
+    () => fabStack({ count: 9, height: frame.height, top: frame.top }),
     [frame.height, frame.top],
   );
   const slotStyle = (index) => ({
@@ -959,6 +1208,22 @@ export function BookEbook({
   }, [index, book.ext, book.size, book.series, total]);
 
   const sectionText = useMemo(() => (section === null ? '' : blocksToText(section.blocks)), [section]);
+
+  /**
+   * 「听本节」：复用文章阅读页那套 TTS 引擎、音色、语速与计费估算，只把正文换成
+   * 电子书这一节的纯文本（0.75.x）。**不新造合成器、不新开一套设置**。
+   * ★ 读位（page）与听位（listenPage）分开：翻页不写听位，开听不写读位。
+   * ★ 放在这里而不是组件开头：正文 `sectionText` 到这一行才算得出来；它仍在
+   *   下面 `status === 'error'` 的提前 return **之前**，hook 顺序不会变。
+   */
+  const ebookSpeech = useEbookSpeech({
+    bookId: book.id, page, text: sectionText, total, notify,
+  });
+  /** 导出也只认当前这一节：没有「全书」入口，字数上限在共用层的计划里把着。 */
+  const ebookExport = useEbookExport({
+    bookId: book.id, page, text: sectionText, title: book.title, notify,
+  });
+
   const expandedChapter = digest.expandedN === 0
     ? null
     : (digest.outline.find(chapter => chapter.n === digest.expandedN) ?? null);
@@ -1035,6 +1300,68 @@ export function BookEbook({
             <Icon name="wand-sparkles" size={14} />
             <span>伴读</span>
           </button>
+          {/*
+            ★ 读法（0.65.0）：一颗按钮 + 一张三选一的小菜单 —— 原文 / 对照 / 译文。
+              用户原话：「针对翻译过的书籍，在阅读的时候是不是应该可以自主选择，
+              全中文阅读；全英文阅读，对照阅读。」
+
+            ★ 为什么是三选一、而不是继续沿用「对照开 / 关」那颗开关：开关只能表达两态，
+              而这里本来就是三态 ——「全中文」不是「对照关掉」的同义词：关掉对照是
+              **只读原文**，全中文是**只读译文**。用一颗开关表达三件事，用户就只能
+              靠「开了对照再逐段自己忽略原文」来模拟全中文，那不是功能，是负担。
+
+            ★ 为什么做成菜单而不是三格并排的分段控件：胶囊里已经有 7 项 + 书名，
+              再加三格等于又长出一截（0.59.0 那条「百分比把整排撑开」的教训）。
+              菜单只占**一颗按钮的宽度**，而按钮上的字（原文 / 对照 / 译文）本身
+              就是当前状态 —— 不点开也知道自己在读哪一种。宽度稳定，状态可见。
+
+            ★ 中文书**变灰且不可点**（0.62.0，用户原话「你要判断这本书如果是中文书籍，
+              那么对照页是灰掉的不可用」）：这本书没有「译文」可言，三个选项都只会
+              得到一句已知结论。判据是整本的（`chineseBook`），不是这一节有没有
+              可翻的块 —— 书里夹着一节英文引文时，「对照」仍然该能用。
+          */}
+          <span className="npr-book-pill-tint">
+            <button type="button" className={`npr-book-pill-item${zhOn ? ' is-on' : ''}`}
+              disabled={chineseBook}
+              title={chineseBook
+                ? '这本书的正文是中文，不需要中英对照'
+                : `读法：${EBOOK_READ_MODES[readMode].label} —— 点开可选原文 / 对照 / 译文`}
+              aria-haspopup="dialog" aria-expanded={modeOpen}
+              onClick={() => setModeOpen(value => !value)}>
+              <Icon name="languages" size={14} />
+              <span>{EBOOK_READ_MODES[readMode].label}</span>
+            </button>
+            {modeOpen && (
+              <div className="npr-book-palette is-mode" role="dialog" aria-label="读法">
+                <p className="npr-book-palette-label">这本书怎么读</p>
+                <div role="radiogroup" aria-label="读法">
+                  {EBOOK_READ_MODE_ORDER.map((key) => (
+                    <button key={key} type="button" className="npr-book-mode-item" role="radio"
+                      aria-checked={readMode === key}
+                      onClick={() => chooseReadMode(key)}>
+                      <span className="npr-book-mode-dot" aria-hidden="true" />
+                      <span className="npr-book-mode-text">
+                        <span className="npr-book-mode-name">{EBOOK_READ_MODES[key].label}</span>
+                        <span className="npr-book-mode-desc">{EBOOK_READ_MODES[key].hint}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <p className="npr-book-palette-foot">
+                  译文按节缓存，翻回读过的节是秒开。要一次译完整本，用左栏顶部的「澄境阅读助手」。
+                </p>
+              </div>
+            )}
+          </span>
+          {/*
+            ★ 这里**故意没有**「整本」入口（0.60.0 起）。
+              它搬去了右下角的「翻译助手」（`TranslateAssistant.jsx`）。理由是
+              工具条属于「对这一段做什么」，而整本翻译是一个**要跑几十分钟、
+              期间你会去干别的事**的后台任务：它的进度不该占用一排按钮的宽度
+              （百分比一变按钮就变宽，整排跟着挪），也不该在换书 / 切页面时消失。
+            ★ 「对照」留在工具条：它是高频、即时、只影响当前这一节的动作 ——
+              和一本书的备料是两件事，不合并（合并会让想看一节的人被迫先选「要不要翻整本」）。
+          */}
           <button type="button" className={`npr-book-pill-item${marksOpen ? ' is-on' : ''}`}
             title={annotations.length > 0 ? `划线 / 笔记：${annotations.length} 条` : '划线 / 笔记（还没有划线）：在正文里拖选一段字'}
             aria-pressed={marksOpen} onClick={toggleMarks}>
@@ -1251,8 +1578,67 @@ export function BookEbook({
                  不换 key 时 React 复用同一个 <article>，只有文字在变、动画不重跑。
                  ★ `ref={articleRef}`：划词的选区范围、偏移换算都以它为界（见
                  `ebook-marks.js`），也是气泡的定位基准（`position: relative`）。 */
-              <article key={page} ref={articleRef} className="npr-ebook-sheet">
-                {renderBlocks(section.blocks, marksByIndex, findsByBlock)}
+              <article key={page} ref={articleRef} className="npr-ebook-sheet"
+                data-read-mode={readMode} lang={zhOnly ? 'zh-CN' : undefined}>
+                {/*
+                  ★ 这里原来是「整本翻译」的正文进度条（0.59.0），0.60.0 起没了。
+                    它画在正文第一屏最上方 —— 而整本翻译是**几十分钟的后台任务**，
+                    那几十分钟里用户很可能就在读这一屏。把任务进度钉在正在读的那段
+                    文字上面，等于逼他每次翻回本节都先看一遍别人的进度。
+                    现在它只在右下角的「翻译助手」里出现，收起时是一个小圆点。
+                */}
+                {/*
+                  译文状态条。★ 四种状态都要说出口，尤其是 `loading`：
+                    一节要等几十秒，页面上若什么都不显示，用户会以为按钮坏了。
+                  ★ `zhState.n === page` 是**那一帧的护栏**：切节时 section 已经变了、
+                    而 effect 还没跑，此时 zhState 仍是上一节的。少了这个判断，
+                    上一节的译文会被套到这一节的块下标上 —— 每段都「有译文」，
+                    只是全都错位，而且看起来完全正常。
+                  ★ 全中文模式下这句话得多半句（0.65.0）：这时页面上显示的是**原文**，
+                    不写「先显示原文」，用户会以为「译文」这个选项没生效。
+                */}
+                {zhOn && zhState.n === page && (zhState.status === 'loading' || zhState.status === 'skip' || zhState.status === 'error'
+                  || (zhState.status === 'ready' && zhState.coverage !== null
+                    && zhState.coverage.done < zhState.coverage.total)) && (
+                  <div className={`npr-ebook-zh-note${zhState.status === 'error' ? ' is-error' : ''}`}
+                    role={zhState.status === 'error' ? 'alert' : 'status'}>
+                    {zhState.status === 'loading' && (
+                      <span>
+                        正在翻译这一节…{zhOnly ? '（先显示原文）' : ''}
+                        {Array.isArray(zhDone) && zhDone.length > 0 ? `（这本书已译 ${zhDone.length} 节）` : ''}
+                      </span>
+                    )}
+                    {zhState.status === 'skip' && <span>这一节没有需要翻译的英文（中文正文或只有代码）</span>}
+                    {zhState.status === 'error' && (
+                      <>
+                        <span>这一节没翻成：{zhState.error}</span>
+                        <button type="button" onClick={() => setZhAttempt((value) => value + 1)}>重试</button>
+                      </>
+                    )}
+                    {zhState.status === 'ready' && zhState.coverage !== null
+                      && zhState.coverage.done < zhState.coverage.total && (
+                      <span>
+                        本节 {zhState.coverage.total} 段，译出 {zhState.coverage.done} 段 ——
+                        {zhOnly ? '缺的那几段先显示原文' : '缺的那几段保留原文'}
+                      </span>
+                    )}
+                  </div>
+                )}
+                {/*
+                  ★ 全中文 + 搜索命中（0.65.0）：命中的偏移是**原文**里的，
+                    译文那几段不画高亮 —— 不说一句，用户会觉得「搜到了却没跳对」。
+                */}
+                {zhOnly && findOpen && findHits.some((hit) => hit.n === page) && (
+                  <div className="npr-ebook-zh-note" role="status">
+                    全中文模式不显示搜索高亮（命中在原文里）—— 切到「对照」能看见它标在哪。
+                  </div>
+                )}
+                {/*
+                  ★ 译文 map 只在「这份译文属于当前这一节」时传下去（`zhState.n === page`）。
+                    切节那一帧宁可暂时不显示译文，也不要显示上一节的 —— 后者每一段
+                    都错位，而用户没有任何线索能看出来。
+                */}
+                {renderBlocks(section.blocks, marksByIndex, findsByBlock, zhState.n === page ? zhState.map : null, readMode)}
                 {/* 划词气泡。★ 放在 `article` 里面而不是外面：正文是可滚动的，
                     放外面就得自己算滚动偏移 —— 滚两屏之后气泡会留在原地。 */}
                 {quote !== null && quotePlacement !== null && (
@@ -1261,12 +1647,24 @@ export function BookEbook({
                       ? { left: quoteBarLeft(quote.centerX), bottom: quotePlacement.value }
                       : { left: quoteBarLeft(quote.centerX), top: quotePlacement.value }}>
                     <span className="npr-book-quotebar-text" title={quote.text}>{quote.text}</span>
-                    {/* 「划线」是主操作（最常点）。`onMouseDown` 阻止默认：不阻止的话
-                        按下去浏览器就把选区收掉，想「点错了再点一次」就没得点了。 */}
-                    <button type="button" className="is-primary"
+                    {/*
+                      「划线」是主操作（最常点）。`onMouseDown` 阻止默认：不阻止的话
+                      按下去浏览器就把选区收掉，想「点错了再点一次」就没得点了。
+
+                      ★ 全中文模式下这两颗**灰掉**（0.65.0）。不是偷懒：划线的
+                        `start / end` 是**原文里的字符偏移**（`anchorOfSelection`
+                        在 DOM 上量出来，而那一屏显示的是译文），存下去之后
+                        回到对照模式会把高亮画在原文完全不相干的字上 ——
+                        而且看起来很正常，比画不出来更难发现。
+                      ★ 「复制」「问伴读」照旧可用：它们只吃选中的那段文字，
+                        与偏移无关。
+                    */}
+                    <button type="button" className="is-primary" disabled={zhOnly}
+                      title={zhOnly ? '划线锚在原文上，全中文模式下划不了 —— 切到「对照」再划' : undefined}
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => { void createMark({ openNote: false }); }}>划线</button>
-                    <button type="button"
+                    <button type="button" disabled={zhOnly}
+                      title={zhOnly ? '笔记挂在划线上，全中文模式下写不了 —— 切到「对照」再写' : undefined}
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => { void createMark({ openNote: true }); }}>笔记</button>
                     {/* 「问伴读」与 PDF 那颗同名同位（划线 / 笔记之后、复制之前）：
@@ -1311,14 +1709,19 @@ export function BookEbook({
             onPointerEnter={openFab} onPointerLeave={closeFab}>
             <button type="button" className="npr-book-fab-button"
               aria-expanded={fabOpen} aria-haspopup="true" aria-controls="npr-ebook-fab-list"
-              aria-label={fabOpen ? '收起翻页与字号' : '展开翻页与字号'}
-              title={fabOpen ? '收起（Esc）' : '翻页 / 字号（← → 翻页 · I 沉浸 · N 配色）'}
+              aria-label={fabOpen ? '收起翻页、字号、朗读与导出' : '展开翻页、字号、朗读与导出'}
+              title={fabOpen ? '收起（Esc）' : '翻页 / 字号 / 朗读 / 导出 / 定时（← → 翻页 · I 沉浸 · N 配色）'}
               onClick={() => setFabOpen(value => !value)}>
               {/* 「Aa」比齿轮更像阅读器：它说的是「字」，不是「系统设置」。 */}
               <span className="npr-ebook-fab-aa" aria-hidden="true">Aa</span>
             </button>
-            <div id="npr-ebook-fab-list" className="npr-book-fab-list" role="group" aria-label="翻页与字号"
-              style={{ '--npr-fab-span': `${Math.abs(stack[0].y)}px` }}>
+            <div id="npr-ebook-fab-list" className="npr-book-fab-list" role="group" aria-label="翻页、字号、朗读、语速、导出与定时"
+              style={{
+                '--npr-fab-span': `${Math.abs(stack[0].y)}px`,
+                // 槽位数 − 2：展开动画的延迟基数（规则在 refinements.css，两页共用）。
+                // 9 槽 ⇒ 7。写死 6 的话最上面那格的延迟会差 20ms，肉眼无感但守卫会红。
+                '--npr-fab-last': stack.length - 2,
+              }}>
               <label className="npr-book-fab-slot is-page" style={slotStyle(0)} title={`跳到第几页（共 ${total || '—'} 页）`}>
                 <input className="npr-book-page" type="text" inputMode="numeric" aria-label="页码" value={pageDraft}
                   onChange={(event) => setPageDraft(event.target.value.replace(/[^\d]/g, ''))}
@@ -1347,6 +1750,72 @@ export function BookEbook({
                 title="字号调大（+）" aria-label="字号调大" disabled={look.fontSize >= FONT_MAX} onClick={() => stepFont(1)}>
                 <Icon name="plus" size={16} />
                 <span className="npr-book-fab-label">字大</span>
+              </button>
+              {/* 「听本节」放在 FAB 而不是顶部胶囊：胶囊已有 7 项 + 书名，
+                  再加一颗窄窗口下会把书名挤没（见 0.59.0 那条整排撑开的教训）。 */}
+              <button type="button"
+                className={`npr-book-fab-slot${ebookSpeech.phase === 'playing' ? ' is-on' : ''}`}
+                style={slotStyle(5)}
+                title={ebookSpeech.hint}
+                aria-label={ebookSpeech.phase === 'playing' ? '暂停朗读' : '朗读这一节'}
+                aria-pressed={ebookSpeech.phase === 'playing'}
+                onClick={ebookSpeech.toggle}>
+                {/* ★ 写成两颗静态 Icon，不写 `name={cond ? 'pause' : 'play'}`：
+                    图标守卫会扫 `name={...}` 里的**所有**字符串字面量，条件里的
+                    `'playing'` 会被当成一个不存在的图标名（icons.test.mjs:77-95）。
+                    静态 name 还能顺带被「每个 <Icon name=… /> 都存在」那条判据核到。 */}
+                {ebookSpeech.phase === 'playing'
+                  ? <Icon name="pause" size={16} />
+                  : <Icon name="play" size={16} />}
+                <span className="npr-book-fab-label">
+                  {ebookSpeech.phase === 'playing' ? '暂停' : '听本节'}
+                </span>
+              </button>
+              {/* 「语速」：点一下换档 慢 → 正常 → 快 → 很快 → 慢。
+                  ★ 为什么电子书页非要自己有一颗：设置页的「朗读」只有 API Key 与
+                    念准多音字，音色和语速的控件原本**只在文章阅读页的 ⋯ 菜单**里。
+                    书架里没有文章可开时，用户在电子书里根本改不了语速 —— 这是硬断点。
+                  ★ 与「定时」同一种交互：点一下换一档，不弹下拉、不弹输入框。
+                    躺着听的时候点两层才能换档，等于没做。
+                  ★ 只做语速、不做音色下拉：语速是「听着听着想调」的高频动作，
+                    音色是改一次就不动的低频动作，两者不该共用一个入口。 */}
+              <button type="button"
+                className={`npr-book-fab-slot${ebookSpeech.speechRate !== 1 ? ' is-on' : ''}`}
+                style={slotStyle(6)}
+                title={`朗读语速「${ebookSpeech.rateText}」· 点一下换档（慢 / 正常 / 快 / 很快）`
+                  + (ebookSpeech.phase === 'playing' ? ' · 正在朗读，改语速会先停下' : '')}
+                aria-label={`朗读语速 ${ebookSpeech.rateText}，点一下换下一档`}
+                onClick={() => ebookSpeech.changeRate(nextSpeechRate(ebookSpeech.speechRate))}>
+                <Icon name="gauge" size={16} />
+                <span className="npr-book-fab-label">语速 · {ebookSpeech.rateText}</span>
+              </button>
+              {/* 「导出本节」两段式：第一次只报价不发请求，第二次才真合成。
+                  ★ Icon 用静态 name（图标守卫会扫 name={...} 里所有字面量）。 */}
+              <button type="button"
+                className={`npr-book-fab-slot${ebookExport.phase === 'working' ? ' is-on' : ''}`}
+                style={slotStyle(7)}
+                title={ebookExport.hint}
+                aria-label="导出本节音频"
+                aria-pressed={ebookExport.phase === 'working'}
+                onClick={ebookExport.toggle}>
+                <Icon name="download" size={16} />
+                <span className="npr-book-fab-label">{ebookExport.label}</span>
+              </button>
+              {/* 「定时」：点一下换档 0 → 15 → 30 → 60 → 0。
+                  ★ 不弹对话框、不让填数字 —— 睡前关灯之后填不了输入框。
+                  ★ 档位与文案都从 ebook-speech.js 取，测试核的是同一份。 */}
+              <button type="button"
+                className={`npr-book-fab-slot${ebookSpeech.sleepMinutes > 0 ? ' is-on' : ''}`}
+                style={slotStyle(8)}
+                title={ebookSpeech.sleepMinutes > 0
+                  ? `已设 ${ebookSpeech.sleepMinutes} 分钟后停止朗读，点一下换档（15 / 30 / 60 / 取消）`
+                  : '定时关闭：点一下设 15 分钟，再点换 30 / 60 / 取消'}
+                aria-label={ebookSpeech.sleepMinutes > 0
+                  ? `定时关闭已设 ${ebookSpeech.sleepMinutes} 分钟` : '设置定时关闭'}
+                aria-pressed={ebookSpeech.sleepMinutes > 0}
+                onClick={() => ebookSpeech.sleep(nextSleepMinutes(ebookSpeech.sleepMinutes))}>
+                <Icon name="clock" size={16} />
+                <span className="npr-book-fab-label">{sleepLabel(ebookSpeech.sleepMinutes)}</span>
               </button>
             </div>
           </div>

@@ -28,7 +28,9 @@ describe('工具契约', () => {
     //   2026-10-26 加了日记三件套（`diary_today` / `diary_append` / `diary_search`）：15 → 18。
     //   2026-10-27 补了 `diary_update` / `diary_delete`（能改能删是用户明确要的）：
     //   18 → 20。
-    assert.equal(tools.size, 20);
+    //   2026-11-06 C 档加了五个 `paper_*`（列库 / 全文找词 / 导入 / 读摘要 / 找相关）：
+    //   20 → 25。与 `service.test.mjs` 的 `TOOL_NAMES` 快照**同一次**改，别只改一处。
+    assert.equal(tools.size, 25);
     for (const [name, tool] of tools) {
       assert.equal(typeof tool.execute, 'function', `${name} 缺 execute`);
       assert.equal(typeof tool.output?.render, 'function', `${name} 缺 output.render`);

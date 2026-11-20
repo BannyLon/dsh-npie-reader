@@ -85,6 +85,23 @@ export const READING_DEFAULTS = {
    */
   bookTint: 'paper',
   /**
+   * 电子书**用哪种语言读**：`original` 原文 / `bilingual` 对照 / `translation` 译文
+   * （0.65.0，用户原话：「针对翻译过的书籍，在阅读的时候是不是应该可以自主选择，
+   * 全中文阅读；全英文阅读，对照阅读」）。
+   *
+   * ★ 为什么不是「对照开关」：开关只能表达两态，而这里本来就是三态 ——
+   *   想快速过一遍剧情的人要**全中文**（读译文、不看原文），
+   *   想核对一句话的人要**对照**（原文一段、译文一段），
+   *   只想读原书的人要**原文**（且**一个请求都不发**）。
+   *   两者合并成「开 / 关」的后果是：关掉等于原文，那「全中文」就只能靠在
+   *   对照模式下逐段自己忽略原文 —— 不是功能，是负担。
+   * ★ 默认 `original`：不替用户打开一个会产生模型费用的形态（与 `autoTranslate`
+   *   同一条纪律）。
+   * ★ 它是**全局偏好**（和字号、纸色一样），不是每本书各记一份：同一个人的阅读
+   *   习惯不会因为换了一本书而变；反过来「这本记得、那本不记得」才是意外的。
+   */
+  ebookReadMode: 'original',
+  /**
    * 书页亮度（0.7 – 1.3，1 = 不调）。
    *
    * ★ 为什么单独一个设置项而不是并进 `bookTint`：色温和明度是**两件事** ——
@@ -105,6 +122,41 @@ export const READING_DEFAULTS = {
    *   `POST /speech/config`，设置弹窗那份旧快照没有资格覆盖它。
    */
   speechApiKey: '',
+  /**
+   * 字幕翻成中文用哪条路（0.84.0）：`auto` / `google` / `model`。
+   *
+   * ★ 默认 `auto` = **先 Google，不通再用模型**，并把「这次实际用的哪个」告诉界面。
+   *   理由：字幕翻译量大、重复、对智力要求低 —— 一集 120 段用模型要一两分钟且花钱，
+   *   Google 几百毫秒且免费。但 `translate.googleapis.com` 在国内是整域名不通，
+   *   所以不能只写死 Google（那些人每次都会看到一条红报错）。
+   * ★ `google` 是「只用 Google，不通就报错」：给明确知道自己网络能通、
+   *   且**不想产生任何模型费用**的人。
+   */
+  subtitleTranslateEngine: 'auto',
+  /**
+   * 单集识别用哪条路（0.84.0）：`''` = 自动 / `qwen` / `whisper` / `cloud`。
+   *
+   * ★ 留空的语义是「按本机情况挑」：装了 Ollama 且有 `qwen3-asr` 就用它
+   *   （约 1 GB，识别质量对中文口播明显更好），否则用插件自己管的 whisper
+   *   （181 MB，需要 ffmpeg）。**不预设强依赖**：两条路都不可用时界面会说缺什么。
+   */
+  asrEngine: '',
+  /** Ollama 地址。留空 = `http://127.0.0.1:11434`。 */
+  ollamaBase: '',
+  /** 云端识别供应商 id（见 `asr-cloud.js` 的 `CLOUD_ASR_PROVIDERS`）。 */
+  asrCloudProvider: 'groq',
+  /**
+   * 云端识别的 Key。
+   *
+   * ★ 与 `speechApiKey` 同一条纪律：落在宿主设置里，`getSettings()` **会把它剔掉**
+   *   （见 `publicSettings`），界面上只显示打码形态。完整值不出宿主进程。
+   * ★ 豆包那条路要两个值（App ID 与 Access Token），用 `appid:token` 拼一个字段填。
+   */
+  asrApiKey: '',
+  /** 云端识别的 base 地址。留空 = 用供应商预设；`custom` 时必填。 */
+  asrBaseUrl: '',
+  /** 云端识别的模型名。留空 = 用供应商预设。 */
+  asrModel: '',
 };
 
 /**
@@ -166,6 +218,28 @@ export function nextBookTint(value) {
 /** 合法值一律落到 `paper`（宁可回到原色，也不要把书页染成一片黑）。 */
 export function normalizeBookTint(value) {
   return Object.hasOwn(BOOK_TINTS, value) ? value : 'paper';
+}
+
+/**
+ * 电子书的三种读法（`ebookReadMode`）。
+ *
+ * ★ `label` 是**工具条那颗按钮上显示的字**，必须是两个汉字：这颗按钮就在一排
+ *   同样宽的胶囊里，多一个字整排就会挪（0.59.0 那条「整本 42%」的教训）。
+ * ★ `hint` 是菜单里那一行说明。三者的差别不在「翻不翻」，而在**读的时候眼睛
+ *   落在哪**：原文 = 不看译文；对照 = 两段都看；译文 = 不看原文。
+ */
+export const EBOOK_READ_MODES = Object.freeze({
+  original: { label: '原文', hint: '只读原书（不翻译、不产生模型调用）' },
+  bilingual: { label: '对照', hint: '原文一段，中文译文接在下面' },
+  translation: { label: '译文', hint: '只读中文；还没译到的段落先显示原文' },
+});
+
+/** 菜单里的顺序：从「最原始」到「最中文化」，和读者的心理顺序一致。 */
+export const EBOOK_READ_MODE_ORDER = Object.freeze(['original', 'bilingual', 'translation']);
+
+/** 认不出的值一律回 `original`（宁可什么都不翻，也不要在用户没点过时开始计费）。 */
+export function normalizeEbookReadMode(value) {
+  return Object.hasOwn(EBOOK_READ_MODES, value) ? value : 'original';
 }
 
 /** 亮度的合法区间与步长（滑杆与校验共用一份，避免「滑杆能拖到 0.5、宿主拒收」）。 */
@@ -242,6 +316,10 @@ export function validateSettings(patch = {}) {
       // ★ 不在这里走 `normalizeBookTint` 的「静默修正」：手改设置文件写错一档时，
       //   报错比悄悄回到原色好 —— 后者会让用户以为「我明明设了夜间，怎么又白了」。
       if (!Object.hasOwn(BOOK_TINTS, value)) throw new Error('无效书页配色');
+    } else if (key === 'ebookReadMode') {
+      // 与 `bookTint` 同一条纪律：写错一个读法要报错，不能悄悄落回「原文」——
+      // 否则用户会以为「我明明设了对照，怎么还是英文」。
+      if (!Object.hasOwn(EBOOK_READ_MODES, value)) throw new Error('无效阅读语言');
     } else if (key === 'bookBrightness') {
       // 同一条纪律：越界**报错**，不悄悄夹到边界上。亮度夹错了，用户会以为滑杆坏了。
       if (typeof value !== 'number' || !Number.isFinite(value)
@@ -274,6 +352,33 @@ export function validateSettings(patch = {}) {
       //   `digestModel` 走**同一个分支**而不是抄一份：两个设置项的取值形态与判据
       //   本来就是同一件事，抄一份就会在改判据时漏掉一个。
       if (!isValidAiModel(value)) throw new Error(`${key} 必须形如 provider/model，或留空表示跟随默认`);
+    } else if (key === 'subtitleTranslateEngine') {
+      // ★ 写错一个引擎名要报错，不能悄悄落回 auto：用户以为自己选了「只用 Google、
+      //   不产生费用」，实际却落回 auto（Google 不通时用模型），月底账单能看出来。
+      if (!['auto', 'google', 'model'].includes(value)) throw new Error('无效的字幕翻译引擎');
+    } else if (key === 'asrEngine') {
+      if (!['', 'qwen', 'whisper', 'cloud'].includes(value)) throw new Error('无效的识别引擎');
+    } else if (key === 'asrCloudProvider') {
+      if (typeof value !== 'string' || value.length > 40) throw new Error('无效的云端识别供应商');
+    } else if (key === 'asrApiKey') {
+      /**
+       * 识别 / 朗读用的 API Key。
+       *
+       * ★ 只允许**可见 ASCII**：从控制台复制时常带换行，手打时又容易混进全角字符，
+       *   两者都会让 `Authorization: Bearer …` 变成服务端眼里的坏凭证，而回的是
+       *   401 —— 用户会认为「这个 Key 是坏的」，而问题出在一个看不见的字符上。
+       *   这里不替用户 `trim()`（那是写入路由的职责），校验只拒绝明显不是 Key 的东西。
+       */
+      if (typeof value !== 'string') throw new Error('API Key 必须是字符串');
+      if (value.length > 400) throw new Error('API Key 最长 400 字符');
+      if (value !== '' && !/^[\x21-\x7e]+$/.test(value)) throw new Error('API Key 里有非法字符');
+    } else if (key === 'ollamaBase' || key === 'asrBaseUrl') {
+      // 空串合法（= 用预设）。非空必须是 http(s)：写成 `localhost:11434` 时
+      // fetch 会当成相对路径，症状是「请求发到了插件自己的路由上」，极难查。
+      if (typeof value !== 'string' || value.length > 300) throw new Error('地址最长 300 字符');
+      if (value !== '' && !/^https?:\/\//i.test(value)) throw new Error('地址要以 http:// 或 https:// 开头');
+    } else if (key === 'asrModel') {
+      if (typeof value !== 'string' || value.length > 120) throw new Error('模型名最长 120 字符');
     } else if (['fontSize', 'lineHeight', 'textWidth'].includes(key)) {
       const ranges = { fontSize: [14, 32], lineHeight: [1.5, 2.4], textWidth: [28, 44] };
       const [min, max] = ranges[key];

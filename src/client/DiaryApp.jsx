@@ -55,25 +55,26 @@ import { createPortal } from 'react-dom';
 import { sanitizeHtml } from '../host/sanitize.js';
 import { markdownToHtml } from '../host/markdown.js';
 import {
-  DIARY_MODULES, MOODS, REFLECTION_TEMPLATE, dateKey, monthKeyOf, normalizeMood, parseMonthKey,
+  DIARY_MODULES, MOODS, NOTE_TONES, REFLECTION_TEMPLATE, dateKey, monthKeyOf, normalizeMood, parseMonthKey,
   parseSource, parseTags, shiftMonth, stampLabel,
 } from '../diary-format.js';
 import {
   appendDiaryEntry, downloadDiaryBundle, fetchDiaryBook, fetchDiaryDashboard, fetchDiaryDay, fetchDiaryExport,
   fetchDiaryGate, fetchDiaryMonth, fetchDiarySecret, fetchDiarySource, fetchDiaryStats, fetchDiaryTags, fetchDiaryTimeline,
   fetchReflectionIndex,
-  lockDiaryGate, removeDiaryEntry, revealDiaryFolder, searchDiary, setupDiaryGate, unlockDiaryGate,
+  lockDiaryGate, pruneDiaryAssets, removeDiaryDay, removeDiaryEntry, revealDiaryFolder, searchDiary, setupDiaryGate, unlockDiaryGate,
 } from './diary-api.js';
 import { fetchAnnotations, fetchBooks, fetchStates } from './library-api.js';
 import { BOOK_STATE_LABELS, formatBytes, hasFinished } from '../library.js';
 import { coverGlyph, coverHue } from './book-cover.js';
 import { entryOrigin, originIcon, originJumpLabel, originMissNote, originTarget } from './diary-origin.js';
-import { entryLines } from './diary-lines.js';
+import { entryLines, plainSnippet } from './diary-lines.js';
 import { agoLabel } from './diary-ago.js';
 import { tideReading } from './diary-tide.js';
 import { coverVisible, COVER_EXIT_MS } from './diary-cover.js';
 import { headVisible } from './diary-head.js';
 import { DiaryCover, PrivateCover } from './DiaryCover.jsx';
+import { WipeDayDialog } from './WipeDayDialog.jsx';
 import { DiaryTide } from './DiaryTide.jsx';
 import { placeRowMenu } from './row-menu.js';
 import { BookCover } from './BookCover.jsx';
@@ -84,6 +85,7 @@ import { ensureStyles } from './ReaderPage.jsx';
 import { ViewSwitch } from './ViewSwitch.jsx';
 import { Icon } from './icons.jsx';
 import { BRAND_TITLE } from './brand.js';
+import { SIDEBAR_WIDTH, clampSidebarWidth, readSidebarWidth, saveSidebarWidth } from './sidebar-width.js';
 
 /** 一条正文渲染成 HTML。与译文同一条路（markdown → sanitize），不自造渲染器。 */
 function renderBody(body) {
@@ -118,7 +120,9 @@ function dayLabel(date, today) {
  */
 function quoteOf(cell) {
   if (cell?.locked) return '这一页还锁着';
-  const text = typeof cell?.preview === 'string' ? cell.preview.trim() : '';
+  // ★ 和侧栏时间轴同一条口径（`plainSnippet`）：这里也是把 preview 当**纯文本**印。
+  //   不剥的话，「往日回声」会把 `**自洽**` 连星号一起印进引号里。
+  const text = typeof cell?.preview === 'string' ? plainSnippet(cell.preview).trim() : '';
   return text === '' ? '那天没有留下正文。' : `「${text}」`;
 }
 
@@ -179,7 +183,7 @@ function firstMood(...candidates) {
  * ★ `ResizeObserver` 是必需的：拖动侧栏、拖 AI 面板、切窗口都会改宽度，
  *   只测一次会留下「明明能放下却还给着展开按钮」的残留。
  */
-function EntryBody({ html, text, onExpand }) {
+function EntryBody({ html, text, onExpand, noMore = false }) {
   const ref = useRef(null);
   const [over, setOver] = useState(false);
 
@@ -204,13 +208,108 @@ function EntryBody({ html, text, onExpand }) {
         ref={ref}
         className={`npr-diary-body npr-diary-clamp${html ? '' : ' npr-diary-body-plain'}`}
         {...(html ? { dangerouslySetInnerHTML: { __html: html } } : { children: text })} />
-      {over && (
+      {over && !noMore && (
         <button type="button" className="npr-diary-more" onClick={onExpand}>
           展开全文
           <Icon name="chevron-down" size={12} />
         </button>
       )}
     </>
+  );
+}
+
+/**
+ * 这一张便签用什么纸色。
+ *
+ * ★ 有 `meta.tone` 就用它（用户写的时候挑的，见 `NOTE_TONES`）。
+ * ★ 没有就**按条目的键算一个**，不按「第几条」轮着发：条目会删、会插、会切天，
+ *   一下标就会让整面墙重新洗牌 —— 明明内容没变，颜色全换了，用户会以为数据错乱。
+ *   用键做哈希，同一条永远同一色，删掉邻居也不影响它。
+ */
+function noteToneOf(entry, key) {
+  const saved = entry?.meta?.tone;
+  if (NOTE_TONES.includes(saved)) return saved;
+  let hash = 0;
+  for (let i = 0; i < key.length; i += 1) hash = (hash * 31 + key.charCodeAt(i)) % 9973;
+  return NOTE_TONES[hash % NOTE_TONES.length];
+}
+
+/**
+ * 便签脚下那句时间。
+ *
+ * ★ 只有「就是今天」才说「刚刚 / N 分钟前」：这一天不是今天时，那个差值毫无意义
+ *   （翻到 10 月 20 日，一条 09:31 的便签会算成「30 天前」），所以直接给时刻。
+ * ★ 时钟回拨、跨零点写的那几分钟会出现负数 —— 一律按「刚刚」，不印「-3 分钟前」。
+ */
+function noteWhen(entry, sameDay) {
+  const time = typeof entry?.time === 'string' ? entry.time : '';
+  if (!sameDay) return time;
+  const hit = /^(\d{1,2}):(\d{2})$/.exec(time);
+  if (!hit) return time;
+  const now = new Date();
+  const minutes = (now.getHours() * 60 + now.getMinutes()) - (Number(hit[1]) * 60 + Number(hit[2]));
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes} 分钟前`;
+  return time;
+}
+
+/**
+ * 便签墙上的一张便签（0.64.0）。
+ *
+ * ★ 为什么不复用 `.npr-diary-entry` 那一套行结构：那是「一条记录」的排法 ——
+ *   时间在左上、动作绝对定位在右上、正文占满整行。便签的读法不一样：
+ *   先看见**分类**（一个标签），再看见**一句话**，最后才是时间与出口。
+ *   同一份数据硬套行结构，只会得到「一张被压扁的记录」。
+ * ★ 动作（删除 / 展开）只在悬停与键盘聚焦时现身：便签是用来**看**的，
+ *   一颗常驻的垃圾桶会把「墙上的一张纸」变成「一条待办」。
+ * ★ 标签只取第一个，且**不可点** —— 便签上的动作越少越像一张纸；
+ *   要找某个标签的全部记录，那条路在侧栏的标签云与「展开全文」里都有。
+ */
+function NoteCard({
+  entry, noteKey, label, origin, focused, confirming, busy,
+  onArm, onDelete, onOrigin, onExpand, sameDay,
+}) {
+  const html = renderBody(entry.body);
+  return (
+    <article className={`npr-note${focused ? ' is-focus' : ''}`}
+      data-tone={noteToneOf(entry, noteKey)} data-diary-key={noteKey}
+      aria-current={focused ? 'true' : undefined}>
+      {(label !== '' || origin !== null) && (
+        <header className="npr-note-head">
+          {label !== '' && <span className="npr-note-label">{label}</span>}
+          <span className="npr-note-grow" />
+          {origin !== null && (
+            <button type="button" className="npr-note-origin"
+              title={`${origin.source} · 点开看出处`}
+              aria-label={`出处：${origin.title}`}
+              onClick={(event) => onOrigin(event, origin)}>
+              <Icon name={originIcon(origin)} size={12} />
+            </button>
+          )}
+        </header>
+      )}
+      <EntryBody html={html} text={entry.body} onExpand={onExpand} noMore />
+      <footer className="npr-note-foot">
+        <span className="npr-note-when">{noteWhen(entry, sameDay)}</span>
+        <span className="npr-note-acts">
+          {confirming ? (
+            <button type="button" className="npr-diary-action is-danger" disabled={busy}
+              onClick={onDelete}>
+              {busy ? '正在删除…' : '确认删除'}
+            </button>
+          ) : (
+            <button type="button" className="npr-diary-action" title="撕掉这一张"
+              aria-label="删掉这一条" onClick={onArm}>
+              <Icon name="trash-2" size={13} />
+            </button>
+          )}
+          <button type="button" className="npr-note-open" title="展开这一条"
+            aria-label="展开这一条" onClick={onExpand}>
+            <Icon name="arrow-up-right" size={13} />
+          </button>
+        </span>
+      </footer>
+    </article>
   );
 }
 
@@ -453,12 +552,32 @@ export function DiaryApp({
 
   const [draft, setDraft] = useState('');
   const [mood, setMood] = useState('');
+  /**
+   * 便签墙上「这一张用什么纸」的当前选择（见 `NOTE_TONES`）。
+   * ★ 存的是**选择**，不是草稿的一部分：写完一张不回到默认色 ——
+   *   一个人连着记三条，多半想用同一个颜色；每次自动跳回黄，等于每写一条都要重挑一次。
+   * ★ 换天不清空：它属于「我习惯用哪种纸」，不属于「这一页」。
+   */
+  const [tone, setTone] = useState(NOTE_TONES[0]);
   const [secret, setSecret] = useState({ mode: '', error: '' });
   const [saving, setSaving] = useState(false);
 
   const [busyKey, setBusyKey] = useState('');
   const [aiKey, setAiKey] = useState('');
   const [confirmKey, setConfirmKey] = useState('');
+  /**
+   * 「删掉这一天」的确认框（0.75.0）。
+   *
+   * ★ 为什么整天删除要**单独一个确认框**，而删一条只是原地变成「确认删除」：
+   *   删一条的代价是「再写一遍那句话」，删一天的代价是「一天的东西全没了」。
+   *   两个动作不该共用同一种确认重量 —— 一次误点就少一天。
+   * ★ 框里必须**逐条列出会少什么**（时间 + 摘要），不能只写「共 4 条」：
+   *   「4 条」没有信息量，用户想确认的恰恰是「我是不是把那条有用的也一起删了」。
+   * ★ `busy` 单独一格里：确认框在请求飞行期间不能关，否则用户会点第二次。
+   * ★ `error` 也存在这一格里，不用全局那个：整天删除失败时要**把框留着**并说明
+   *   原因（写进页面顶部的错误条会被框挡住），关掉框再报错等于「点了没反应」。
+   */
+  const [wipe, setWipe] = useState({ open: false, busy: false, error: '' });
 
   const [search, setSearch] = useState({ open: false, query: '', hits: [], scanned: 0, truncated: false, busy: false });
   const [tagIndex, setTagIndex] = useState({ tags: [], busy: false });
@@ -534,7 +653,7 @@ export function DiaryApp({
    *   按钮），整块消失就变成「收起来之后叫不回来」。
    * ★ 默认**展开**：划线是写读后感的主要素材（拖拽与「引用」都从这儿取），
    *   默认收起等于把主路径藏起来；收起是「我要专心写」时才主动做的事。
-   * ★ 存 localStorage 而不是纯内存：与 `npr.diaryListWidth` / `npr.companionWidth`
+   * ★ 存 localStorage 而不是纯内存：与 `npr.sidebarWidth` / `npr.companionWidth`
    *   同属「这台机器上的界面偏好」，重开面板不该复位。
    * ★ 名字带 `Panel` 是为了和日记自己的 `marks`（日历上那些有标记的日子）
    *   分开 —— 两个 `marks` 只差一个单词，改错一次就是「点划线栏把日历清了」。
@@ -549,7 +668,8 @@ export function DiaryApp({
   const [refDraft, setRefDraft] = useState('');
 
   const [exportArmed, setExportArmed] = useState(false);
-  const [listWidth, setListWidth] = useState(() => Number(localStorage.getItem('npr.diaryListWidth')) || 268);
+  // 0.71.0：四个视图共用一份宽度与一个 key（见 sidebar-width.js）。
+  const [listWidth, setListWidth] = useState(readSidebarWidth);
   const [chat, setChat] = useState(null);
   const [chatError, setChatError] = useState('');
   /** 面板开着但对话还没建好时也要能打开它（失败信息得有个地方落）。 */
@@ -1101,9 +1221,19 @@ export function DiaryApp({
     return undefined;
   }, [focusKey, focusSeq, day, dayAll]);
 
-  async function refresh() {
-    await loadDay(selected);
-    await loadMonth(monthKey);
+  /**
+   * 写完 / 删完之后刷新这一页。
+   *
+   * ★ 接受「刷新哪一天」：灵感一律记到**今天**（见 `save()`），而 `selected` 可能还停在
+   *   用户翻看的那一天 —— 照闭包里的 `selected` 刷新，刚写的那条就不在视野里，
+   *   症状与「点了没反应」完全一样。
+   * ★ 月份也跟着目标日期走：从 10 月翻着看、写一条落在 11 月，日历必须一起跳过去，
+   *   否则「11 月那天的条目」配着「10 月的日历标记」。
+   */
+  async function refresh(at = selected) {
+    await loadDay(at);
+    const parsed = parseMonthKey(String(at).slice(0, 7));
+    await loadMonth(parsed ? monthKeyOf(parsed.year, parsed.month0) : monthKey);
     if (moduleValue === 'inspiration') await Promise.all([loadTags(), loadTimeline()]);
     // 写完 / 删完，侧栏的「本月 N 字」「连续 N 天」「情绪占比」都变了。
     if (moduleValue === 'private') await loadDash();
@@ -1173,7 +1303,19 @@ export function DiaryApp({
     }
   };
 
-  /** 三个模块共用一个保存动作，差别只有 `kind` / `vis` / 正文来源。 */
+  /**
+   * 三个模块共用一个保存动作，差别只有 `kind` / `vis` / 正文来源 **和落点日期**。
+   *
+   * ★ 灵感的日期是「此刻」，不是「你在翻哪一天」（2026-11-11 用户报的 bug）。
+   *   时间轴与日历是**浏览历史**的入口，不是写入目标 —— 选中 10 月 29 日只是在那天
+   *   的记录里看，此刻按下的这一条仍然属于今天。原先写的是 `selected`，于是
+   *   「翻到上周某天随手记一句」会被塞进那天的文件，而界面显示的还是今天的时间轴，
+   *   事后连「它落到哪天去了」都找不到。
+   * ★ 私密日记**仍然跟随 `selected`**：它是一天一篇的日记，选中哪天就是翻到哪一页，
+   *   在里面写就是在那一页上补写。读后感本来就是「此刻」，一直在用 `today` 那条路。
+   * ★ 日期**只算一次**，且用 `dateKey()` 现算而不是挂载时的 `today`：面板开着跨过
+   *   零点时，写进去的必须是今天，不是昨天那个文件。
+   */
   async function save(body, { kind, vis, source = '', meta = {} } = {}) {
     if (savingRef.current) return false;
     if (!body.trim()) { draftRef.current?.focus(); return false; }
@@ -1181,16 +1323,25 @@ export function DiaryApp({
     setSaving(true);
     setError('');
     try {
+      const at = dateKey();
+      const date = moduleValue === 'private' ? selected : at;
       await appendDiaryEntry({
-        date: moduleValue === 'reflection' ? today : selected,
+        date,
         kind: kind ?? mod.kind,
         source,
         body,
         meta,
         vis: vis ?? mod.vis,
       });
-      await refresh();
-      return true;
+      // 记到了别的日子 ⇒ 把界面也挪过去：写了却看不见，和「点了没反应」是一回事。
+      // 侧栏展开的那一天也换成今天，否则右侧是今天、左侧还展开着 10 月 29 日。
+      if (date !== selected) {
+        pick(date);
+        setOpenDay(date);
+      }
+      await refresh(date);
+      // 返回**实际写到的日期**（灵感 = 今天，私密 = 选中的那天），写回执要用它说话。
+      return date;
     } catch (cause) {
       setError(cause.message);
       return false;
@@ -1204,11 +1355,21 @@ export function DiaryApp({
     // ★ 只有私密日记带情绪。灵感模块已经把情绪行去掉了，若还无条件传 `mood`，
     //   在私密里选过心情再切回灵感写一条，那条灵感会悄悄带上一个用户没选过的心情。
     const meta = moduleValue === 'private' && mood ? { mood } : {};
-    const ok = await save(draft, { meta });
-    if (!ok) return;
+    // 便签的纸色只属于灵感模块：私密与读后感没有色板，不该被写上一个看不见的 color。
+    if (moduleValue === 'inspiration') meta.tone = tone;
+    const wrote = await save(draft, { meta });
+    if (!wrote) return;
     setDraft('');
     setMood('');
-    notify?.(mod.vis === 'private' ? '已记下这一条（私密，本地加密）' : '已记下这一条');
+    /*
+     * ★ 写着「已记下」但界面还停在 10 月 29 日，用户根本不知道这条去哪了。
+     *   灵感的落点与「在看哪一天」无关，所以这里必须把日期说出来。
+     *   私密日记跟随选中日期，落点就是眼前这一页，不需要解释。
+     */
+    const moved = moduleValue !== 'private' && wrote !== selected;
+    notify?.(mod.vis === 'private'
+      ? '已记下这一条（私密，本地加密）'
+      : `已记下这一条${moved ? ' · 记在今天' : ''}`);
   }
 
   async function saveReflection() {
@@ -1240,6 +1401,36 @@ export function DiaryApp({
       setError(cause.message);
     } finally {
       setBusyKey('');
+    }
+  }
+
+  /**
+   * 删掉这一天的全部记录（0.75.0）。
+   *
+   * ★ 与 `removeAt` 的分工：那条是「删一条」，走同一个文件的读-改-写；
+   *   这条是「删整天」，宿主**一次 `rename`** 到 `_trash/`。
+   * ★ 锁着时**不打开确认框**：私密正文在锁态下根本没到客户端（宿主摘成空串），
+   *   让用户对着一个列不出内容的框点「删掉」，等于拿一张空白清单让他签字，
+   *   而且他还会以为「这一天真是空的」。先提示解锁。
+   * ★ 成功回执要说出**文件去哪了**（`trashed`）：这是「可逆」这件事的唯一凭据。
+   *   只说「已删掉」会让用户以为不可挽回，下次就不敢用这个按钮了。
+   */
+  async function wipeDay() {
+    if (wipe.busy) return;
+    if (wipeSide === 'private' && !gate.unlocked) {
+      setWipe({ open: false, busy: false, error: '' });
+      notify?.('私密日记还锁着 —— 解锁后才能删这一天', true);
+      return;
+    }
+    setWipe((current) => ({ ...current, open: true, busy: true, error: '' }));
+    try {
+      const result = await removeDiaryDay(selected, wipeSide);
+      setWipe({ open: false, busy: false, error: '' });
+      setConfirmKey('');
+      await refresh();
+      notify?.(`已删掉这一天的 ${result.entries} 条 · 文件在 diary/${result.trashed}`);
+    } catch (cause) {
+      setWipe((current) => ({ ...current, open: true, busy: false, error: cause.message }));
     }
   }
 
@@ -1561,7 +1752,14 @@ export function DiaryApp({
     if (query.trim() === '') { setSearch((current) => ({ ...current, hits: [], scanned: 0, truncated: false })); return; }
     setSearch((current) => ({ ...current, busy: true }));
     try {
-      const payload = await searchDiary(query, 40);
+      /*
+       * ★ 带上 `moduleValue`（0.86.0）：搜索与导出现在是**同一套作用域**。
+       *   不带的话，「在读后感里搜一本书，命中里混着灵感便签」—— 点进去发现自己
+       *   看的不是读后感，而用户会以为读后感没写。
+       * ★ `query` 用参数而不是 `search.query`：`searchTag()` 是先设 state 再立刻
+       *   调它，读 state 会读到上一轮的值（React 的 setState 不是同步生效的）。
+       */
+      const payload = await searchDiary(query, 40, moduleValue);
       setSearch((current) => ({ ...current, hits: payload.hits ?? [], scanned: payload.scanned ?? 0, truncated: payload.truncated === true, busy: false }));
     } catch (cause) {
       setError(cause.message);
@@ -1587,21 +1785,90 @@ export function DiaryApp({
     setSearch((current) => ({ ...current, open: false, query: '', hits: [], scanned: 0, truncated: false }));
   }
 
+  /**
+   * 「打开文件夹」——**跟着当前模块走**（0.86.0）。
+   *
+   * ★ 用户 2026-11-19：「不管是切换那个（灵感/日记/读后感），点击文件夹图标打开的
+   *   都是这个文件夹」。私密日记确实该去 `private/`（与 `daily/` 平级），这一条是
+   *   真的错了；而灵感与读后感**同处一个 `daily/*.md`**（标题行的 `kind` 分家），
+   *   指向同一个目录是磁盘事实，不能靠换个目录假装分开。
+   * ⇒ 公开两档改成「打开 `daily/` 并选中最近一天的文件」，私密去 `private/`；
+   *   回执里说清选中的是哪一份，用户才知道这次点开的东西确实不一样。
+   */
   async function reveal() {
     try {
-      const result = await revealDiaryFolder();
-      notify?.(`已打开 ${result?.dir ?? '日记文件夹'}`);
+      const result = await revealDiaryFolder(moduleValue);
+      const picked = String(result?.file ?? '').split(/[\\/]/).pop();
+      const where = result?.dir ?? '日记文件夹';
+      notify?.(picked === '' ? `已打开 ${where}` : `已打开 ${where}，选中了 ${picked}`);
     } catch (cause) {
       setError(cause.message);
     }
   }
 
+  /**
+   * 导出**当前模块**（0.86.0）。
+   *
+   * ★ 原来这里调的是「导出全部日记」：在读后感里点下载，得到一个叫
+   *   `日记-导出-日期.md` 的合订本（灵感 + 读后感混在一起）。用户的第一反应是
+   *   「下载错了」—— 而它其实一个字都没错，只是**没有作用域**。
+   * ★ 私密模块不走这条路（它要走两次确认），见工具栏那个 `onClick` 的分派。
+   */
   async function exportAll() {
     try {
-      const payload = await fetchDiaryExport();
-      if (!payload.total) { notify?.('还没有日记可以导出'); return; }
-      downloadDiaryBundle(payload.files, today);
-      notify?.(`已导出 ${payload.total} 天${payload.skippedPrivate > 0 ? `（私密 ${payload.skippedPrivate} 天没导出）` : ''}`);
+      const payload = await fetchDiaryExport({ module: moduleValue });
+      const label = payload?.scope?.label ?? '日记';
+      if (!payload.total) { notify?.(`还没有${label}可以导出`); return; }
+      downloadDiaryBundle(payload.files, today, label);
+      notify?.(`已导出 ${payload.total} 天 / ${payload.entries} 条${label}`
+        + `${payload.skippedPrivate > 0 ? `（私密 ${payload.skippedPrivate} 天没导出）` : ''}`);
+    } catch (cause) {
+      setError(cause.message);
+    }
+  }
+
+  /**
+   * 清理没在用的图（0.73.1）。**两次点击**：第一下只预演。
+   *
+   * ★ 这个动作**不可撤销**：图不在 `data.json` 里，没有导出、没有备份 ——
+   *   删掉就是没了。所以第一下只报数（几张、共多少 MB），用户看清了再按「清掉」。
+   *   与「导出私密明文」是同一套路数：一次点击就能造成不可逆后果时，
+   *   把第一下留成「上膛」。
+   * ★ 预演为空时也要说清**为什么**：图都还在用，或者都还没过 7 天保护期。
+   *   只回一句「没有要清理的」，用户会以为按钮坏了 —— 而保护期这件事他无从知道。
+   */
+  async function pruneAssets() {
+    try {
+      const preview = await pruneDiaryAssets({ dryRun: true });
+      const count = preview?.removed?.length ?? 0;
+      if (count === 0) {
+        const scanned = preview?.scanned ?? 0;
+        notify?.(scanned === 0
+          ? '还没有贴过图'
+          : `${scanned} 张图都还在用（或还没过 ${preview?.keepDays ?? 7} 天保护期）`);
+        return;
+      }
+      notify?.(`有 ${count} 张图没在用了，共 ${(preview.freed / 1024 / 1024).toFixed(1)} MB`
+        + `${preview?.privateUnchecked ? '（私密日记里的图核对不到）' : ''}，清掉吗？`, false, {
+        label: '清掉',
+        onClick: () => { void runPrune(); },
+      });
+    } catch (cause) {
+      setError(cause.message);
+    }
+  }
+
+  /** 真删。只由 `pruneAssets` 上过膛之后那颗按钮调用。 */
+  async function runPrune() {
+    try {
+      const result = await pruneDiaryAssets({ dryRun: false });
+      const done = result?.removed?.length ?? 0;
+      // ★ 删不掉的数量必须单独说：把失败的算进「清掉 N 张」，回执就成了假话，
+      //   而用户不会再去查第二次。
+      const stuck = result?.failed?.length ?? 0;
+      if (done === 0 && stuck === 0) { notify?.('没有可清的图了'); return; }
+      notify?.(`清掉 ${done} 张，腾出 ${((result.freed ?? 0) / 1024 / 1024).toFixed(1)} MB`
+        + (stuck > 0 ? `（${stuck} 张删不掉，可能被别的程序占着）` : ''), stuck > 0);
     } catch (cause) {
       setError(cause.message);
     }
@@ -1611,15 +1878,19 @@ export function DiaryApp({
    * 连私密一起导出。**两次点击**：第一次只是「上膛」。
    * ★ 不能一次点完：那条路把明文写进浏览器下载目录，而那个目录会被 iCloud /
    *   备份 / 剪贴板同步到别处 —— 正好是加密层要防的第一件事。
+   * ★ 0.86.0 起**只导私密**（`module: 'private'`）：这个入口在私密模块里，
+   *   而「导出私密明文」原本连公开日记一起塞进同一个文件 —— 用户在私密页点它，
+   *   得到一份大半是灵感的明文包，既不是他要的，也多泄露了一层。
    */
   async function exportWithPrivate() {
     if (!exportArmed) { setExportArmed(true); return; }
     setExportArmed(false);
     try {
-      const payload = await fetchDiaryExport({ includePrivate: true });
-      if (!payload.total) { notify?.('还没有日记可以导出'); return; }
-      downloadDiaryBundle(payload.files, today);
-      notify?.(`已导出 ${payload.total} 天（含私密明文）`
+      const payload = await fetchDiaryExport({ includePrivate: true, module: 'private' });
+      const label = payload?.scope?.label ?? '私密日记';
+      if (!payload.total) { notify?.(`还没有${label}可以导出`); return; }
+      downloadDiaryBundle(payload.files, today, label);
+      notify?.(`已导出 ${payload.total} 天 / ${payload.entries} 条私密日记（明文在下载目录）`
         + `${payload.skippedPrivate > 0 ? `，另有 ${payload.skippedPrivate} 天解不开` : ''}`);
     } catch (cause) {
       setError(cause.message);
@@ -1654,11 +1925,11 @@ export function DiaryApp({
     const startX = event.clientX;
     let width = listWidth;
     const move = (moveEvent) => {
-      width = Math.round(Math.min(Math.max(listWidth + moveEvent.clientX - startX, 220), 420));
+      width = clampSidebarWidth(listWidth + moveEvent.clientX - startX);
       setListWidth(width);
     };
     const up = () => {
-      localStorage.setItem('npr.diaryListWidth', String(width));
+      saveSidebarWidth(width);
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
     };
@@ -1672,6 +1943,24 @@ export function DiaryApp({
   const inspirationEntries = day.entries.filter((entry) => entry.scope === 'public' && entry.kind !== '读后感');
   const privateEntries = day.entries.filter((entry) => entry.scope === 'private');
   const visibleEntries = moduleValue === 'private' ? privateEntries : inspirationEntries;
+  /**
+   * 「删掉这一天」要动的那一半（0.75.0）。
+   *
+   * ★ 灵感模块删的是**整个公开文件**，不只是列表里那几条灵感：`daily/*.md` 是一天
+   *   一个文件，读后感（`kind: '读后感'`）也躺在里面。只删灵感、把读后感留在文件里，
+   *   就得「读整份 → 过滤 → 整份写回」—— 那正是整天删除想避开的形状（写坏一次
+   *   就是半天不见）。所以确认框把读后感**也列出来**：用户按的是「删这一天」，
+   *   就该看见这一天到底有什么。
+   * ★ 读后感模块**不给**这个入口：那一页的组织单位是「书」不是「天」，
+   *   在那里放一个「删这一天」等于让人以为读后感是按天存的。
+   */
+  const wipeEntries = moduleValue === 'private'
+    ? privateEntries
+    : day.entries.filter((entry) => entry.scope !== 'private');
+  const wipeSide = moduleValue === 'private' ? 'private' : 'public';
+  /** 确认框里那句「N 条 · M 字」：按**将要删掉的**那半边算，不是整天的合计。 */
+  const wipeChars = wipeEntries.reduce((sum, entry) => sum + String(entry.body ?? '').length, 0);
+  const wipeReflections = wipeEntries.filter((entry) => entry.kind === '读后感').length;
   /**
    * 侧栏点了「挂在《X》上」之后，列表收窄成这个来源的那几条。
    *
@@ -1997,24 +2286,63 @@ export function DiaryApp({
             <ViewSwitch mode="diary" onChange={(next) => { if (next !== 'diary') onExit?.(next); }} showLibrary />
             {/* ★ 收起搜索 = 退出检索，连查询词一起清掉。否则输入框没了、结果还在，
                 用户既看不到自己搜的词，也没有地方改 —— 是一处走不出去的角落。 */}
-            <button type="button" className="npr-icon" title="搜索日记" aria-label="搜索日记"
+            <button type="button" className="npr-icon" title={`搜索${mod.label}`} aria-label={`搜索${mod.label}`}
               onClick={() => setSearch((current) => (current.open
                 ? { ...current, open: false, query: '', hits: [], scanned: 0, truncated: false }
                 : { ...current, open: true }))}><Icon name="search" /></button>
-            <button type="button" className="npr-icon" title="打开日记文件夹" aria-label="打开日记文件夹" onClick={() => void reveal()}><Icon name="folder" /></button>
-            <button type="button" className="npr-icon" title="导出全部日记（单文件 Markdown）" aria-label="导出全部日记" onClick={() => void exportAll()}><Icon name="download" /></button>
+            {/*
+              ★ 这四颗按钮原来对三个模块**完全一样**（0.86.0 修）。用户 2026-11-19：
+                「不管是切换那个，点击文件夹图标打开的都是这个文件夹」「明明我切到
+                读后感了，点击下载下载的还是日记」。
+              ★ 现在每颗都带当前模块：搜索按 `kind` 收窄、导出按 `module` 走、
+                文件夹按 `vis` 分到 `daily/` 或 `private/`。
+              ★ 文案要**如实**：灵感与读后感同处一个 `.md`，所以两档的文件夹是同一个，
+                硬写两套路径会是假话。差别在「选中哪一份」。
+            */}
+            <button type="button" className="npr-icon"
+              title={mod.vis === 'private'
+                ? '打开私密日记文件夹（加密文件）'
+                : `打开${mod.label}文件所在文件夹（灵感与读后感存在同一个 .md 里）`}
+              aria-label={mod.vis === 'private' ? '打开私密日记文件夹' : `打开${mod.label}文件所在文件夹`}
+              onClick={() => void reveal()}><Icon name="folder" /></button>
+            <button type="button" className="npr-icon"
+              title={mod.vis === 'private'
+                ? '导出私密日记明文（要点两次）'
+                : `导出${mod.label}（单文件 Markdown）`}
+              aria-label={`导出${mod.label}`}
+              /* ★ 私密走两次确认那条路（`exportWithPrivate`）：它是唯一会往下载目录写
+                 明文的地方，一次点击就能造成不可逆后果。 */
+              onClick={() => void (mod.vis === 'private' ? exportWithPrivate() : exportAll())}><Icon name="download" /></button>
+            {/* 清理没在用的图（0.73.1）。★ 标题必须写明「不会动日记内容」：
+                一颗垃圾桶图标摆在日记页顶栏，最自然的误读是「它会删我的日记」。
+                ★ 只在灵感模块出现（0.86.0）：贴图入口只有灵感那条快速记录
+                （`DiaryComposer` 明确不支持贴图），摆在读后感里是一颗与这一页
+                毫无关系的按钮，而且它**不可撤销** —— 不相干的按钮不该挨着它。 */}
+            {moduleValue === 'inspiration' && (
+              <button type="button" className="npr-icon" title="清理没在用的图片（只删没有任何灵感引用的图，不会动日记内容）"
+                aria-label="清理没在用的图片" onClick={() => void pruneAssets()}><Icon name="trash-2" /></button>
+            )}
           </div>
 
           {/* 三个功能模块 —— 这是这一页的主结构，不是「条目类型」。 */}
           <div className="npr-diary-modes" role="group" aria-label="日记功能">
             {DIARY_MODULES.map((item) => (
               <button key={item.value} type="button" aria-pressed={moduleValue === item.value}
-                onClick={() => { setModuleValue(item.value); setMood(''); setAiError(''); setRevealed(new Set()); }}>{item.label}</button>
+                /*
+                 * ★ 换模块要顺手**退出检索**（0.86.0）：搜索与导出都跟着模块走了，
+                 *   而命中结果是上一轮那一次查询的产物 —— 留着它，用户会看到
+                 *   「读后感页上列着灵感条目」，点进去跳到那一天，一头雾水。
+                 *   这比「重新搜一遍」更可预期：换模块 = 换上下文，旧上下文作废。
+                 */
+                onClick={() => { setModuleValue(item.value); setMood(''); setAiError(''); setRevealed(new Set()); clearFilter(); }}>{item.label}</button>
             ))}
           </div>
 
           <div className={`npr-search-box npr-diary-search${search.open ? '' : ' is-hidden'}`}>
-            <input type="search" aria-label="搜索日记" placeholder="搜一句话、一个名字…" value={search.query}
+            <input type="search" aria-label={`搜索${mod.label}`}
+              placeholder={moduleValue === 'reflection' ? '搜书名、一句话…'
+                : moduleValue === 'private' ? '搜私密日记…'
+                  : '搜一句话、一个名字…'} value={search.query}
               onChange={(event) => { const value = event.target.value; setSearch((current) => ({ ...current, query: value })); void runSearch(value); }}
               onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); setSearch((current) => ({ ...current, open: false, query: '', hits: [] })); } }} />
           </div>
@@ -2035,7 +2363,7 @@ export function DiaryApp({
               {search.busy && <div className="npr-empty">正在找…</div>}
               {!search.busy && search.hits.length === 0 && (
                 <div className="npr-empty">
-                  <p>日记里没有提到「{search.query}」。</p>
+                  <p>{mod.kind}里没有提到「{search.query}」。</p>
                   <p>在最近 {search.scanned} 天里找过{search.truncated ? '，更早的没有看' : ''}。</p>
                 </div>
               )}
@@ -2045,7 +2373,9 @@ export function DiaryApp({
                   <span className="npr-diary-hit-meta">
                     {hit.date} · {hit.time} · {hit.kind}{hit.scope === 'private' ? ' · 私密' : ''}
                   </span>
-                  <span className="npr-diary-hit-text">{hit.snippet}</span>
+                  {/* 搜索命中也是 `body` 的切片（宿主 `search()` 直接取原文），同一类纯文本预览：
+                      不剥标记就会在搜索结果里重新露出 `**`。 */}
+                  <span className="npr-diary-hit-text">{plainSnippet(hit.snippet)}</span>
                 </button>
               ))}
             </div>
@@ -2172,6 +2502,13 @@ export function DiaryApp({
                                *   鼠标停一下还能读到 160 字。
                                */
                               const lines = entryLines(entry.preview);
+                              /*
+                               * ★ 悬停提示也要是剥过标记的纯文本。用 `lines.title + lines.rest`
+                               *   会丢掉从句切掉的那个逗号，所以这里再压一次原文 —— 160 字的
+                               *   字符串，代价可以忽略。用户 2026-11-11 报的就是「时间线上
+                               *   为什么有 `**`」，悬停那一行同一份数据，不能修一半。
+                               */
+                              const plain = plainSnippet(entry.preview).replace(/\s+/g, ' ').trim();
                               return (
                                 <li key={entryKey(entry)}>
                                   {/* 这一项是不是「刚被点过的那一条」——右侧正文里同一条也在高亮，
@@ -2179,7 +2516,7 @@ export function DiaryApp({
                                   <button type="button"
                                     className={`npr-diary-dayitem${focusKey === entryKey(entry) ? ' is-focus' : ''}`}
                                     aria-current={focusKey === entryKey(entry) ? 'true' : undefined}
-                                    title={`${entry.time} ${entry.preview}`}
+                                    title={`${entry.time} ${plain}`}
                                     onClick={() => jump(item.date, entryKey(entry))}>
                                     <span className="npr-diary-dayitem-time">{entry.time}</span>
                                     <span className="npr-diary-dayitem-body">
@@ -2481,8 +2818,13 @@ export function DiaryApp({
           )}
         </aside>
         <div className="npr-resize" role="separator" aria-orientation="vertical" onPointerDown={startDrag}
-          onDoubleClick={() => { setListWidth(268); localStorage.setItem('npr.diaryListWidth', '268'); }} />
-        <section className="npr-reader npr-diary-reader" data-bare={bareHead ? '' : undefined}>
+          onDoubleClick={() => { setListWidth(saveSidebarWidth(SIDEBAR_WIDTH)); }} />
+        <section className="npr-reader npr-diary-reader" data-bare={bareHead ? '' : undefined}
+          /* ★ 便签墙要比正文栏（600px）宽：三列纸片在 600px 里只剩 190px 一格，
+             一句话被折成四行，墙就退化成「竖着排的卡片列表」。
+             宽窄只在这一层切，写字卡与墙共用同一条 `--npr-diary-sheet-w`，
+             上下两块的左边缘才对得齐。 */
+          data-wall={moduleValue === 'inspiration' && !showCover ? 'yes' : undefined}>
           {/*
             * 右侧整块也要一条拖动区：三种模块下，面板顶部都是同一条线。
             * ★ 顶栏空着的时候（两张开场页 / 读后感说明页）这条拖动区退回**书架欢迎页
@@ -2509,6 +2851,26 @@ export function DiaryApp({
                   <h1 className="npr-diary-h1">{headTitle}</h1>
                   <p className="npr-diary-sub">{headSub}</p>
                 </div>
+                {/*
+                  * 「删这一天」（0.75.0）。
+                  *
+                  * ★ 位置：日期栏、AI 按钮**左边**。它说的是「这一天」，所以只能长在
+                  *   写着日期的那一行上 —— 便签上的垃圾桶是「撕掉这一张」，两个动作
+                  *   重量差一个数量级，不能长得一样。
+                  * ★ 形状用**幽灵按钮**（无底、无描边、只在 hover 时泛红）而不是描边：
+                  *   一屏只留一个主按钮，AI 整理是那个主按钮；但**入口必须常显** ——
+                  *   藏在 hover 里的删除入口等于没有入口（用户 2026-09 定的）。
+                  * ★ 只在真有东西可删时出现。0 条时画一个禁用按钮，只会让人问
+                  *   「为什么点不了」，而答案（这天没记录）本来就写在上面那行小字里。
+                  */}
+                {moduleValue !== 'reflection' && wipeEntries.length > 0 && (
+                  <button type="button" className="npr-diary-wipe"
+                    title={`删掉这一天的全部记录（会移到 diary/_trash/，能找回）`}
+                    onClick={() => setWipe({ open: true, busy: false, error: '' })}>
+                    <Icon name="trash-2" size={13} />
+                    <span>删这一天</span>
+                  </button>
+                )}
                 {/* ★ 「AI 整理这一天」是**日期栏上的一个动作**，不是每一条上的按钮。
                     用户 2026-10-27：「AI 整理是整理当天的全部记录，不是一条记录一个 AI 整理」。
                     私密模块没有它 —— 模型读不到私密那半边（见文件头）。 */}
@@ -2638,13 +3000,15 @@ export function DiaryApp({
                   一个空着的写作坞（会留下一条 24px 的空白带 + 一条边线，看起来像
                   加载失败的占位）。判据写在 `hasDock` 里，三种模块各有一道闸。 */}
               {hasDock && (
-              <div className="npr-diary-dock">
+              <div className="npr-diary-dock" data-wall={moduleValue === 'inspiration' ? 'yes' : undefined}>
               <div className="npr-diary-sheet">
                 {/* ---- 写入口：三种模块三种形态 ------------------------------ */}
                 {moduleValue === 'inspiration' && (
                   /* ★ 灵感模块**没有情绪行**。用户 2026-10-27：「灵感不需要有情绪追踪」。
                      情绪追踪是私密日记本的能力，灵感是速记 —— 多一行五档情绪只会让
-                     「写一句话」这件事变重。 */
+                     「写一句话」这件事变重。
+                     ★ 0.64：这一块现在是**一张纸**（`tones` 给了才变）——写字的地方是墙上的
+                     第一张便签，写完贴上去，与下面那面墙是同一个东西的两个状态。 */
                   <DiaryComposer
                     variant="quick"
                     value={draft}
@@ -2654,6 +3018,10 @@ export function DiaryApp({
                     inputRef={draftRef}
                     maxHeight={220}
                     placeholder="这一刻想到什么？"
+                    submitLabel="贴到墙上"
+                    tones={NOTE_TONES}
+                    tone={tone}
+                    onTone={setTone}
                   />
                 )}
 
@@ -2822,7 +3190,7 @@ export function DiaryApp({
                         title={`回到 ${row.date}${row.time ? ` ${row.time}` : ''}`}
                         onClick={() => pick(row.date)}>
                         <span className="npr-diary-echo-when">{dayLabel(row.date, today)} · {row.time}</span>
-                        <span className="npr-diary-echo-text">{row.preview || '（没有正文）'}</span>
+                        <span className="npr-diary-echo-text">{plainSnippet(row.preview) || '（没有正文）'}</span>
                       </button>
                     ))}
                   </section>
@@ -2908,7 +3276,50 @@ export function DiaryApp({
                         更早还有 {entriesHidden} 条 · 展开
                       </button>
                     )}
-                    {entriesShown.map((entry) => {
+                    {/*
+                      * ★ 便签墙（0.64.0）：灵感模块下的这一天，铺成**一面纸片**。
+                      *
+                      *   用户 2026-11-03 拿一张便签墙的参考图问「这里能否改成这个样子」。
+                      *   要变的不是数据，是这个东西**像什么**：一条灵感本来就不是
+                      *   「一行带时间戳的记录」，它是一张随时写下、随手看一眼的纸。
+                      *   流水行适合「按时间核对」，纸片墙适合「想起点什么」——
+                      *   后者才是速记的用途。
+                      *
+                      * ★ 只有灵感模块铺墙。私密与读后感**一行都不动**：私密条目要
+                      *   「默认不渲染正文」、读后感是连成一篇的长文，两者都不是纸片。
+                      *   所以这里是与旧列表**并列的一个分支**，不是把旧列表改写成墙 ——
+                      *   改写成墙意味着三个模块共用一套新排法，而两外两个都不适用。
+                      *
+                      * ★ **倒序**：`entriesShown` 是时间正序（最老的在前），墙的读法是
+                      *   「刚记的在哪」—— 刚贴上去的那张必须在左上角第一眼看到。
+                      *   `slice()` 是必需的：`reverse()` 会就地翻转，把 `entriesShown`
+                      *   本身改掉（它由 `listEntries` 切出来，改它等于改了下游所有人的时间序）。
+                      */}
+                    {moduleValue === 'inspiration' && (
+                      <div className="npr-wall">
+                        {entriesShown.slice().reverse().map((entry) => {
+                          const key = entryKey(entry);
+                          const tags = parseTags(entry.body);
+                          return (
+                            <NoteCard
+                              key={key}
+                              noteKey={key}
+                              entry={entry}
+                              label={tags.length > 0 ? `#${tags[0]}` : ''}
+                              origin={entryOrigin(entry, entry.date ?? selected)}
+                              focused={focusKey === key}
+                              confirming={confirmKey === key}
+                              busy={busyKey === key}
+                              sameDay={(entry.date ?? selected) === today}
+                              onArm={() => setConfirmKey(key)}
+                              onDelete={() => void removeAt(entry)}
+                              onOrigin={openOrigin}
+                              onExpand={() => setExpand(entry)} />
+                          );
+                        })}
+                      </div>
+                    )}
+                    {moduleValue !== 'inspiration' && entriesShown.map((entry) => {
                       const html = renderBody(entry.body);
                       const tags = parseTags(entry.body);
                       const privateSide = entry.scope === 'private';
@@ -3449,6 +3860,29 @@ export function DiaryApp({
               </div>
             </div>, promptMount)}
         </aside>
+      )}
+
+      {/*
+        * 「删掉这一天」的确认框（0.75.0）。
+        *
+        * ★ 组件在 `WipeDayDialog.jsx`，这里只负责接线。为什么不内联：
+        *   这一段只在 `wipe.open` 为真时才渲染，而它在文件里的位置离 `useState`
+        *   有一千多行 —— 「某个 `const` 在声明之前被读」这类错误内联在这里
+        *   **任何结构判据都抓不到**，只有真的渲染一次才会炸（0.47.0 的教训）。
+        *   抽成受 props 驱动的组件之后，SSR 冒烟可以直接渲染它。
+        */}
+      {wipe.open && (
+        <WipeDayDialog
+          date={selected}
+          side={wipeSide}
+          entries={wipeEntries}
+          chars={wipeChars}
+          reflections={wipeReflections}
+          busy={wipe.busy}
+          error={wipe.error}
+          onCancel={() => setWipe({ open: false, busy: false, error: '' })}
+          onConfirm={() => void wipeDay()}
+        />
       )}
     </div>
   );

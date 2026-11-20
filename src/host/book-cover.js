@@ -1,12 +1,14 @@
 /**
- * 书封面的提取（EPUB 一侧）。
+ * 书封面的提取（宿主一侧：EPUB + MOBI/AZW/AZW3）。
  *
  * ★ 为什么这件事**必须有兜底**：书架索引里**没有封面字段** —— `book-source.js` 的字段
  *   表只给 filename / size / ext / path / title。所以「封面」在真机上从来只有两种可能：
  *   从书里解出来，或者界面上画一个生成式的。**没有第三种**，也没有「已有封面图」这回事。
- * ★ 为什么只做 EPUB，不做 MOBI / AZW3：那两种的封面在 MOBI 记录偏移表里，
- *   等于再写一个解析器，而它们在本机只有零星几本。返回 null，界面回落生成式封面 ——
- *   这是一句**真话**（「没解出来」），不是「这本书没有封面」。
+ * ★ MOBI / AZW3 的封面**在 0.71.6 起也解**：原先这里的注释说「等于再写一个解析器」，
+ *   而那个前提早就被 `ebook/mobi.js` 打破了 —— 它本来就要读 PalmDB record 表、MOBI 头
+ *   与 EXTH 才能取正文，封面只是同一份头里的另一个字段（`0x5C` + `EXTH 201`）。
+ *   解不出来仍然返回 `null`，界面回落生成式封面 —— 这是一句**真话**（「没解出来」），
+ *   不是「这本书没有封面」。
  * ★ 也不在这里解 PDF：PDF 首页要靠 pdf.js 渲染，而 pdf.js 是**浏览器半区**的产物
  *   （`pdfjs.js` 用 `PDFDataRangeTransport` 走 Range 取字节）。宿主侧没有 canvas，
  *   在 Node 里渲染首页需要再引一套 native canvas —— 那是另一个量级的依赖。
@@ -22,6 +24,7 @@
 
 import { readZip } from './ebook/zip.js';
 import { resolveHref } from './ebook/epub.js';
+import { mobiCoverImage } from './ebook/mobi.js';
 
 /** 封面图体积上限：超过它的一定是「把整本书塞进了一张图」，不值得发给界面。 */
 export const MAX_COVER_BYTES = 12 * 1024 * 1024;
@@ -149,4 +152,27 @@ export function epubCoverImage(buffer) {
   const bytes = zip.read(href);
   if (bytes === null || bytes.length === 0 || bytes.length > MAX_COVER_BYTES) return null;
   return { bytes, mime: MIME_BY_EXT[ext], href };
+}
+
+/**
+ * 按扩展名分派：EPUB 走 zip / OPF，MOBI 系走 PalmDB / EXTH。
+ *
+ * ★ 体积上限**只在这里判一次**（`epubCoverImage` 内部那一处保留，因为它是公开入口、
+ *   测试直接调它）：两处各写一个上限，改了其中一个就会出现「直调能过、走路由不过」
+ *   这种对不上号的差异。
+ * ★ 分不清后缀就返回 `null`，**不猜**：`txt` / `docx` 没有封面可言，
+ *   给它们试一遍解析只会把「本来就没有」拖成「慢慢才说没有」。
+ *
+ * @param {string} ext 书单里的扩展名（大小写与点号都容忍）
+ * @param {Buffer} buffer 整本字节
+ * @returns {{ bytes: Buffer, mime: string, href: string } | null}
+ */
+export function ebookCoverImage(ext, buffer) {
+  const kind = String(ext ?? '').trim().toLowerCase().replace(/^\./, '');
+  let cover = null;
+  if (kind === 'epub') cover = epubCoverImage(buffer);
+  else if (kind === 'mobi' || kind === 'azw' || kind === 'azw3') cover = mobiCoverImage(buffer);
+  if (cover === null) return null;
+  if (cover.bytes.length === 0 || cover.bytes.length > MAX_COVER_BYTES) return null;
+  return cover;
 }

@@ -272,6 +272,30 @@ describe('listMonth', () => {
 });
 
 describe('search', () => {
+  it('★ 图片地址不进索引（0.73.1）：搜 assets / api 不该把贴过图的灵感全搜出来', async () => {
+    const url = '/api/dsh-npie-reader/diary/assets/0123456789abcdef.png';
+    await store.append({ date: '2026-05-20', body: `想到一个点子\n![](${url})` });
+    const noise = await store.search({ query: 'assets' });
+    assert.equal(noise.hits.length, 0, '图片地址被当成了正文内容');
+    // 反过来：正文本身要能搜到，而且摘要里不能露出哈希名。
+    const real = await store.search({ query: '想到一个点子' });
+    assert.equal(real.hits.length, 1);
+    assert.doesNotMatch(real.hits[0].snippet, /0123456789abcdef/, '摘要里露出了图片地址');
+  });
+
+  it('★ 摘要只在正文里定位：带 source 的条目不会切错位置', async () => {
+    // 原实现拿 `hay.indexOf(needle)` 的下标去切 `entry.body` —— 那个下标带着
+    // 「读后感 · 《某本很长的书名》」的前缀长度，切出来的是偏了七八个字的片段，
+    // 而它看起来「像一段正常摘要」，不会报错。
+    await store.append({
+      date: '2026-05-21', kind: '读后感', source: '《一本很长的书名》',
+      body: '开头一段无关的话，然后关键句在这里。',
+    });
+    const hit = await store.search({ query: '关键句' });
+    assert.equal(hit.hits.length, 1);
+    assert.match(hit.hits[0].snippet, /关键句/, `摘要偏移了：${hit.hits[0].snippet}`);
+  });
+
   it('子串命中、大小写不敏感', async () => {
     await store.append({ date: '2026-05-01', body: 'Obsidian 的双链很好用' });
     const hit = await store.search({ query: 'obsidian' });
@@ -836,5 +860,32 @@ describe('dashboard：本月情绪 + 那年今日', () => {
       (error) => error.code === 'BAD_DATE');
     await assert.rejects(() => secure.dashboard({ date: '2031-03-02', today: '2031-03-02', month: '2031-3' }),
       (error) => error.code === 'BAD_MONTH');
+  });
+});
+
+describe('referencedAssets：清理白名单（0.73.1）', () => {
+  const assetUrl = (name) => `/api/dsh-npie-reader/diary/assets/${name}`;
+
+  it('抓到公开日记正文里的图名（两种扩展名都认）', async () => {
+    await store.append({ date: '2026-06-01', body: `第一张\n![](${assetUrl('aaaaaaaaaaaaaaaa.png')})` });
+    await store.append({ date: '2026-06-02', body: `第二张\n![](${assetUrl('bbbbbbbbbbbbbbbb.jpg')})` });
+    const names = await store.referencedAssets();
+    assert.equal(names.has('aaaaaaaaaaaaaaaa.png'), true);
+    assert.equal(names.has('bbbbbbbbbbbbbbbb.jpg'), true);
+  });
+
+  it('★ 反向对照：没被引用过的名字不会凭空出现（正则没收宽到什么都算）', async () => {
+    const names = await store.referencedAssets();
+    assert.equal(names.has('cccccccccccccccc.png'), false);
+  });
+
+  it('★ 谁引用它不重要，名字进集合就够 —— 清理只问「还有没有人用」', async () => {
+    // 同一条正文里出现两次也只算一个名字（Set）；这不影响清理判断，
+    // 但一旦改成数组，`prune` 的 `keep` 就可能重复，日志里会报出虚高的「保留 N 张」。
+    const url = assetUrl('dddddddddddddddd.webp');
+    await store.append({ date: '2026-06-03', body: `${url}\n中间一行\n${url}` });
+    const names = await store.referencedAssets();
+    assert.equal(names.has('dddddddddddddddd.webp'), true);
+    assert.equal(names instanceof Set, true);
   });
 });

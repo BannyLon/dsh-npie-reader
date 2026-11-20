@@ -17,6 +17,7 @@
  *   不是「去掉空白后的正文」。两套基准混用会在跨行选区的终点上差几个字符。
  */
 import { TONE_LABELS, TONE_ORDER as TONE_ORDER_FROM_FORMAT } from '../annotation-format.js';
+import { MISMATCH } from '../annotation-relocate.js';
 
 /**
  * 标记色板。
@@ -67,7 +68,7 @@ export function normalizeAnnotation(value) {
   if (quote.trim() === '') return null;
   const id = typeof value.id === 'string' ? value.id : '';
   if (id === '') return null;
-  return {
+  const out = {
     id,
     page,
     start,
@@ -78,6 +79,15 @@ export function normalizeAnnotation(value) {
     createdAt: Number(value.createdAt) || 0,
     updatedAt: Number(value.updatedAt) || 0,
   };
+  /**
+   * `mismatch` 是宿主在**读取时**算出来的投影标记，不落盘、不该被这里抹掉：
+   * 抹掉就等于界面把「这句原文已经找不到了」画成一条正常划线。只在值合法时
+   * 才带上 —— 老数据没有这个字段时 `deepEqual(归一化结果, 原对象)` 仍然成立。
+   */
+  if (value.mismatch === MISMATCH.MISSING || value.mismatch === MISMATCH.AMBIGUOUS) {
+    out.mismatch = value.mismatch;
+  }
+  return out;
 }
 
 /** 规范化一整份列表并按「页码 → 起点」排序（渲染顺序就是阅读顺序）。 */

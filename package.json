@@ -1,7 +1,7 @@
 {
   "name": "dsh-npie-reader",
-  "version": "0.56.6",
-  "description": "澄境 | Limina —— DSH 桌面端阅读器：订阅 RSS/Atom 作者，读原文或中文版本，带着当前文章在 Harness 原生对话里追问；也能打开本地 / 网盘电子书——PDF 按原版式阅读，EPUB / MOBI / AZW3 / TXT 重排阅读（字号、纸色、书自带的目录、伴读），两条路都能抽正文、切章、逐章生成中文解读、书内搜索（⌘F，命中逐处跳转并在正文上标出来），再把整本书导出成可被 agent 按需加载的 skill 包。第三个 tab 是 Obsidian 风格的 Markdown 日记（一天一篇，日历 + 分条 + 搜索 + 一键让 AI 整理成新的一条，公开与私密分开、私密加密且不进模型）。自带探索订阅目录（Newsletter / 独立博客）、OPML 导入导出、阅读外观设置，以及 20 个 agent 工具（含时间窗、全文检索、多源简报、跨章检索、读你自己的划线与技能包导出、日记的读 / 追加 / 改写 / 删除 / 搜索）。零第三方后端依赖。",
+  "version": "0.86.2",
+  "description": "澄境 | Limina —— DSH 桌面端阅读器：订阅 RSS/Atom 作者，读原文或中文版本，带着当前文章在 Harness 原生对话里追问；也能打开本地 / 网盘电子书——PDF 按原版式阅读，EPUB / MOBI / AZW3 / TXT 重排阅读（字号、纸色、书自带的目录、伴读），两条路都能抽正文、切章、逐章生成中文解读、书内搜索（⌘F，命中逐处跳转并在正文上标出来）、**听这一节（本机 / 云端语音，15 / 30 / 60 分钟定时关闭）与导出成 MP3**，订阅源里的播客单集可以边听边跟字幕（点一段跳一段、断点续听、0.75–2× 倍速；字幕只读订阅源自带的文件，不做语音识别），划线在正文重新分页后按摘录原文自动跟过去，再把整本书导出成可被 agent 按需加载的 skill 包。第三个 tab 是 Obsidian 风格的 Markdown 日记（一天一篇，灵感是一面可选纸色的便签墙，私密独立加密、读后感按书归档；日历 + 搜索 + 一键让 AI 整理成新的一条，私密不进模型）。自带探索订阅目录（Newsletter / 独立博客）、OPML 导入导出、阅读外观设置，以及 20 个 agent 工具（含时间窗、全文检索、多源简报、跨章检索、读你自己的划线与技能包导出、日记的读 / 追加 / 改写 / 删除 / 搜索）。零第三方后端依赖。",
   "type": "module",
   "engines": {
     "node": ">=18"
@@ -85,10 +85,15 @@
     "prepack": "npm run build",
     "verify:book-layout": "node scripts/check-book-panel-layout.mjs",
     "verify:book-reading": "node scripts/check-book-reading-chrome.mjs",
+    "verify:transcript-layout": "node scripts/check-transcript-layout.mjs",
+    "verify:listen-view": "node scripts/check-listen-view.mjs",
+    "verify:read-tabs": "node scripts/check-read-tabs.mjs",
+    "verify:audio-binding": "node scripts/check-audio-binding.mjs",
     "verify:book-skill-mutants": "node scripts/verify-book-skill-mutants.mjs",
     "verify:ocr-live": "node scripts/check-ocr-live.mjs",
     "verify:build-guard": "node scripts/check-build-guard.mjs",
-    "verify:layout:all": "node scripts/verify-all.mjs --only layout,book-layout"
+    "verify:layout:all": "node scripts/verify-all.mjs --all --only layout,book-layout,transcript-layout,listen-view",
+    "verify:media-dock": "node scripts/check-media-dock.mjs"
   },
   "allowScripts": {
     "esbuild@0.28.1": true

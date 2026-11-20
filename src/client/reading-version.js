@@ -1,10 +1,18 @@
-const ORDER = ['original', 'translation', 'rewrite'];
+/**
+ * ★ 顺序即「有哪几个可读版本」的白名单。
+ *   `contrast`（双语对照）是**派生视图**：它没有自己的产物，读的就是译文那份数据 ——
+ *   所以它的可读判据与 `translation` 完全相同（译文在，对照就在）。
+ */
+const ORDER = ['original', 'translation', 'contrast', 'rewrite'];
 
 /** Apply the reader preference only when that article actually has content. */
 export function resolveReadingVersion(preferred, article) {
-  const readable = (kind) => kind === 'original'
-    ? Boolean(article?.html?.trim())
-    : article?.versions?.[kind]?.available === true && Boolean(article.versions[kind].markdown?.trim());
+  const readable = (kind) => {
+    if (kind === 'original') return Boolean(article?.html?.trim());
+    // 对照没有独立产物：译文可读即可读。
+    const source = kind === 'contrast' ? 'translation' : kind;
+    return article?.versions?.[source]?.available === true && Boolean(article.versions[source].markdown?.trim());
+  };
   const candidates = [preferred, ...ORDER.filter(kind => kind !== preferred && kind !== 'original'), 'original'];
   return candidates.find(kind => ORDER.includes(kind) && readable(kind)) ?? 'original';
 }

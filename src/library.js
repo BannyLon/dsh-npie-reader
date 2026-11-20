@@ -121,6 +121,227 @@ export const LIBRARY_API_PREFIX = '/api/dsh-npie-reader/library';
 export const PDFJS_VENDOR_PREFIX = '/vendor/npie-reader/pdfjs';
 
 /**
+ * 论文 HTTP 面的路径前缀。
+ *
+ * ★ 与书架**并列**而不是塞进 `LIBRARY_API_PREFIX`：两条通道的风险面不同 ——
+ *   书架那条能读整台机器上配置过的书源目录，论文这条只读插件自己数据目录里的
+ *   `papers/`。前缀分开之后「论文挂了但书架还在」是可诊断的；塞进同一个 handler
+ *   里则一处抛错两条一起 500。
+ * ★ 但**读 PDF 仍然走书架那条**（`/book/:id/raw`）：论文 PDF 一旦下载进数据目录，
+ *   它就是一个普通的本地 PDF 书条目 —— 分片、Range、OCR、目录、划线全都照旧复用。
+ *   在这里另开一条取字节的路，等于把 `validateRangeRequestCapabilities()` 那套
+ *   约束再实现一遍，而两份实现迟早漂移。
+ */
+export const PAPER_API_PREFIX = '/api/dsh-npie-reader/paper';
+
+/**
+ * 论文条目的 id 形态。
+ *
+ * 以 `p` 开头，后面只允许字母数字与下划线 —— 这样它天然满足 `isBookId`
+ * （`/^[A-Za-z0-9_-]{1,64}$/`），可以直接当书条目 id 用，进而复用整个阅读器链路。
+ * ★ 不用 `:` / `.` / `/`：arXiv id 里的点、DOI 里的斜杠都会破坏「能当 URL 段、
+ *   也能当文件名」这两条要求。
+ */
+export function isPaperId(value) {
+  return typeof value === 'string' && /^p[A-Za-z0-9_]{1,63}$/.test(value);
+}
+
+/**
+ * 由**稳定键**（`arxiv:1706.03762` / `doi:10.1038/…` / `upload:<文件名>:<大小>`）
+ * 算出论文 id。
+ *
+ * ★ 必须是纯函数且**与进程无关**：同一条 arXiv 重复导入要落到同一个 id 上，
+ *   否则「导入两次 = 两条记录」，而用户看不出区别，只会以为插件在乱。所以用
+ *   djb2 哈希而不是随机数，也不用 `Math.random()`。
+ * ★ 冲突概率：32 位哈希，存一千篇时碰撞概率约 1e-4。真撞了的表现是「两篇并成
+ *   一条」—— 所以调用方（`paper-store.upsert`）还要再比一次 `key`，不一致就换后缀。
+ */
+export function paperIdFromKey(key) {
+  const text = String(key ?? '');
+  let hash = 5381;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash << 5) + hash + text.charCodeAt(index)) >>> 0;
+  }
+  return `p${hash.toString(36)}`;
+}
+
+/**
+ * 把一条**论文**记录伪装成一个**书条目**（阅读器认得的那种）。
+ *
+ * 这是整个论文功能的地基：论文 PDF 一旦落盘，就交给 `BookReader` 当普通 PDF 书读
+ * —— 分片取字节、目录、找词、划词、划线、逐章解读全部原样复用。少写这一层，
+ * 那些能力就得为论文再实现一遍。
+ *
+ * ★★ **只写一份，宿主与浏览器共用** ★★（0.68.0 修正）。
+ *   之前是两处各手写一份：宿主 `service.paperBook()` 一份、`PapersApp` 里再一份。
+ *   两份写法一漂开就是这个 bug —— 客户端那份漏了 `renderable`，而 `BookReader`
+ *   的判据是 `book.renderable === true`（**不是**「ext 认得就行」），于是点
+ *   「阅读全文」永远落到「这种格式暂不支持阅读」，哪怕 PDF 明明就在本地。
+ *   换句话说：判据在阅读器、字段在另一处手写，中间没有任何东西保证它们对得上。
+ *
+ * @param {object} paper `PaperStore` 的条目形状（`file === null` 表示还没有全文）
+ * @returns {object|undefined} 书条目；没有本地全文、或入参不合法时 `undefined`
+ *   —— 界面据此显示「先下载全文」，而不是点开一个永远转圈的阅读器。
+ */
+export function paperAsBook(paper) {
+  if (paper === null || typeof paper !== 'object') return undefined;
+  const bytes = Number(paper.file?.bytes ?? 0);
+  if (!(bytes > 0)) return undefined;
+  return {
+    id: paper.id,
+    title: paper.title ?? '未命名论文',
+    author: Array.isArray(paper.authors) ? paper.authors.join(', ') : '',
+    ext: 'pdf',
+    format: 'pdf',
+    /**
+     * 字节数是 Range 请求的依据：缺了它 pdf.js 会退化成「整本下载」。
+     * 用磁盘上的真实大小，不是记录里的 `pages` 之类派生值。
+     */
+    size: bytes,
+    /** ★ `readBookBytes` 靠它分派取字节（书架用 `local` / `pan`）。 */
+    source: 'paper',
+    /** 论文没有「本地路径」这个概念：字节从插件数据目录来，由 store 按 id 拼。 */
+    localPath: '',
+    series: paper.venue ?? '',
+    year: paper.year || 0,
+    pages: paper.pages || 0,
+    /**
+     * ★ 摘要随条目一起带上：伴读把「作者 / 发表处 / 摘要」当**背景**交给模型，
+     *   否则它只有这一页的正文，问「这篇和作者上一版什么关系」时只能猜。
+     *   书条目没有这一层，客户端也就不会传（见 `BookReader` 的 `meta`）。
+     */
+    abstract: typeof paper.abstract === 'string' ? paper.abstract : '',
+    /** ★ `BookReader` 唯一的「能不能读」判据。见上面那段教训。 */
+    renderable: true,
+  };
+}
+
+/**
+ * 论文列表的状态筛（2026-11-13 与电子书对齐）。
+ *
+ * ★ **界面与判据共用这一份**，与 `READING_STATE_FILTERS` 同一个理由：界面写着
+ *   「在读」而判据只认 `status === 'reading'` 时，刚导入、一次没打开过的论文
+ *   （`status === 'new'`）就会从「在读」里漏掉 —— 而它们恰恰最该出现在那儿。
+ *   改之前 `PapersApp` 里是 `derived.status !== filter` 的**精确相等**，漏的正是这一格。
+ * ★ 「未读」不再是单独一档：它和「在读」是同一条进度轴上的两格（电子书 0.9.0 的
+ *   结论，见 `READING_STATE_FILTERS` 的说明）。徽章上也就不再出现「未读」两个字。
+ * ★ `statuses: null` 表示不过滤。别写成 `[]` —— 那会让「全部」筛出 0 篇。
+ */
+export const PAPER_STATE_FILTERS = [
+  { value: '', label: '全部', statuses: null },
+  { value: 'reading', label: '在读', statuses: ['new', 'reading'] },
+  { value: 'done', label: '读完', statuses: ['done'] },
+];
+
+/**
+ * 徽章上的状态词 —— **只有两档**，与筛选项一一对得上。
+ * ★ 论文自己的 `status` 有三个值（`new` / `reading` / `done`），但 `new` 在界面上
+ *   和 `reading` 是同一件事（都还没读完），所以这里没有「未读」这一项。
+ */
+export const PAPER_GROUP_LABELS = { reading: '在读', done: '读完' };
+
+/**
+ * 书状态 → 论文状态的换算表。
+ *
+ * ★ 书那边（`BOOK_STATES`）是 `unread / reading / read / dropped`，论文这边是
+ *   `new / reading / done`。两套词表不换算就直接比，`read` 会漏进 `STATUS_LABELS`
+ *   里取不到值 —— 改之前那条 `?? '未读'` 兜底就是这么来的：一篇从阅读器标记读完、
+ *   但 `paper.status` 还是 `new` 的论文，列表标签会突然写「未读」。
+ * ★ `dropped` 论文端不会写（论文没有「弃读」这一档）。真出现了就归到在读那一组，
+ *   比在界面上少一格安全。
+ */
+const PAPER_STATUS_FROM_BOOK = { reading: 'reading', read: 'done' };
+
+/**
+ * 一篇论文**此刻**的状态、分组与进度 —— 列表徽章、筛选、按钮文案共用这一份。
+ *
+ * ★ 优先级：**书状态（`states`）压过 `paper.status`**。
+ *   这不是新规矩，`PapersApp` 里那段注释一直是这么写的（「优先用 book state」），
+ *   但代码只在 `paper.status === 'new'` 时才让书状态说话 ⇒ 注释与实现相反。
+ *   留着的后果是「重新阅读」这条路：状态写成 `reading` 之后，`paper.status` 里那个
+ *   `done` 仍然压着，列表标签会停在「读完」，用户看到的就是「点了重新阅读没反应」。
+ * ★ `page` 是**恢复点**，不是当前页：阅读器开局读一次（`BookReader` 的初始页），
+ *   翻页过程中不参与渲染。
+ */
+export function paperStateOf(paper, states) {
+  const state = stateOf(states, paper?.id);
+  const declared = paper?.status === 'done' ? 'done' : (paper?.status === 'reading' ? 'reading' : 'new');
+  const fromBook = state.state === 'unread' ? '' : (PAPER_STATUS_FROM_BOOK[state.state] ?? '');
+  const status = fromBook === '' ? declared : fromBook;
+  return {
+    status,
+    /** `new` 归到在读那一组 —— 与 `PAPER_STATE_FILTERS` 的分组是同一套口径。 */
+    group: status === 'done' ? 'done' : 'reading',
+    page: state.page || paper?.lastPage || 0,
+    pages: state.pages || paper?.pages || 0,
+  };
+}
+
+/**
+ * 论文列表一行的真值表：徽章写什么、右侧有没有动作、这一行点不点得动。
+ *
+ * ★ **读完的行整行不可点、并且压暗**（用户 2026-11-13 第二次明确：
+ *   「读完的论文不能点击论文条，灰掉，只有点击重新阅读才恢复正常」）。
+ *   这一条与电子书**完全一致**：`bookRowView` 对 `read` 也是
+ *   `openable: false` + 压暗，只有行尾那颗「重新阅读」进得去。
+ *   改之前这里是「整行只负责选中速读卡」的分工（`openable: true` 恒定），
+ *   理由是「读完也得能看到摘要」。用户否掉了这个取舍：**灰掉要真切**，
+ *   一行的视觉必须与它的能力一致 —— 看着能点、点了只是换个右栏，
+ *   读起来就是「没反应」。
+ * ★ 所以「看摘要」这件事改成**先点「重新阅读」**：它把状态放回「在读」，
+ *   同时打开这篇（进度不清零）。要多花一次点击，换来的是「灰 = 真的点不动」。
+ * ★ 两条例外，都是为了不留**点了没有任何事的死行**：
+ *   ① 回收站里的条目恒可点（那里要选中才能「恢复 / 彻底删除」，
+ *      压暗一条待删除的论文也说不通）；
+ *   ② 读完但**没有本地全文**（`file === null`）的仍可点 —— 它没有正文可开，
+ *      也就没有「重新阅读」可点（给了只是弹一句「先下载全文」），
+ *      这时整行若是死的，连摘要都再也看不到。
+ * ★ 回收站不给「重新阅读」：那边只该有「恢复 / 彻底删除」。
+ *
+ * @returns `{ status, group, badgeText, badgeClass, page, pages, action, openable, dim }`
+ *   - `action`：`{ kind: 'restart', text, title, label }` 或 `null`；
+ *   - `openable: false` + `dim: true` 一起出现，渲染装置只需要照做。
+ */
+export function paperRowView(paper, states, options = {}) {
+  const insideTrash = options.trash === true;
+  const { status, group, page, pages } = paperStateOf(paper, states);
+  /**
+   * ★ 进度**并进徽章**（用户 2026-11-13：「可以参考电子书阅读的标签设计」）：
+   *   改之前是「读完」+ 旁边一个独立的 `1/33 页`，两段字说的是同一件事。
+   *   电子书那边是 `在读 · 读到 24 / 387 页` 一句说完，这里照同一套。
+   * ★ 还没翻过页时写「未开始」而不是 `0/33 页`：后者看着像进度坏了。
+   */
+  const progress = page > 0 ? (pages > 0 ? `${page}/${pages} 页` : `第 ${page} 页`) : '未开始';
+  const badgeText = group === 'done'
+    ? PAPER_GROUP_LABELS.done
+    : `${PAPER_GROUP_LABELS.reading} · ${progress}`;
+  const hasFile = !(paper?.file === null || paper?.file === undefined);
+  const canRestart = group === 'done' && !insideTrash && hasFile;
+  /** ★ 与 `canRestart` **同一个条件**：有「重新阅读」的那一行才锁住；
+   *   两个条件分开写时必然出现「锁住了但没按钮」的死行。 */
+  const locked = canRestart;
+  return {
+    status,
+    group,
+    badgeText,
+    /** 显式映射，不写模板拼接：`check-classes.mjs` 只从字面量收类名。 */
+    badgeClass: group === 'done' ? 'is-done' : 'is-reading',
+    page,
+    pages,
+    action: canRestart ? {
+      kind: 'restart',
+      text: '重新阅读',
+      title: page > 0
+        ? `把这篇放回「在读」并打开 —— 从上次停下的第 ${page} 页接着读`
+        : '把这篇放回「在读」并打开',
+      label: `重新阅读《${paper?.title ?? ''}》`,
+    } : null,
+    openable: !locked,
+    dim: locked,
+  };
+}
+
+/**
  * 日记编辑器的静态资源前缀。
  *
  * ★ 为什么编辑器要**单独发一份文件**、而不是打进 client bundle：它是第三方代码
@@ -302,6 +523,144 @@ export function bookIdFromPath(prefix, seed) {
 }
 
 /**
+ * 跨源重复书的判定键：把书名压成一个「只留字与数字」的串。
+ *
+ * ★ 为什么**不连数字一起去掉**（dalibre 的 `duplicates.go` 会去掉）：那套是给
+ *   「导入新书时提示可能重复」用的，宁可多报也不能漏；这里报出来的是**书架上一枚标记**，
+ *   多报一次用户就得多看一眼。去掉数字会把《三体 1》《三体 2》《三体 3》合并成
+ *   同一个键 —— 三部曲整排被标成「同名 3 本」，那条提示从此没人信。
+ * ★ 只留字母与数字（`\p{L}` / `\p{N}`）：`《九三年》`、`九三年：`、`九三年 (修订版)`、
+ *   `【九三年】` 会折成同一个键，而 `九三年 上` / `九三年 下` 不会。
+ * ★ 折叠后为空（书名就是一串标点）⇒ 返回空串，**不参与**判重：空键会让所有这类书
+ *   互相成为「重复」，是最糟的一种假阳性。
+ */
+export function duplicateKeyOf(book) {
+  const title = String(book?.title ?? '');
+  const key = title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+  return key;
+}
+
+/**
+ * 找出**跨源**同名的书，给书架行挂一枚提示。
+ *
+ * ===========================================================================
+ * 为什么只判跨源，不判同源
+ * ===========================================================================
+ * 同一份书单里出现两条同名记录，用户就在同一个列表里**看得见两行**，它们是彼此相邻的
+ * 事实，不需要界面再提醒一次。真正看不见的是「这本在网盘那份里也有一份」——
+ * 那要切来源下拉才看得到，而它的代价是**实的**：阅读进度、划线、逐章解读全按 id 记，
+ * 两个 id 就是两份进度，用户读到一半换了一行打开，会以为「进度丢了」。
+ *
+ * 所以判据是「**至少两个不同的 `listId`**」；`listId` 缺失时退回 `source`
+ * （`local` / `pan`），再缺就当成各自独立（`id`）—— 那样它永远不会与别人成组，
+ * 因为一个 id 只出现一次。
+ *
+ * ===========================================================================
+ * 两档，不是一档
+ * ===========================================================================
+ *   · `same`  —— 文件名主干也折叠后相同 ⇒ 多半是同一个文件被下了两遍；
+ *   · `title` —— 只有书名相同，文件不同（格式或体积不一样）⇒ 可能是另一个版本。
+ * 把两档合成一句「疑似重复」是在**替用户下结论**：一个是「你重复下载了」，
+ * 一个是「你可能有两个版本，其中一个更好」。这两句话该不一样。
+ *
+ * @param {Array<{ id: string, title?: string, filename?: string, listId?: string, source?: string }>} books
+ * @returns {Map<string, { level: 'same'|'title', count: number, others: Array<{ id: string, title: string, listName: string, ext: string, size: number }> }>}
+ */
+export function findDuplicateBooks(books) {
+  const index = new Map();
+  const groups = new Map();
+  for (const book of books ?? []) {
+    const key = duplicateKeyOf(book);
+    if (key === '') continue;
+    // 归一化到「这本书属于哪一份书单」：有 listId 用 listId，否则用取字节方式，再否则用 id。
+    const owner = String(book.listId ?? '').trim() || String(book.source ?? '').trim() || String(book.id ?? '');
+    const stem = String(book.filename ?? '').toLowerCase().replace(/\.[^.]+$/, '').replace(/[^\p{L}\p{N}]+/gu, '');
+    const row = { book, owner, stem };
+    const bucket = groups.get(key);
+    if (bucket === undefined) groups.set(key, [row]);
+    else bucket.push(row);
+  }
+
+  for (const [key, rows] of groups) {
+    if (rows.length < 2) continue;
+    const owners = new Set(rows.map((row) => row.owner));
+    // 同一份书单里的同名条目**不算**重复（理由见上）。
+    if (owners.size < 2) continue;
+    for (const row of rows) {
+      const others = rows
+        .filter((other) => other !== row)
+        .map((other) => ({
+          id: String(other.book.id ?? ''),
+          title: String(other.book.title ?? ''),
+          listName: String(other.book.listName ?? other.book.listId ?? other.book.source ?? ''),
+          ext: String(other.book.ext ?? ''),
+          size: Number(other.book.size ?? 0) || 0,
+        }))
+        .filter((other) => other.id !== String(row.book.id ?? ''));
+      if (others.length === 0) continue;
+      /**
+       * 「同一个文件被下了两遍」必须**三样都对上**：文件名主干、格式、体积（差 <2%）。
+       * ★ 只看主干是不够的：`九三年.epub` 与 `九三年.mobi` 主干相同、体积相近，
+       *   但它们是**两个版本**，不是重复下载。把它们说成「重复」会让人删掉其中一本，
+       *   而那一本恰好是排版更好的那个。
+       */
+      const sameFile = (peer) => {
+        if (peer === row || row.stem === '') return false;
+        if (peer.stem !== row.stem) return false;
+        if (String(peer.book.ext ?? '').toLowerCase() !== String(row.book.ext ?? '').toLowerCase()) return false;
+        const left = Number(row.book.size ?? 0);
+        const right = Number(peer.book.size ?? 0);
+        if (!(left > 0) || !(right > 0)) return false;
+        return Math.abs(left - right) / Math.max(left, right) <= 0.02;
+      };
+      const level = rows.some(sameFile) ? 'same' : 'title';
+      index.set(String(row.book.id ?? ''), { key, level, count: others.length, others });
+    }
+  }
+  return index;
+}
+
+/**
+ * 把一条判重结果翻成**界面上那一行字**。
+ *
+ * ★ 文案放在这里、不放在 JSX 里：`BookRow` 是 `memo` 的，它只收**字符串**；
+ *   把拼接写在渲染里就等于每次渲染都在造新对象，而拼接规则也没法单测。
+ * ★ `同名` 而不是 `重复`：界面知道的只是「两本书名折叠后一样」。说「重复」是在替用户
+ *   下结论，而下错的结论会让人**删掉一本书**。真话留给 `title`（悬浮说明）去讲清楚。
+ * ★ 悬浮说明里必须写「进度与划线按书分开记」：那是这件事的**代价**，
+ *   也是用户唯一需要据此做决定的信息 —— 只说「同名」不构成任何理由。
+ *
+ * @param {{ level: 'same'|'title', count: number, others: Array<{ title: string, listName: string, ext: string, size: number }> }|undefined} entry
+ * @returns {{ text: string, tip: string } | null} 不属于重复时给 `null`（调用方据此不渲染）
+ */
+export function duplicateHintOf(entry) {
+  if (entry === undefined || entry === null) return null;
+  const count = Number(entry.count ?? 0);
+  if (!(count > 0)) return null;
+  const first = Array.isArray(entry.others) ? entry.others[0] : undefined;
+  if (first === undefined) return null;
+  const where = String(first.listName ?? '').trim();
+  const place = where === '' ? '另一份书单' : `「${where}」`;
+  /**
+   * ★ 书名**自己可能就带书名号**（书单里的标题是文件名清洗来的，`《九三年》` 很常见）。
+   *   直接包一层会得到 `《《九三年》》` —— 那不是排版小瑕疵，是把别人的书名当成两层引用。
+   */
+  const rawName = String(first.title ?? '').trim();
+  const name = rawName === '' ? '（无书名）' : (/^《.*》$/.test(rawName) ? rawName : `《${rawName}》`);
+  const ext = String(first.ext ?? '').trim();
+  const size = Number(first.size ?? 0);
+  const detail = [ext === '' ? '文件' : ext.toUpperCase(), size > 0 ? formatBytes(size) : '']
+    .filter((part) => part !== '')
+    .join(' · ');
+  const tip = entry.level === 'same'
+    ? `与${place}里的${name}同名、同格式、体积几乎一样 —— 很可能是同一个文件被下了两遍。`
+      + '进度与划线按书分开记，所以这两本的阅读进度是各存一份的。'
+    : `与${place}里的${name}同名，但文件不同（${detail}）—— 可能是同一本的另一个版本。`
+      + '进度与划线按书分开记，所以这两本的阅读进度是各存一份的。';
+  return { text: `同名 ${count} 本`, tip };
+}
+
+/**
  * 能**重排阅读**的扩展名（正文由宿主解析成块模型，界面上重新排版）。
  *
  * ★ 为什么这份清单在 `library.js` 而不是 `host/ebook/index.js`：判「一本书读得了吗」
@@ -437,16 +796,34 @@ export function normalizeBook(raw) {
 }
 
 /**
- * 这条记录能不能真的取到字节（网盘上有 fs_id，或本地有路径）。
+ * 这条记录能不能真的取到字节。
+ *
+ * 三种来源，三种凭据：
+ *   · `pan`   —— 网盘上有 `fsId`；
+ *   · `local` —— 书单里有本地路径；
+ *   · `paper` —— 插件数据目录里的 `papers/<id>.pdf`（**没有路径字段也没有 fsId**）。
  *
  * ★ 本地那一侧必须写成 `String(book.localPath ?? '').trim() !== ''`，不能写成
  *   `book.localPath !== ''`：后者在字段**缺失**时 `undefined !== ''` 为真 ——
  *   于是任何一份手写的、没有 `localPath` 的记录都会被判成「读得了」，
  *   然后在取字节那一层变成一句莫名其妙的失败（本文件的 `test` / `library-routes`
  *   各抓到过一次，都是这条）。缺失与空串在这里必须是同一个意思。
+ *
+ * ★★ `paper` 这一支是 0.68.1 补的，漏掉它的症状是「论文点阅读全文 ⇒ 取书失败：
+ *   这本书的书单记录里既没有网盘 fs_id 也没有本地路径」。这条判定住在 `library.js`、
+ *   论文的书条目由 `paperAsBook()` 手工造，**两边谁也不知道对方**：`readBookBytes`
+ *   与 `verifyReadable` 里早就写了 `source === 'paper'` 分支，但请求在路由层就被
+ *   这道前置检查挡下，根本走不到那儿。
+ *
+ *   教训：给「伪装成书条目」的第四条来源加字段时，要把**所有**门禁过一遍
+ *   （`renderable`、`isReadable`、`readBytes` 分派、`verifyReadable`）——
+ *   少一处不会报错，只会让功能在真机上看起来「不支持」。
  */
 export function isReadable(book) {
   if (!book) return false;
+  // 论文的 PDF 在不在，交给 `service.verifyReadable()`（它要 stat 磁盘）；
+  // 这里只回答「这条记录有没有取字节的门路」。
+  if (book.source === 'paper') return true;
   return book.fsId > 0 || String(book.localPath ?? '').trim() !== '';
 }
 

@@ -15,6 +15,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { annotationsMarkdown } from '../annotation-format.js';
+import { MISMATCH } from '../annotation-relocate.js';
 import { ANNOTATION_TONES, NOTE_LIMIT, TONE_ORDER, summariseAnnotations } from './annotations.js';
 import { Icon } from './icons.jsx';
 
@@ -187,9 +188,23 @@ export function AnnotationPanel({
           const editing = editingId === item.id;
           return (
             <article key={item.id} className={`npr-mark-card${editing ? ' is-editing' : ''}`} data-tone={item.tone}>
-              <button type="button" className="npr-mark-quote" title="跳到这一页" onClick={() => onJump(item.page)}>
+              <button type="button" className="npr-mark-quote"
+                title={item.mismatch === undefined ? '跳到这一页' : '原文位置已变动，跳到原来那一页'}
+                onClick={() => onJump(item.page)}>
                 {item.quote}
               </button>
+              {/*
+               * ★ 失配要**在面板上如实说出来**：划线本身此刻不画在正文上
+               *   （见 BookEbook 的 withoutMismatch），如果这里也一声不吭，用户
+               *   只会觉得「笔记丢了」。文案要说清「笔记还在」，并说清原因。
+               */}
+              {item.mismatch !== undefined && (
+                <p className="npr-mark-mismatch">
+                  {item.mismatch === MISMATCH.AMBIGUOUS
+                    ? '正文里有多处相同文字，定不了是哪一处，先不画这条线；笔记还在。'
+                    : '正文里找不到这段原文了，先不画这条线；笔记还在。'}
+                </p>
+              )}
               <div className="npr-mark-foot">
                 <span className="npr-mark-page">第 {item.page} 页</span>
                 <div className="npr-mark-tones" role="group" aria-label="标记颜色">

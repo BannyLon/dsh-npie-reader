@@ -98,6 +98,24 @@ const cell = (theme, host, { bg, fg }) => `
   <div class="npr-companion"><div class="host-chat-card" id="c-${theme}-${host}">伴读卡片</div></div>
 </div>`;
 
+/**
+ * 实心按钮夹具（0.84.8）。
+ *
+ * ★ 为什么要两种情况都量：`--npr-accent-strong` 的值是
+ *   `var(--npc-brand-dark, color-mix(…))` —— 装了 NPIE 主题走前半段（#3D58E0），
+ *   没装主题走兜底（宿主品牌色压暗 26%）。只量其中一条，另一条坏了永远发现不了；
+ *   而这两条恰好对应「老用户」和「刚装上插件」两种人。
+ * ★ 素材取的是 NPIE 主题里的真实值（dsh-npie-theme/src/client.js 的 `--npc-brand*`），
+ *   不是这里现编的颜色 —— 否则量到的是夹具的取色，不是组件的取色。
+ */
+const NPC_BRAND = '--npc-brand:#6C87FF;--npc-brand-dark:#3D58E0;';
+const solidCell = (theme, host, { bg, fg }, variant) => `
+<div class="npr-root" id="sr-${variant}-${theme}-${host}" data-reading-theme="${theme}"
+     style="--npr-bg:${bg};--npr-bg-2:${bg};--npr-fg:${fg};${variant === 'npc' ? NPC_BRAND : ''}">
+  <button type="button" class="npr-btn npr-btn-primary" id="sb-${variant}-${theme}-${host}">识别这一集</button>
+  <button type="button" class="npr-audio-play" id="sp-${variant}-${theme}-${host}" aria-label="播放"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 2l9 5-9 5z" fill="#fff" /></svg></button>
+</div>`;
+
 const fixture = (hostName) => `<!doctype html><meta charset="utf-8">
 <style id="host">${hostCss(HOST[hostName])}
 html, body { margin: 0; background: ${HOST[hostName].base}; color: ${HOST[hostName].labelPrimary};
@@ -106,7 +124,8 @@ html, body { margin: 0; background: ${HOST[hostName].base}; color: ${HOST[hostNa
 <style id="refinements">${REFINEMENTS}</style>
 <style id="hostchat">.host-chat-card { background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary);
   border: 1px solid var(--dsw-alias-border-l1); padding: 8px; }</style>
-${THEMES.map((theme) => cell(theme, hostName, PALETTE[theme])).join('\n')}`;
+${THEMES.map((theme) => cell(theme, hostName, PALETTE[theme])).join('\n')}
+${THEMES.flatMap((theme) => ['npc', 'plain'].map((variant) => solidCell(theme, hostName, PALETTE[theme], variant))).join('\n')}`;
 
 // ---- 3. 在真 Chrome 里量 ---------------------------------------------------
 const PROBE = `
@@ -125,6 +144,19 @@ for (const theme of THEMES) {
   };
   const card = getComputedStyle(document.getElementById('c-' + theme + '-' + HOSTNAME));
   out.companion[theme] = { bg: card.backgroundColor, color: card.color, border: card.borderTopColor };
+}
+out.solid = {};
+for (const variant of ['npc', 'plain']) {
+  for (const theme of THEMES) {
+    const b = document.getElementById('sb-' + variant + '-' + theme + '-' + HOSTNAME);
+    const p = document.getElementById('sp-' + variant + '-' + theme + '-' + HOSTNAME);
+    if (!b || !p) continue;
+    out.solid[variant + '/' + theme] = {
+      btnBg: getComputedStyle(b).backgroundColor,
+      btnFg: getComputedStyle(b).color,
+      playBg: getComputedStyle(p).backgroundColor,
+    };
+  }
 }
 const pre = document.createElement('pre');
 pre.id = 'probe-out';
@@ -290,6 +322,38 @@ for (const theme of THEMES) {
     check(`${theme} --npr-${token}`, delta <= 1,
       `node=${expected.map((v) => Math.round(v))} chrome=${actual} Δ=${delta.toFixed(2)}`);
   }
+}
+
+console.log('\n=== ⑤ 实心按钮：白字压在品牌色上必须 ≥4.5 ===');
+/**
+ * ★ 这一段的由来（0.84.8）：`.npr-audio-play` / `.npr-paper-primary` 原来是
+ *   `background: var(--npr-accent)` + `color:#fff`。浅色主题下 accent 是 #6C87FF，
+ *   白字只有 **3.43:1** —— 够图形元素的 3:1，但远低于文字的 4.5:1，主播放键上的
+ *   三角在浅底上发虚。之前的门禁只量标题/摘要/日期，这颗按钮完全在盲区里。
+ * ★ 两种 variant 都要过：`npc` 是装了主题的真实取值，`plain` 是没装主题时的兜底。
+ */
+for (const [hostName, measured] of [['light', light], ['dark', dark]]) {
+  const keys = Object.keys(measured.solid);
+  check(`${hostName} 实心按钮夹具齐全`, keys.length === THEMES.length * 2,
+    `${keys.length}/${THEMES.length * 2}`);
+  for (const key of keys) {
+    const row = measured.solid[key];
+    const btn = contrast(rgbOf(row.btnFg), rgbOf(row.btnBg));
+    check(`${hostName} ${key} 主按钮`, btn >= 4.5, `${btn.toFixed(2)} bg=${row.btnBg} fg=${row.btnFg}`);
+    const play = contrast([255, 255, 255], rgbOf(row.playBg));
+    check(`${hostName} ${key} 播放圆钮`, play >= 4.5, `${play.toFixed(2)} bg=${row.playBg}`);
+  }
+}
+// ★ 静态锚点（防回归）：上面的数值依赖 CSS 真的取到 accent-strong。哪天有人把它改回
+//   `var(--npr-accent)`，浅色主题又回到 3.43:1 —— 那 16 条会一起红，但先被这条指出
+//   「退回了哪个值」，比逐行读 16 个数字快。正则要求 `)` 后紧跟 `;`，
+//   所以 `var(--npr-accent-strong)` 不会被误判成命中。
+for (const [label, pattern] of [
+  ['播放键', /\.npr-audio-play\s*\{[^}]*background:\s*var\(--npr-accent\)\s*;/],
+  ['论文主按钮', /\.npr-paper-primary\s*\{[^}]*background:\s*var\(--npr-accent\)\s*;/],
+]) {
+  check(`反向对照：${label}没有退回偏浅的 --npr-accent`, !pattern.test(REFINEMENTS),
+    '这正是 0.84.8 修掉的写法（白字 3.43:1）');
 }
 
 console.log('\n---- 结论 ----');

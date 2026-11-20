@@ -376,6 +376,80 @@ describe('拖动区的祖先必须干净（no-drag 矩形会被做差减掉）',
   });
 });
 
+/**
+ * 从宿主 base.css 文本里取出 darwin no-drag 规则的 `:is(...)` 清单正文。
+ *
+ * ★ 为什么不能硬编码整条选择器前缀：宿主 2026-11-11 升级把
+ *     `html[data-platform=darwin] :is(...)`
+ *   改成了
+ *     `html[data-platform=darwin] :where([data-window-drag],[data-window-drag-controls]) :is(...):where(:not([data-window-drag-exclude] *))`
+ *   —— **清单一条没变**，只是中间插了限定层、尾部加了排除层。老写法用
+ *   `indexOf('html[data-platform=darwin] :is(')` 直接返回 -1，报「规则被改写了」，
+ *   其实规则还在、插件防护也没失效，纯粹是锚点过期。
+ *
+ * 改成按「同一条规则里既有 darwin 前缀、又有 :is(、声明体又是 no-drag」定位：
+ * 新旧写法都能取到，规则真被删掉时返回 null（绝不屈从于「找不到就跳过」）。
+ */
+function extractNoDragList(text) {
+  const DARWIN = 'html[data-platform=darwin]';
+  let p = -1;
+  while ((p = text.indexOf(':is(', p + 1)) !== -1) {
+    const head = text.slice(Math.max(0, p - 400), p);
+    const darwinAt = head.lastIndexOf(DARWIN);
+    if (darwinAt === -1) continue;
+    // darwin 前缀与 :is( 必须在同一条选择器内；中间出现 { } 说明已经跨到别的规则。
+    const between = head.slice(darwinAt + DARWIN.length);
+    if (between.includes('{') || between.includes('}')) continue;
+    const close = text.indexOf(')', p);
+    if (close === -1) continue;
+    const brace = text.indexOf('{', close);
+    // 允许新版在 :is(...) 与 { 之间再挂一层 :where(...) 限定，但不许跨到别的规则去。
+    if (brace === -1 || brace - close > 200) continue;
+    if (!text.slice(brace + 1, brace + 60).trimStart().startsWith('-webkit-app-region:no-drag')) continue;
+    return text.slice(p + 4, close);
+  }
+  return null;
+}
+
+describe('darwin no-drag 规则提取：新旧写法都要能取到，规则真没了要如实报 null', () => {
+  const LIST = 'button,a,input,select,textarea,summary,[contenteditable=true],[tabindex],[role=menu]';
+  const OLD = 'x}html[data-platform=darwin] :is(' + LIST + '){-webkit-app-region:no-drag}';
+  // 宿主 2026-11-11 之后的真实形态：前缀插 :where，尾部挂 :where(:not(...))。
+  const NEW = 'x}html[data-platform=darwin] :where([data-window-drag],[data-window-drag-controls]) :is('
+    + LIST + '):where(:not([data-window-drag-exclude] *)){-webkit-app-region:no-drag}';
+  // 规则被删：只剩同前缀的其它规则 + 不含 :is( 的 no-drag 规则。
+  const GONE = 'x}html[data-platform=darwin] .header{color:red}'
+    + 'html[data-platform=darwin] [data-window-drag-recall]{-webkit-app-region:no-drag}';
+  // 长得像但声明体不是 no-drag，不许误取。
+  const FAKE = 'x}html[data-platform=darwin] :is(' + LIST + '){color:red}';
+
+  test('★ 老锚点会在新版规则上失效（证明这次修复不是无病呻吟）', () => {
+    assert.equal(NEW.indexOf('html[data-platform=darwin] :is('), -1);
+  });
+
+  test('新旧写法取出的清单逐字相同，且不是 null', () => {
+    const older = extractNoDragList(OLD);
+    const newer = extractNoDragList(NEW);
+    assert.equal(older, LIST);
+    assert.equal(newer, LIST);
+    assert.equal(newer, older);
+  });
+
+  test('清单里仍有 tabindex / role=menu（本次拖动故障的两条关键项）', () => {
+    for (const fixture of [OLD, NEW]) {
+      const set = new Set(extractNoDragList(fixture).split(',').map(s => s.replace(/^\[|\]$/g, '')));
+      assert.ok(set.has('tabindex'), 'tabindex 丢了');
+      assert.ok(set.has('role=menu'), 'role=menu 丢了');
+    }
+  });
+
+  test('★ 规则真被删 / 声明体不是 no-drag 时返回 null，不静默跳过也不误取', () => {
+    assert.equal(extractNoDragList(GONE), null);
+    assert.equal(extractNoDragList(FAKE), null);
+    assert.equal(extractNoDragList('完全没有这段 CSS'), null);
+  });
+});
+
 describe('no-drag 判据清单与真机 app.asar 交叉核对', () => {
   test('宿主规则里的 no-drag 匹配项与本地清单一致', (t) => {
     if (!existsSync(ASAR)) {
@@ -383,15 +457,13 @@ describe('no-drag 判据清单与真机 app.asar 交叉核对', () => {
       return;
     }
     const text = readFileSync(ASAR, 'latin1');
-    const at = text.indexOf('html[data-platform=darwin] :is(');
-    assert.ok(at !== -1, '宿主 base.css 里找不到 darwin no-drag 规则 —— 规则被改写了，需要重新推导本文件的前提');
-    const open = text.indexOf('(', at);
-    const close = text.indexOf(')', open);
-    assert.ok(open !== -1 && close > open, 'no-drag 选择器正文取不出来');
+    const list = extractNoDragList(text);
+    assert.ok(list !== null,
+      '宿主 base.css 里找不到含 :is( 的 darwin no-drag 规则 —— 规则被改写了，需要重新推导本文件的前提');
     // 属性选择器统一去掉方括号；`[contenteditable=true]` 这类带取值的归一成属性名
     // （★ 别一律砍掉 `=` 后面的部分：那会把 `[role=menu]` 砍成 `role`，清单永远对不上）。
     const hostSet = new Set(
-      text.slice(open + 1, close).split(',')
+      list.split(',')
         .map((part) => part.trim().toLowerCase().replace(/^\[|\]$/g, ''))
         .map((token) => (token.startsWith('contenteditable') ? 'contenteditable' : token))
         .filter(Boolean),

@@ -28,7 +28,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { describe, it } from 'node:test';
+import { before, describe, it } from 'node:test';
 import { createContext, runInContext } from 'node:vm';
 import * as esbuild from 'esbuild';
 import { stripComments } from '../scripts/strip-comments.mjs';
@@ -48,7 +48,7 @@ export { BookReader } from './src/client/BookReader.jsx';
  * 白屏风险跟 PDF 那一侧是同一个来源（hook 顺序 / TDZ），而不是同一条代码路径。
  */
 const ENTRY_EBOOK = `
-export { BookEbook } from './src/client/BookEbook.jsx';
+export { BookEbook, renderBlocks } from './src/client/BookEbook.jsx';
 `;
 
 const BANNER = `window.__ModuleLoader__.load({
@@ -451,5 +451,88 @@ describe('★ 伴读的 OCR 结果：看得到、能复制（0.25.9）', () => {
     // 传空串同样等于没传：面板永远不渲染那块 UI。
     const emptied = reader.replace('ocrText={ocrText}', "ocrText={''}");
     assert.doesNotMatch(emptied, /ocrText=\{ocrText\}/);
+  });
+});
+
+/**
+ * 读法三态：原文 / 对照 / 译文（0.65.0）。
+ *
+ * 用户原话：「针对翻译过的书籍，在阅读的时候是不是应该可以自主选择，全中文阅读；
+ * 全英文阅读，对照阅读。」
+ *
+ * ★ 这里**真渲** `renderBlocks`（纯函数），而不是读源码字符串：这一组要钉的是
+ *   「三种读法各自渲染出什么」，那是渲染结果，不是文本形状。读源码只能证明
+ *   参数传下去了，证明不了「全中文模式下原文真的不在页面上」。
+ * ★ 三态里最容易写错的是**译文模式的两条边界**，各自一条用例：
+ *   ① 没译到的块必须退回原文（否则整页空白）；
+ *   ② `pre` 代码块永远不换译文（否则代码被「译」成一段中文说明）。
+ */
+describe('★ 读法三态：原文 / 对照 / 译文（0.65.0）', () => {
+  let api = null;
+  before(async () => {
+    api = runBundle(await bundle(ENTRY_EBOOK));
+  });
+
+  const blocksOf = (...items) => items;
+  const textOf = (...args) => renderToString(React.createElement('div', null, api.renderBlocks(...args)));
+
+  it('原文：一个中文字都不出现（`zhMap` 为 null 就是这条路的全部）', () => {
+    const html = textOf(blocksOf({ k: 'p', x: 'It was a bright cold day.' }), null, null, null, 'original');
+    assert.match(html, /It was a bright cold day\./);
+    assert.doesNotMatch(html, /晴朗寒冷/, '原文模式下不该有译文');
+    assert.doesNotMatch(html, /npr-ebook-zh/, '原文模式下不该有译文节点');
+  });
+
+  it('对照：原文在前、译文在后，各占一段', () => {
+    const html = textOf(
+      blocksOf({ k: 'p', x: 'It was a bright cold day.' }),
+      null, null, new Map([[0, '四月里一个晴朗寒冷的日子。']]), 'bilingual',
+    );
+    assert.match(html, /It was a bright cold day\./, '对照模式必须保留原文');
+    assert.match(html, /npr-ebook-zh/, '对照模式没画译文');
+    assert.ok(html.indexOf('It was a bright cold day.') < html.indexOf('四月里一个晴朗寒冷的日子。'),
+      '译文的 DOM 位置必须在原文之后 —— 反过来读起来就是「先中文后英文」');
+  });
+
+  it('★ 译文：正文就是中文，原文**不在页面上**（这才是「全中文阅读」）', () => {
+    const html = textOf(
+      blocksOf({ k: 'p', x: 'It was a bright cold day.' }),
+      null, null, new Map([[0, '四月里一个晴朗寒冷的日子。']]), 'translation',
+    );
+    assert.match(html, /四月里一个晴朗寒冷的日子。/, '译文没渲染出来');
+    assert.doesNotMatch(html, /It was a bright cold day\./, '全中文模式下原文还在 —— 那不是全中文');
+    assert.doesNotMatch(html, /npr-ebook-zh/, '全中文模式不该再套一层译文节点（那会变成「对照」）');
+  });
+
+  it('★ 译文模式：没译到的块退回原文，不留空白', () => {
+    // 第 2 块没有译文（模拟「这本 36 节只译了 30 节」）。
+    const html = textOf(
+      blocksOf({ k: 'p', x: 'One.' }, { k: 'p', x: 'Two, still untranslated.' }),
+      null, null, new Map([[0, '一。']]), 'translation',
+    );
+    assert.match(html, /一。/, '译出来的那块该显示译文');
+    assert.match(html, /Two, still untranslated\./, '没译到的那块必须退回原文 —— 留白会让读者以为书坏了');
+  });
+
+  it('★ 译文模式：标题换成译名，且仍然只有一个 h2', () => {
+    const html = textOf(blocksOf({ k: 'h2', x: 'Chapter Two' }), null, null, new Map([[0, '第二章']]), 'translation');
+    assert.match(html, /<h2[^>]*>第二章<\/h2>/, '标题没换成译名');
+    assert.equal((html.match(/<h2/g) ?? []).length, 1, '标题出现两次 —— 目录与读屏都会以为这一章有两个标题');
+  });
+
+  it('★ 代码块（pre）永远不换译文，三种读法都一样', () => {
+    for (const mode of ['original', 'bilingual', 'translation']) {
+      const html = textOf(blocksOf({ k: 'pre', x: 'const a = 1;' }), null, null,
+        mode === 'original' ? null : new Map([[0, '常量 a 等于一']]), mode);
+      assert.match(html, /const a = 1;/, `${mode}：代码块被换掉了`);
+      assert.doesNotMatch(html, /常量 a 等于一/, `${mode}：代码块不该有译文`);
+    }
+  });
+
+  it('★ 反向对照：把模式写死成 bilingual ⇒ 「原文不在页面上」那条必须红', () => {
+    const forced = renderToString(React.createElement('div', null,
+      api.renderBlocks(blocksOf({ k: 'p', x: 'It was a bright cold day.' }), null, null,
+        new Map([[0, '四月里一个晴朗寒冷的日子。']]), 'bilingual')));
+    assert.match(forced, /It was a bright cold day\./, '变异没生效 —— 这条反向对照是空转');
   });
 });

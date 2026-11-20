@@ -25,7 +25,8 @@
  */
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  READING_STATE_FILTERS, addedBooks, applyStatePatch, bookRowView, bookScopes, countSources, filterBooks, formatBytes,
+  READING_STATE_FILTERS, addedBooks, applyStatePatch, bookRowView, bookScopes, countSources, duplicateHintOf,
+  filterBooks, findDuplicateBooks, formatBytes,
   isEbookExtension, libraryStats, normalizeState, parseScope, scopeValue, sourceLabelOf, sourceTotals, stateOf,
 } from '../library.js';
 import { Icon } from './icons.jsx';
@@ -34,10 +35,12 @@ import { BookCover } from './BookCover.jsx';
 import { BookReader } from './BookReader.jsx';
 import { BookEbook } from './BookEbook.jsx';
 import { SettingsPage } from './SettingsPage.jsx';
+import { ReadingAssistantPanel, ReadingAssistantTrigger } from './ReadingAssistant.jsx';
 import { ViewSwitch } from './ViewSwitch.jsx';
 import { fetchBooks, fetchStates, reloadLibrary, saveBookState } from './library-api.js';
 import { createPageProgress } from './page-progress.js';
 import { SHELF_BATCH, shelfNextCount, shelfRenderCount } from './shelf-window.js';
+import { SIDEBAR_WIDTH, clampSidebarWidth, readSidebarWidth, saveSidebarWidth } from './sidebar-width.js';
 
 /** 侧栏的两个分页，顺序即界面顺序：先看自己挑的书，再回书架挑。 */
 const TABS = [['reading', '阅读'], ['shelf', '书架']];
@@ -177,6 +180,17 @@ export const BookRow = memo(function BookRow({
    */
   canReflect = false, onReflect = null,
   /**
+   * 跨源同名的提示（0.71.6）：`同名 N 本` + 一句悬浮说明。
+   *
+   * ★ 两个 prop 都是**字符串**、默认空串，理由与 `sourceLabel` 完全一样：
+   *   传对象（`{ text, tip }`）会让 `memo` 的浅比较永远不等，2634 行会在每次输入时
+   *   全部重渲染；而默认值写成 `undefined` 会让显隐判据（`!== ''`）恒真，
+   *   每行都多出一个**只有底色没有字**的空胶囊。
+   * ★ 文案与悬浮说明由 `duplicateHintOf` 给（`src/library.js`），这里只负责画。
+   *   写在 JSX 里就没法单测拼接规则，而「同名」与「重复」这一字之差正是要不要删书的依据。
+   */
+  duplicateText = '', duplicateTip = '',
+  /**
    * 来源徽章的三件属性（0.20.4）。
    * ★ 默认值**必须**是空串而不是 `undefined`：显隐判据是 `sourceLabel !== ''`，
    *   漏传时 `undefined !== ''` 为真 ⇒ 每一行都会多出一个**空胶囊**（有底色、没有字），
@@ -302,6 +316,22 @@ export const BookRow = memo(function BookRow({
               那是一句完整的话。 */}
           <span className="npr-bookrow-file">{book.ext.toUpperCase() || '文件'} · {formatBytes(book.size)}</span>
           {book.year > 0 && <span>{book.year}</span>}
+          {/*
+            跨源同名提示（0.71.6）。
+            ★ 放在文件属性之后、「暂不支持」「扫描版」之前：那两枚是**这本书自己的**
+              缺陷，而这一枚说的是「你和另一份书单里那本的关系」—— 先读完身份再读关系。
+            ★ 用 `cursor: help` + 虚线，与「扫描版」同一档视觉：它是一句**待确认的观察**，
+              不是可点的动作。做成按钮会让人以为点一下就能合并，而合并要丢一份进度，
+              那必须是用户明确选择的事，不做成顺手一点。
+          */}
+          {duplicateText !== '' && (
+            <span className="npr-bookrow-dup" title={duplicateTip}>{duplicateText}</span>
+          )}
+          {/* 扫描时看着不像正文（配置 / 日志 / 依赖清单）。★ 只提示，不隐藏、不删文件：
+              判定来自抽样，可能看走眼，决定权留在用户手里。 */}
+          {book.suspect && (
+            <span className="npr-bookrow-dup" title={book.suspectReason || '扫描时看着不像正文'}>可能不是书</span>
+          )}
           {!book.renderable && <span className="npr-bookrow-warn">暂不支持阅读</span>}
           {/* ★「扫描版」是**实测结论**，不是元数据：抽取目录时发现整本没有文字层。
               必须与「暂不支持阅读」分开说 —— 那本读不了，这本**读得了**，只是没有
@@ -370,6 +400,13 @@ export function LibraryApp({
   const [source, setSource] = useState(null);
   /** 电子书伴读里点「+」要打开设置页的快捷提示词；模式与 ReaderPage 的 settingsEntry 相同。 */
   const [settingsEntry, setSettingsEntry] = useState({ open: false, tab: 'prompts', addPrompt: false });
+  /**
+   * 「澄境阅读助手」窗口开没开（0.60.0）。
+   *
+   * ★ 状态放在这里而不是助手组件内部：那颗入口按钮在左栏顶部、窗口挂在最外层，
+   *   两处都不在同一个子树里，只有父级能同时看见它们。
+   */
+  const [assistantOpen, setAssistantOpen] = useState(false);
   const [states, setStates] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -425,10 +462,8 @@ export function LibraryApp({
    *   分批挂载零高度假设，代价只是滚到底时 DOM 会涨到全量 —— 而那时用户确实在看它们。
    */
   const [shelfShown, setShelfShown] = useState(SHELF_BATCH);
-  const [listWidth, setListWidth] = useState(() => {
-    const saved = Number(globalThis.localStorage?.getItem('npr.libListWidth'));
-    return Number.isFinite(saved) && saved >= 220 && saved <= 520 ? saved : 320;
-  });
+  // 0.71.0：四个视图共用一份宽度与一个 key（见 sidebar-width.js）。
+  const [listWidth, setListWidth] = useState(readSidebarWidth);
   const searchRef = useRef(null);
   /**
    * 最新状态的镜像。
@@ -634,6 +669,19 @@ export function LibraryApp({
   /** 只有在「阅读」页里，状态筛才有意义。 */
   const onReadingTab = tab === 'reading';
 
+  /*
+   * 助手的窗口只在两种情况下成立：停在「在读」页签、且没有打开某一本书。
+   * ★ 用 effect 收口，而不是在 `setTab` / `setSelectedId` 里顺手关：那两个动作各有
+   *   好几个调用点（点页签、点书、外部跳转、筛选重置），漏一个就会出现「切到书架了，
+   *   助手的窗口还盖在书单上」—— 而这种漏很难在测试里被抓到。
+   */
+  useEffect(() => {
+    if (!onReadingTab) setAssistantOpen(false);
+  }, [onReadingTab]);
+  useEffect(() => {
+    if (selectedId !== '') setAssistantOpen(false);
+  }, [selectedId]);
+
   /**
    * 当前这一页的搜索词。两页各记各的（见上面 `shelfQuery` / `readingQuery` 的说明）：
    * 换页不会把上一页的搜索词带过来，也不会把它弄丢。
@@ -683,6 +731,17 @@ export function LibraryApp({
    *   状态表里那 5 条记录**一个字都没动**（本插件不替用户删数据），只是不再显示。
    */
   const readingList = useMemo(() => addedBooks(books, states), [books, states]);
+
+  /**
+   * 跨源同名的索引（0.71.6）：`id → { level, count, others }`。
+   *
+   * ★ 依赖只有 `books`：判重只看书名 / 文件名 / 扩展名 / 体积 / 来源，
+   *   与阅读状态、筛选、排序**都无关**。挂到 `visible` 上会让「敲一个字搜索」
+   *   就重算一遍 2634 本的判重 —— 那是白花钱，而且 `visible` 本身已经是每键一份。
+   * ★ 算在**整个书架**上而不是当前筛选结果上：同名的那一本很可能正被筛选挡在外面，
+   *   拿筛选后的集合去判重会得出「没有重复」这个假结论，而它恰恰是用户想知道的。
+   */
+  const duplicates = useMemo(() => findDuplicateBooks(books), [books]);
 
   const visible = useMemo(() => {
     const group = READING_STATE_FILTERS.find((item) => item.value === shown.stateFilter);
@@ -813,11 +872,11 @@ export function LibraryApp({
     const startX = event.clientX;
     let width = listWidth;
     const move = (moveEvent) => {
-      width = Math.round(Math.min(Math.max(listWidth + moveEvent.clientX - startX, 220), 520));
+      width = clampSidebarWidth(listWidth + moveEvent.clientX - startX);
       setListWidth(width);
     };
     const up = () => {
-      globalThis.localStorage?.setItem('npr.libListWidth', String(width));
+      saveSidebarWidth(width);
       globalThis.removeEventListener('pointermove', move);
       globalThis.removeEventListener('pointerup', up);
     };
@@ -867,6 +926,16 @@ export function LibraryApp({
               不能再只判 `next === 'feeds'` —— 否则从书架点「日记」会被当成「什么都不做」，
               按钮点了没反应，而代码看起来完全正常。 */}
           <ViewSwitch mode="library" onChange={(next) => { if (next !== 'library') onExit?.(next); }} showLibrary />
+          {/*
+            ★ 澄境阅读助手（0.60.0）：入口在**左栏顶部**，不在阅读页里。
+              它回答的是「哪几本在读的书还没译好」这种按书架问的问题，属于列表层；
+              「我现在就要读这一段」是阅读页里那颗「对照」。两者不同层，不合并。
+            ★ 只在「在读」页签可用（`disabled={!onReadingTab}`）：其它页签里
+              书架 / 读完 / 弃读都不是「要备好的书」，在那儿给一个能点的入口，
+              点开只会是一张空列表。
+          */}
+          <ReadingAssistantTrigger disabled={!onReadingTab} open={assistantOpen}
+            onToggle={() => setAssistantOpen((value) => !value)} />
           {/* ★ 搜索框 0.9.3 搬去了下面（见 `.npr-lib-controls`）：它和「全部分类 +
               按书名」是**同一个动作的三个参数**，挂在工具栏里反而紧挨着「重新读取
               书单」—— 那是**重新取数**，跟筛当前列表不是一回事。
@@ -1038,6 +1107,9 @@ export function LibraryApp({
             const from = sourceCount > 1 ? sourceLabelOf(book) : null;
             const tip = from === null ? ''
               : [from.text, book.panPath || book.localPath].filter((item) => item !== '').join(' · ');
+            /* ★ 只在有重复时才拼字符串：`duplicateHintOf` 每次都会造一个新对象，
+               每行每渲染都调一次在 2634 行的页面上是纯浪费。 */
+            const dup = duplicateHintOf(duplicates.get(book.id));
             return (
               <BookRow key={book.id} book={book} added={state.added} stateName={state.state}
                 page={state.page} pages={state.pages} scanned={state.scanned} onReadingPage={onReadingTab}
@@ -1046,6 +1118,7 @@ export function LibraryApp({
                 showCover={onReadingTab}
                 selected={book.id === selectedId}
                 sourceLabel={from?.text ?? ''} sourceKind={from?.kind ?? ''} sourceTip={tip}
+                duplicateText={dup?.text ?? ''} duplicateTip={dup?.tip ?? ''}
                 canReflect={canReflect} onReflect={reflectBook}
                 onOpen={openBook} onToggle={toggleAdded} onDrop={dropBook} onRestart={restartBook} />
             );
@@ -1060,7 +1133,7 @@ export function LibraryApp({
         </div>
       </aside>
       <div className="npr-resize" role="separator" aria-orientation="vertical" onPointerDown={startDrag}
-        onDoubleClick={() => { setListWidth(320); globalThis.localStorage?.setItem('npr.libListWidth', '320'); }} />
+        onDoubleClick={() => { setListWidth(saveSidebarWidth(SIDEBAR_WIDTH)); }} />
       {/* `npr-reader-book` 是**布局必需**，不是装饰：`.npr-reader` 默认是普通块盒，
           而阅读器那半边的高度链要靠 `.npr-book{flex:1}` → `.npr-book-main{flex:1}` →
           舞台，块盒里这些 `flex` 全都是死代码，于是书页区的高度会变成**画布自己撑
@@ -1159,6 +1232,13 @@ export function LibraryApp({
           </div>
         )}
       </section>
+      {/*
+        ★ 澄境阅读助手的窗口挂在**这一层**（0.60.0）：它列的是「在读的几本书」，
+          生命周期比某本书长；用户会换书、会回书架，窗口里的进度都该还在。
+          开关由左栏顶部那颗按钮控制，这里只负责渲染。
+      */}
+      <ReadingAssistantPanel open={assistantOpen} onClose={() => setAssistantOpen(false)}
+        books={books} states={states} />
       {settingsEntry.open && <SettingsPage api={api} initialTab={settingsEntry.tab}
         startAddingPrompt={settingsEntry.addPrompt} notify={notify}
         onClose={() => setSettingsEntry({ open: false, tab: 'prompts', addPrompt: false })} />}

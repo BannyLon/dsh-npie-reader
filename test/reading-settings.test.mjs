@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { BOOK_TINTS, FONTS, fontStack, nextBookTint, normalizeBookTint, READING_DEFAULTS, TEXT_WIDTHS, THEMES, validateSettings } from '../src/reading-settings.js';
+import { BOOK_TINTS, EBOOK_READ_MODES, EBOOK_READ_MODE_ORDER, FONTS, fontStack, nextBookTint, normalizeBookTint, normalizeEbookReadMode, READING_DEFAULTS, TEXT_WIDTHS, THEMES, validateSettings } from '../src/reading-settings.js';
 import { BOOK_SOURCES_MAX, LIBRARY_PATH_DEFAULT, sourceListId } from '../src/library.js';
 
 describe('READING_DEFAULTS', () => {
@@ -255,5 +255,79 @@ describe('fontStack', () => {
     assert.equal(fontStack({ readingFont: 'custom' }), FONTS.serif.family);
     assert.equal(fontStack({ readingFont: 'nope' }), FONTS.serif.family);
     assert.equal(fontStack({}), FONTS.serif.family);
+  });
+});
+
+/**
+ * 读法（0.65.0）：`ebookReadMode` 三个取值 + 校验。
+ *
+ * ★ 这一组要钉的是「宿主不认识的值必须**报错**，而不是静默落回原文」：
+ *   静默回落的症状是「我明明设了对照，怎么还是英文」，用户没有任何线索。
+ * ★ 反向对照：把校验删掉（进 `else continue`）时，第一条必须红。
+ */
+describe('ebookReadMode', () => {
+  it('三个读法都合法，且默认是原文（不替用户打开花模型钱的形态）', () => {
+    assert.equal(READING_DEFAULTS.ebookReadMode, 'original');
+    for (const mode of EBOOK_READ_MODE_ORDER) {
+      assert.deepEqual(validateSettings({ ebookReadMode: mode }), { ebookReadMode: mode });
+    }
+    assert.equal(EBOOK_READ_MODE_ORDER.length, 3, '三种读法，不是两态开关');
+  });
+
+  it('★ 认不出的值必须报错，不能悄悄落回原文', () => {
+    for (const bad of ['zh', 'en', '', null, 'bilingual ']) {
+      assert.throws(() => validateSettings({ ebookReadMode: bad }), /无效阅读语言/, String(bad));
+    }
+  });
+
+  it('运行时归一：老设置文件里没有它 / 手改坏了，一律按原文', () => {
+    assert.equal(normalizeEbookReadMode(undefined), 'original');
+    assert.equal(normalizeEbookReadMode('nonsense'), 'original');
+    assert.equal(normalizeEbookReadMode('translation'), 'translation');
+  });
+
+  it('★ 每个读法都有两个字标签与一句说明（按钮宽度与菜单文案都靠它）', () => {
+    for (const mode of EBOOK_READ_MODE_ORDER) {
+      const item = EBOOK_READ_MODES[mode];
+      assert.equal([...item.label].length, 2, `${mode} 的标签必须两个汉字：多一个字整排胶囊会挪`);
+      assert.ok(item.hint.length >= 8, `${mode} 缺少说明`);
+    }
+  });
+});
+
+/**
+ * 读法（0.65.0）：`ebookReadMode` 三个取值 + 校验。
+ *
+ * ★ 这一组要钉的是「宿主不认识的值必须**报错**，而不是静默落回原文」：
+ *   静默回落的症状是「我明明设了对照，怎么还是英文」，用户没有任何线索。
+ * ★ 反向对照：把校验删掉（进 `else continue`）时，第一条必须红。
+ */
+describe('ebookReadMode', () => {
+  it('三个读法都合法，且默认是原文（不替用户打开花模型钱的形态）', () => {
+    assert.equal(READING_DEFAULTS.ebookReadMode, 'original');
+    for (const mode of EBOOK_READ_MODE_ORDER) {
+      assert.deepEqual(validateSettings({ ebookReadMode: mode }), { ebookReadMode: mode });
+    }
+    assert.equal(EBOOK_READ_MODE_ORDER.length, 3, '三种读法，不是两态开关');
+  });
+
+  it('★ 认不出的值必须报错，不能悄悄落回原文', () => {
+    for (const bad of ['zh', 'en', '', null, 'bilingual ']) {
+      assert.throws(() => validateSettings({ ebookReadMode: bad }), /无效阅读语言/, String(bad));
+    }
+  });
+
+  it('运行时归一：老设置文件里没有它 / 手改坏了，一律按原文', () => {
+    assert.equal(normalizeEbookReadMode(undefined), 'original');
+    assert.equal(normalizeEbookReadMode('nonsense'), 'original');
+    assert.equal(normalizeEbookReadMode('translation'), 'translation');
+  });
+
+  it('★ 每个读法都有两个字标签与一句说明（按钮宽度与菜单文案都靠它）', () => {
+    for (const mode of EBOOK_READ_MODE_ORDER) {
+      const item = EBOOK_READ_MODES[mode];
+      assert.equal([...item.label].length, 2, `${mode} 的标签必须两个汉字：多一个字整排胶囊会挪`);
+      assert.ok(item.hint.length >= 8, `${mode} 缺少说明`);
+    }
   });
 });

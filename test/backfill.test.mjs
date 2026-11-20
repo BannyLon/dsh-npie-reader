@@ -29,7 +29,7 @@ const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
  *   工作区内的目录不受这条限制，删得掉。
  */
 await mkdir(join(pluginRoot, 'test', '.build'), { recursive: true });
-const sandbox = await mkdtemp(join(pluginRoot, 'test', '.build', 'sandbox-backfill-'));
+const sandbox = await mkdtemp(join(pluginRoot, 'test', '.build', 'sandbox-backfill-' + process.pid + '-'));
 process.env.DSH_HOME = sandbox;
 process.env.HOME = sandbox;
 

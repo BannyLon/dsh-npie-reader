@@ -13,13 +13,21 @@ import { coverCaption, coverGlyph, coverHue, coverKind, epubCoverUrl, pdfCoverDa
 
 export function BookCover({ book }) {
   const kind = coverKind(book);
-  const [src, setSrc] = useState(() => (kind === 'epub' ? epubCoverUrl(book.id) : ''));
+  /**
+   * 宿主**解得出**封面的那两档（EPUB / MOBI 系）走同一个 URL。
+   *
+   * ★ 写成 `hosted` 而不是在四处各写一遍 `kind === 'epub'`：这个判断今天出现在
+   *   初始态、effect 回写、以及 effect 的守卫里，漏掉任何一处都会出现
+   *   「MOBI 的封面要切一本书再切回来才显示」这种只在第二次渲染才对的行为。
+   */
+  const hosted = kind === 'epub' || kind === 'ebook';
+  const [src, setSrc] = useState(() => (hosted ? epubCoverUrl(book.id) : ''));
   const [failed, setFailed] = useState(false);
   const holder = useRef(null);
 
   useEffect(() => {
     setFailed(false);
-    setSrc(kind === 'epub' ? epubCoverUrl(book.id) : '');
+    setSrc(hosted ? epubCoverUrl(book.id) : '');
     if (kind !== 'pdf') return undefined;
 
     let alive = true;

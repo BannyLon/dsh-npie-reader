@@ -85,6 +85,40 @@ export async function appendDiaryEntry({ date, time, kind, source, body, meta, v
 }
 
 /**
+ * 传一张图（0.73.0），拿回可直接写进 markdown 的地址。
+ *
+ * ★ 请求体**直接放那个 `File`**，不先转 base64：转一次体积多 33%，还要在内存里
+ *   多留一份 —— 而 8 MB 是允许的上限，多一份就是多 11 MB 的字符串。
+ * ★ `content-type` 照文件自己的报，但**宿主不信它**（按 magic bytes 再判）。
+ *   这里照报只是为了让宿主在拒绝时能说清「你声明的类型我们不收」。
+ * ★ 超时给得比默认长：图是要落盘的，慢的是磁盘而不是网络。
+ */
+export async function uploadDiaryAsset(file) {
+  if (!file) throw new Error('没有可上传的图片');
+  return await jsonRequest('/assets', {
+    method: 'POST',
+    headers: { 'content-type': file.type || 'application/octet-stream' },
+    body: file,
+  }, { timeoutMs: 60_000 });
+}
+
+/**
+ * 清掉没被任何条目引用的图（0.73.1）。
+ *
+ * ★ **默认只预演**（`dryRun: true`）：返回「会删几张、一共多少 MB」，不真删。
+ *   调用方拿到数字给人看过、得到确认之后，再传 `{ dryRun: false }` 真删。
+ *   把默认值设成真删，第一个手滑的调用就把用户的图清干净了 —— 而图不在
+ *   `data.json` 里，没有备份能救回来。
+ */
+export async function pruneDiaryAssets({ dryRun = true } = {}) {
+  return await jsonRequest('/assets/prune', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ dryRun }),
+  });
+}
+
+/**
  * 删掉某一天的某一条。
  *
  * ★ `scope` 必须跟着走：公开与私密是**两个文件**，各有自己的序号。只传一个下标
@@ -93,6 +127,21 @@ export async function appendDiaryEntry({ date, time, kind, source, body, meta, v
 export async function removeDiaryEntry(date, index, scope = 'public') {
   const query = scope === 'private' ? '?scope=private' : '';
   return await jsonRequest(`/day/${encodeURIComponent(date)}/entry/${index}${query}`, { method: 'DELETE' });
+}
+
+/**
+ * 删掉某一天的**全部记录**（0.75.0）。
+ *
+ * ★ 它与 `removeDiaryEntry` 的差别不只是「多删几条」：宿主那边是**一次移动**
+ *   （`rename` 到 `diary/_trash/`），不是 N 次「读整份 → 删一条 → 整份写回」。
+ *   所以它只有两种结果 —— 整天没了，或者一条都没动，不会出现删了一半的一天。
+ * ★ `scope` 仍然必须显式：公开与私密是两个文件，猜错一次就是删错一整天。
+ * ★ 回执里有 `trashed`（`_trash/2026-11-11@…md`）：那是「去哪儿找回来」，
+ *   界面必须把它说出来，否则用户以为这是不可逆的。
+ */
+export async function removeDiaryDay(date, scope = 'public') {
+  const query = scope === 'private' ? '?scope=private' : '';
+  return await jsonRequest(`/day/${encodeURIComponent(date)}${query}`, { method: 'DELETE' });
 }
 
 /**
@@ -203,10 +252,17 @@ export async function lockDiaryGate() {
   return await jsonRequest('/gate/lock', { method: 'POST' });
 }
 
-/** 跨天搜。 */
-export async function searchDiary(query, limit) {
+/**
+ * 跨天搜。
+ *
+ * ★ `module`（0.86.0）：跟着选项卡走 —— 在读后感里搜就只搜读后感。
+ *   不传 = 搜全部（老行为）。宿主的 `moduleScope()` 负责把它翻成 `kind` 过滤，
+ *   客户端不自己拼查询条件（两处各拼一次，迟早出现「界面筛了、宿主没筛」）。
+ */
+export async function searchDiary(query, limit, module = '') {
   const params = new URLSearchParams({ q: query });
   if (limit !== undefined) params.set('limit', String(limit));
+  if (module !== '') params.set('module', module);
   return await jsonRequest(`/search?${params.toString()}`);
 }
 
@@ -215,35 +271,54 @@ export async function fetchDiaryStats() {
   return await jsonRequest('/stats');
 }
 
-/** 在系统文件管理器里打开日记目录。 */
-export async function revealDiaryFolder() {
-  return await jsonRequest('/reveal', { method: 'POST' });
+/** 在系统文件管理器里打开日记目录（`module` 决定打开 `daily/` 还是 `private/`）。 */
+export async function revealDiaryFolder(module = '') {
+  return await jsonRequest('/reveal', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ module }),
+  });
 }
 
 /**
- * 全部日记（一次性出口）。
+ * 导出（一次性出口）。
  *
  * ★ **默认不含私密日记**：导出写的是浏览器下载目录里的明文，那正好是加密层要防的
  *   第一件事。要含必须显式传 `includePrivate: true`，且界面负责把后果说清楚
  *   （明文会落到下载目录、不进废纸篓就一直在）。
+ * ★ `module`（0.86.0）：用户 2026-11-19「明明我切到读后感了，点击下载下载的还是
+ *   日记」。作用域由宿主按 `kind` 拆条目，客户端只把当前模块原样带上 ——
+ *   客户端自己过滤的话，`content` 里那行 `<!-- 2026-11-11.md -->` 与条目就对不上了。
+ * ★ `module: 'private'` 时宿主会自动按「含私密」处理（`/export` 那一行），
+ *   这里仍然显式传 `includePrivate`：两个参数各说一半，迟早出现「模块=私密、
+ *   private 忘了传 ⇒ 导出一份空文件，文件名还写着私密」。
  */
-export async function fetchDiaryExport({ includePrivate = false } = {}) {
-  const query = includePrivate ? '?private=1' : '';
-  return await jsonRequest(`/export${query}`, {}, { timeoutMs: EXPORT_TIMEOUT_MS });
+export async function fetchDiaryExport({ includePrivate = false, module = '' } = {}) {
+  const params = new URLSearchParams();
+  if (includePrivate) params.set('private', '1');
+  if (module !== '') params.set('module', module);
+  const query = params.toString();
+  return await jsonRequest(`/export${query ? `?${query}` : ''}`, {}, { timeoutMs: EXPORT_TIMEOUT_MS });
 }
 
 /**
- * 把「全部日记」拼成**一份** Markdown 交给浏览器下载。
+ * 把导出的那些天拼成**一份** Markdown 交给浏览器下载。
  *
  * ★ 为什么是单文件而不是逐天各下一个：浏览器会**拦掉**连续多个自动下载
  *   （Chrome 对「一个动作触发多个下载」默认阻断，用户看到的只是「什么都没发生」）。
- * ★ 为什么原样保留每天的全文（含它自己的 frontmatter）：这样导出的东西是**可逆**的
- *   —— 每块前面有一行 `<!-- 2026-10-26.md -->` 说明它原来叫什么文件，用户按它
- *   切回去就能还原成一天一个 .md。顺手把 frontmatter 规范化掉就做不到这一点了。
+ * ★ 为什么（全部导出时）原样保留每天的全文（含它自己的 frontmatter）：这样导出的
+ *   东西是**可逆**的 —— 每块前面有一行 `<!-- 2026-10-26.md -->` 说明它原来叫什么
+ *   文件，用户按它切回去就能还原成一天一个 .md。顺手把 frontmatter 规范化掉就
+ *   做不到这一点了。
+ * ★ `label`（0.86.0）：文件名必须说出**这次导的是什么**。写死「日记-导出」时，
+ *   在读后感里点下载会得到一个叫「日记」的文件 —— 用户的第一反应就是「下错了」。
+ *   空串退回「日记」（老调用点）。
  */
-export function downloadDiaryBundle(files, today) {
+export function downloadDiaryBundle(files, today, label = '') {
+  const name = typeof label === 'string' ? label.trim() : '';
+  const scope = name === '' ? '日记' : name;
   const parts = [
-    '<!-- dsh-npie-reader 日记导出 -->',
+    `<!-- dsh-npie-reader ${scope}导出 -->`,
     `<!-- 导出时间：${today}；共 ${files.length} 天 -->`,
     '<!-- 每块前一行注释是它原来的文件名。要还原成一天一个 .md，按这些注释切开即可。 -->',
     '',
@@ -255,7 +330,7 @@ export function downloadDiaryBundle(files, today) {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = `日记-导出-${today}.md`;
+  anchor.download = `${scope}-导出-${today}.md`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();

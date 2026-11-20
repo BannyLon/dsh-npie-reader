@@ -35,16 +35,22 @@ const { version: PLUGIN_VERSION } = JSON.parse(readFileSync(join(pluginRoot, 'pa
 
 // ---- 1. 反向对照用：在 esbuild 读源码时把真源码换掉 --------------------------
 
-/** ★ 替换没命中就抛错，不许静默继续 —— 否则「没变红」会被误读成「装置抓不到」。 */
-function mutateReaderPage(from, to) {
+/**
+ * ★ 替换没命中就抛错，不许静默继续 —— 否则「没变红」会被误读成「装置抓不到」。
+ *
+ * 0.71.0：判据本体搬到 `src/client/menu-dismiss.js`，本文件仍从 ReaderPage
+ * （它转发导出该函数）打 bundle，但**变异必须打在真正实现它的那个模块上** ——
+ * 打在 ReaderPage.jsx 上会静默不命中，三条反向对照就全成了假绿。
+ */
+function mutateMenuDismiss(from, to) {
   return {
-    name: 'mutate-reader-page',
+    name: 'mutate-menu-dismiss',
     setup(build) {
-      build.onLoad({ filter: /ReaderPage\.jsx$/ }, (args) => {
+      build.onLoad({ filter: /menu-dismiss\.js$/ }, (args) => {
         const before = readFileSync(args.path, 'utf8');
         const contents = before.replace(from, to);
         if (contents === before) throw new Error(`变异没有生效（锚点没命中）：${from}`);
-        return { contents, loader: 'jsx' };
+        return { contents, loader: 'js' };
       });
     },
   };
@@ -284,7 +290,11 @@ describe('接线：ReaderPage 真的把它挂上了（★ 存在性断言，不�
   });
 
   it('两个 ref 各自挂在**正确的元素**上：`menuRef` → 菜单、`menuButtonRef` → ⋯ 按钮', () => {
-    assert.match(source, /className="npr-menu" role="menu" ref=\{menuRef\}/,
+    // ★ 只锚「ref 挂在哪个元素上」，不锚 role 的取值：这条判据守的是接线
+    //   （`menuRef` 指向菜单容器），role 是 `menu` 还是 `group` 与它无关。
+    //   0.84.7 把这个菜单降级成 `group`（子项没有 menuitem / 方向键），
+    //   如果这里继续写死 `role="menu"`，一次语义修正就会红成「接线坏了」。
+    assert.match(source, /className="npr-menu"[^>]*ref=\{menuRef\}/,
       'menuRef 没挂在菜单上 —— 「点菜单项不关」那条判据会失效（点任何一条都没反应）');
     assert.match(source, /aria-label="更多操作"[\s\S]{0,200}?ref=\{menuButtonRef\}/,
       'menuButtonRef 没挂在 ⋯ 按钮上 —— 菜单会永远关不掉');
@@ -298,7 +308,7 @@ describe('接线：ReaderPage 真的把它挂上了（★ 存在性断言，不�
 describe('★ 反向对照：这套装置真的能抓到两个「静默失效」', () => {
   it('删掉**触发器**那条排除之后，「点 ⋯ 不关」必须变红', async () => {
     const attach = await loadAttach({
-      plugins: [mutateReaderPage('if (trigger?.contains?.(target)) return;', 'if (false) return;')],
+      plugins: [mutateMenuDismiss('if (trigger?.contains?.(target)) return;', 'if (false) return;')],
     });
     const t = buildTree();
     const doc = fakeDocument();
@@ -311,7 +321,7 @@ describe('★ 反向对照：这套装置真的能抓到两个「静默失效」
 
   it('删掉**菜单**那条排除之后，「点菜单项不关」必须变红', async () => {
     const attach = await loadAttach({
-      plugins: [mutateReaderPage('if (menu?.contains?.(target)) return;', 'if (false) return;')],
+      plugins: [mutateMenuDismiss('if (menu?.contains?.(target)) return;', 'if (false) return;')],
     });
     const t = buildTree();
     const doc = fakeDocument();
@@ -324,7 +334,7 @@ describe('★ 反向对照：这套装置真的能抓到两个「静默失效」
 
   it('卸载时漏掉捕获标志之后，「摘干净」必须变红', async () => {
     const attach = await loadAttach({
-      plugins: [mutateReaderPage(
+      plugins: [mutateMenuDismiss(
         "doc.removeEventListener('pointerdown', onPointerDown, true);",
         "doc.removeEventListener('pointerdown', onPointerDown);",
       )],
@@ -334,5 +344,34 @@ describe('★ 反向对照：这套装置真的能抓到两个「静默失效」
     const detach = attach(doc, { menu: t.menu, trigger: t.trigger, close: () => {} });
     detach();
     assert.equal(doc.listeners.length, 1, '漏掉捕获标志却仍被判「摘干净」—— 那这条断言抓不到监听器泄漏');
+  });
+
+  /**
+   * 0.69.1 论文页「+」下拉用的是**另一种合法接法**：触发器与菜单包在同一个
+   * `.npr-paper-add` 容器里，`menu` / `trigger` 传的是**同一个节点**。
+   * 不能只在源码里读一遍「看起来对」—— 静默失效的两种形态和上面一模一样，
+   * 必须用真 DOM 桩跑一遍 pointerdown。
+   */
+  it('论文「+」下拉：menu/trigger 同一个容器 → 点按钮与菜单项都不关、点外面关', async () => {
+    const attach = await loadAttach();
+    const root = element();
+    const container = element(root);   // .npr-paper-add：按钮与菜单都在这里面
+    const plus = element(container);
+    const menu = element(container);
+    const item = element(menu);
+    const outside = element(root);
+    const doc = fakeDocument();
+    let closes = 0;
+    const detach = attach(doc, { menu: container, trigger: container, close: () => { closes += 1; } });
+
+    doc.pointerDown(plus);
+    doc.pointerDown(item);
+    assert.equal(closes, 0,
+      '点「+」或点菜单项时收起了 —— 前者会让菜单永远关不掉，后者会让菜单项点了没反应');
+
+    doc.pointerDown(outside);
+    assert.equal(closes, 1, '点外面没收起 —— 「+」菜单会一直挂着');
+    detach();
+    assert.equal(doc.listeners.length, 0, '卸载后监听器还留在 document 上');
   });
 });

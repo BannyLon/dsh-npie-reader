@@ -20,6 +20,12 @@
  *    getElementsByClassName 一锤子买卖 —— 宿主的对话是异步挂载的。
  *
  * ★ 扫描版没有文本层：这时**如实说**「这一页看不到文字」，不静默降级。
+ *
+ * ★ 论文（`context.kind === 'paper'`）走的是**同一个组件**，不是第二份实现：
+ *   论文阅读整条阅读器就是 `BookReader`（`paperAsBook()` 把论文伪装成书条目），
+ *   所以伴读天然是这一个。但「同一个组件」不等于「同一句话」—— 论文的措辞、
+ *   快捷提问、交给模型的上下文身份全部按 `kind` 分叉（用户 2026-11-12 问到
+ *   「为什么论文里的伴读跟电子书一模一样」，见 `reading-scope.js` 的说明）。
  */
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -27,11 +33,31 @@ import { Icon } from './icons.jsx';
 import { tidyOcrText } from './ocr-text.js';
 import { readQuickPrompts } from './quick-prompts.js';
 
+/**
+ * `context.kind` 折成两套提示词作用域之一。
+ *
+ * ★ 写成模块级函数而不是在组件体里算：`useState` 的初始化要读它，写在组件体里
+ *   就会变成「声明在 hooks 之后」，而那个顺序错误只在运行时以 TDZ 报错出现。
+ * ★ 只认 `'paper'` 这一个字面量，其余一律当书：论文的标记由 `BookReader` 按
+ *   `book.source` 给，客户端没有第三种阅读对象。
+ */
+function kindOf(context) {
+  return context?.kind === 'paper' ? 'paper' : 'book';
+}
+
 export function BookCompanion({
   api, context, onClose, onManagePrompts, SessionProvider, renderSlot,
   onOcr, ocrNeeded = false, ocrUsed = false, ocrBusy = false, ocrError = '', ocrText = '',
 }) {
   const [workspaceId, setWorkspaceId] = useState(() => api.defaultChatWorkspace?.());
+  /**
+   * 这一屏读的是**论文**还是**电子书**。
+   *
+   * ★ 只影响措辞、快捷提问与交给模型的上下文身份；面板本身、会话复用、OCR、
+   *   槽位渲染全部共用一套 —— 分叉点越少，两边的行为越不容易漂移。
+   */
+  const kind = kindOf(context);
+  const isPaper = kind === 'paper';
   const [chat, setChat] = useState(null);
   const [connectError, setConnectError] = useState('');
   const [bindError, setBindError] = useState('');
@@ -41,7 +67,7 @@ export function BookCompanion({
   const [sending, setSending] = useState(false);
   /** 「重试同步」用的计数器：绑定 effect 依赖它，否则点重试时依赖没变、effect 不重跑。 */
   const [bindAttempt, setBindAttempt] = useState(0);
-  const [prompts, setPrompts] = useState(() => readQuickPrompts('book'));
+  const [prompts, setPrompts] = useState(() => readQuickPrompts(kind));
   const [promptMount, setPromptMount] = useState(null);
   /**
    * OCR 结果要不要摊开、复制过没有。
@@ -79,7 +105,7 @@ export function BookCompanion({
    *   只比长度会让第二次划选**完全不触发重绑**，模型看到的还是上一句 —— 而界面上
    *   一点异常都没有。键只活在内存里，放全文不占存储。
    */
-  const contextKey = `${context.bookId}|${context.page}|${context.loaded ? '1' : '0'}|${context.quote ?? ''}`;
+  const contextKey = `${context.bookId}|${context.page}|${context.loaded ? '1' : '0'}|${context.quote ?? ''}|${kind}`;
   const synced = attached === contextKey;
 
   // 默认工作区可能比插件启动得晚（宿主还在挂载工作区清单）。
@@ -95,10 +121,10 @@ export function BookCompanion({
 
   // 设置页改了提示词要立刻反映到这里（与文章伴读听同一个事件，各读各的 storage）。
   useEffect(() => {
-    const reload = () => setPrompts(readQuickPrompts('book'));
+    const reload = () => setPrompts(readQuickPrompts(kind));
     window.addEventListener('npr-prompts-changed', reload);
     return () => window.removeEventListener('npr-prompts-changed', reload);
-  }, []);
+  }, [kind]);
 
   /**
    * 往宿主对话里找两个锚点：输入框座位（挂快捷提示词条）与空态阶段（挂开场页）。
@@ -190,7 +216,15 @@ export function BookCompanion({
       // ★ 必须真的发出去：只让它进 `contextKey` 的话，「问伴读」触发的是一次
       //   **内容完全相同**的重绑 —— 界面上按钮点了、上下文也「同步了」，模型却
       //   从没收到那一句，回答自然答非所问。
+      // 用户刚划的那一句（空串 = 没划）。进上下文键，所以划一次只重绑一次。
       quote: context.quote ?? '',
+      /**
+       * ★ `kind` 与 `meta` 一起发给宿主：论文告诉模型「你在读一篇论文」并带上
+       *   作者 / 发表处 / 摘要；电子书照旧。字面量与 `service.js` 的解构**必须同字**，
+       *   `test/book-companion.test.mjs` 逐字段比对两侧（跨半区手写两份的地方）。
+       */
+      kind: kind,
+      meta: context.meta ?? null,
     }));
     bindQueue.current = pending;
     pending
@@ -273,7 +307,7 @@ export function BookCompanion({
 
   const detail = context.loaded
     ? (context.text === ''
-      ? '这一页没有文字层（扫描版或纯图片页），伴读只看到书名与页码'
+      ? `这一页没有文字层（扫描版或纯图片页），伴读只看到${isPaper ? '标题' : '书名'}与页码`
       : (ocrUsed
         // ★ 必须与「文字层」分开说：OCR 一定有错字，而错字会直接变成 AI 引用的
         //   错原文。用户有权知道自己看的是哪一种。
@@ -385,9 +419,27 @@ export function BookCompanion({
                   <path d="M77 3v4M77 19v4M67 13h4M83 13h4" className="npr-companion-book-spark" />
                 </svg>
               </div>
-              <span className="npr-companion-opening-label">与这本书对坐片刻</span>
-              <h2>好奇，从这一页开始。</h2>
-              <p>一个细节，一处疑问，或一句不同意的话。<br />写下来，我们接着读。</p>
+              <span className="npr-companion-opening-label">{isPaper ? '与这篇论文对坐片刻' : '与这本书对坐片刻'}</span>
+              {/*
+                * ★ 空态正文**必须按身份分叉**，不能只换上面那一行小字。
+                *   0.77.0 把「与这本书对坐片刻」改成了论文版，却把下面那句
+                *   「好奇，从这一页开始」留给了论文 —— 用户 2026-11-12 的原话：
+                *   「好奇，从这一页开始，不适合论文阅读吧」。
+                *   电子书是**从兴趣往下读**（一个细节、一句不同意的话）；
+                *   论文是**带着怀疑去验**（动机、证据、哪句只是声称）。
+                *   同一句话放在两个场景里，其中一个必然是错的。
+                */}
+              {isPaper ? (
+                <>
+                  <h2>读论文，从一句追问开始。</h2>
+                  <p>这一步为什么这么做，证据够不够，哪句话只是作者的声称。<br />问出来，我们逐段看。</p>
+                </>
+              ) : (
+                <>
+                  <h2>好奇，从这一页开始。</h2>
+                  <p>一个细节，一处疑问，或一句不同意的话。<br />写下来，我们接着读。</p>
+                </>
+              )}
             </div>
           )}
           {promptMount && createPortal(
@@ -399,8 +451,17 @@ export function BookCompanion({
                     onClick={() => void send(item)}>{item.title}</button>
                 ))}
               </div>
-              <button type="button" className="npr-companion-add-prompt" aria-label="管理电子书快捷提示词"
-                title="管理电子书快捷提示词" onClick={onManagePrompts}><Icon name="plus" size={14} /></button>
+              {/*
+                * ★ 拿不到 `onManagePrompts` 就**不画**这颗按钮。
+                *   论文页（`PapersApp`）曾经漏传这个 prop，于是按钮在、`onClick`
+                *   是 `undefined`，点下去毫无反应 —— 比没有这颗按钮更糟：
+                *   用户会反复点，然后判断「这个插件的按钮都是坏的」。
+                *   根本修法是调用方补上（已补），这里只留一道防线。
+                */}
+              {typeof onManagePrompts === 'function' && (
+                <button type="button" className="npr-companion-add-prompt" aria-label={`管理${isPaper ? '论文' : '电子书'}快捷提示词`}
+                  title={`管理${isPaper ? '论文' : '电子书'}快捷提示词`} onClick={onManagePrompts}><Icon name="plus" size={14} /></button>
+              )}
             </div>, promptMount)}
         </div>
       )}

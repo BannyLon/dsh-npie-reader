@@ -116,13 +116,17 @@ describe('图标名', () => {
        *   所以如实登记在这里：这一处是真漏网，不是「已经查过了」。
        */
       'ChannelPicker.jsx: name',
-      // 0.47：来源收窄横条上那颗图标 —— `originIcon()` 取的，传进去的是 scope 对象。
-      // 「按书本 / 按文章」两档删掉之后，横条是它的第一处用处。
-      'DiaryApp.jsx: originIcon(sourceScope)',
       // 出处 chip 上的图标：同一个 `originIcon()`，传的是条目算出来的 origin。
       // 放在数据层而不是 JSX 的三元里，就是因为这一条扫描 —— 三元里的 `'book'` 会被
       // 当成图标名去查，查不到就红。
-      'DiaryApp.jsx: originIcon(origin)',
+      // ★ 现在是**两处**：便签墙卡片（约 285 行）与日记条目（约 3181 行）各一颗
+      //   出处 chip。`×2` 由下面的出现次数汇总得出，不是手写的注释；少一处要红。
+      'DiaryApp.jsx: originIcon(origin) ×2',
+      // 0.47：来源收窄横条上那颗图标 —— 也是 `originIcon()`，传进去的是 scope 对象。
+      // ★ 顺序按**收集顺序**（文件遍历顺序 → 文件内出现顺序）排，不按需求先后来排：
+      //   这份名单是拿 `deepEqual` 比对的，按「读起来更顺」重排会让测试变红 ——
+      //   而那种红与图标名毫无关系。
+      'DiaryApp.jsx: originIcon(sourceScope)',
       // 来源：`row-menu.js` 的 `rowMenuItems()` 返回项里的 icon 字段（file-check /
       // download / eye-off），由下一条「数据里的 icon 字段」断言核对。
       // ★ 0.45.4 之前这里是 `name={kind === 'print' ? 'file-check' : …}` 的三元 ——
@@ -132,10 +136,59 @@ describe('图标名', () => {
       // 来源：TABS 每项的 icon 字段（0.44.4 从三元组改成对象，才扫得到）
       'SettingsPage.jsx: icon',
     ];
-    assert.deepEqual(skipped, BARE_SITES,
-      `裸标识符取值的清单变了（现在是 ${JSON.stringify(skipped)}）。\n`
+    /**
+     * ★ 同名多处的计数（0.72.3）。
+     *
+     * `skipped` 是**逐处**收集的：同一个文件里同一个表达式出现两次，就会得到两条
+     * 一模一样的字符串（`DiaryApp.jsx` 的便签墙卡片与日记条目各一处
+     * `originIcon(origin)`）。`deepEqual` 分不清「两条同名」与「一条」——
+     * 它只会报一串看不出差在哪的 JSON，于是有人会顺手删掉一行让它变绿。
+     *
+     * 按出现次数汇总成 `… ×2`：登记表仍然一处一行、仍然一进一出就红，
+     * 而「这里有两处」写在名单上，不用数重复行。
+     */
+    const tally = new Map();
+    for (const site of skipped) tally.set(site, (tally.get(site) ?? 0) + 1);
+    const registered = [...tally].map(([site, times]) => (times > 1 ? `${site} ×${times}` : site));
+
+    assert.deepEqual(registered, BARE_SITES,
+      `裸标识符取值的清单变了（现在是 ${JSON.stringify(registered)}）。\n`
       + '新增了一处？先确认它的值来自本文件的 icon 字面量（那条断言会替你核对），'
-      + '再把这一行登记进来。改成了内联字面量？把它从这里删掉。');
+      + '再把这一行登记进来。改成了内联字面量？把它从这里删掉。'
+      + '同一处变成了多处？改 `×N` 这个数字，别删掉那一行。');
+  });
+
+  /**
+   * 裸标识符那一端，**真的跑一遍**（0.72.3）。
+   *
+   * 名单上写着 `originIcon()` 那两处「是真漏网」。登记不等于核对：它的返回值
+   * 是 `'book-open'` / `'file-text'`，既不在 `name="…"` 里（那是裸标识符），
+   * 也不在 `icon: '…'` 字段里（那是数据表），两条断言都够不着 ——
+   * 把 `'book-open'` 敲成 `'book-opne'`，整个仓库一片绿，界面上画个圆圈。
+   *
+   * 它没有依赖（只 import `diary-format.js`），所以可以直接 import 进来跑，
+   * 把「已登记」升级成「已核对」。
+   */
+  test('originIcon() 真的会返回存在的图标名（把名单上的那两处漏网兜住）', async () => {
+    const { originIcon } = await import('../src/client/diary-origin.js');
+    const returned = new Set();
+    for (const kind of ['book', 'article']) {
+      const name = originIcon({ kind });
+      returned.add(name);
+      assert.ok(typeof name === 'string' && name !== '', `originIcon({ kind: '${kind}' }) 没给出图标名`);
+      assert.ok(defined.has(name), `originIcon({ kind: '${kind}' }) 返回了不存在的图标名 ${JSON.stringify(name)}`);
+    }
+    // 两个分支必须是**不同**的图标，否则「跟着出处走」这句话是假的。
+    assert.equal(returned.size, 2, '书与文章用的是同一个图标 —— 出处就分不出来了');
+    // 没有出处时返回空串（调用方用 `origin !== null` 挡着，不该走到这里画出图标）。
+    assert.equal(originIcon(null), '', '没有出处时不该给出图标名');
+
+    // 反向对照：制造一处**真实的错字**（`book-open` → `book-opne`，两个字母换位），
+    // 判据必须能认出「不存在」—— 否则 `defined` 太宽（比如解析器把整段文本当名字），
+    // 上面那两条就是空对空。
+    const typo = originIcon({ kind: 'book' }).replace('open', 'opne');
+    assert.notEqual(typo, originIcon({ kind: 'book' }), '反向对照的变异没生效');
+    assert.equal(defined.has(typo), false, `反向对照失效：${JSON.stringify(typo)} 被当成了存在的图标名`);
   });
 
   /**

@@ -134,9 +134,14 @@ const MUTANTS = [
   },
   {
     label: 'H 没配 Key 也列出云端音色',
-    file: 'src/client/ReaderPage.jsx',
-    from: '    const remote = (cloud?.configured === true ? (cloud.voices ?? SILICON_VOICES) : []).map((item) => ({',
-    to: '    const remote = (cloud?.voices ?? SILICON_VOICES).map((item) => ({',
+    // ★ 0.76.1 起这段逻辑搬到 `article-speech.js` 的 `speechVoiceGroups`（设置页与
+    //   阅读页共用一份），**不在 ReaderPage.jsx 里**。锚点跟着搬，否则出现 0 次、
+    //   这条变异体白跑（0.84.1 全量验证时实测撞上）。
+    // ★ 光改静态断言还不够：`runTests()` 一并跑 `speech-prefs.test.mjs`，那是拿假
+    //   voices / 假 cloud **真跑** `speechVoiceGroups`、断言 remote 为空的行为判据。
+    file: 'src/client/article-speech.js',
+    from: '  const remote = (cloud?.configured === true ? (cloud.voices ?? SILICON_VOICES) : [])',
+    to: '  const remote = (cloud?.voices ?? SILICON_VOICES)',
     expect: '没配 Key 时不列出',
   },
   {
@@ -181,7 +186,9 @@ function countOccurrences(haystack, needle) {
 }
 
 function runTests() {
-  const result = spawnSync(process.execPath, ['--test', 'test/speech.test.mjs'], {
+  // ★ H 的行为判据在 `speech-prefs.test.mjs`（真跑 `speechVoiceGroups`），
+  //   只跑 `speech.test.mjs` 的话 H 只能靠静态源码扫描，那不是「有牙」的验证。
+  const result = spawnSync(process.execPath, ['--test', 'test/speech.test.mjs', 'test/speech-prefs.test.mjs'], {
     cwd: ROOT,
     encoding: 'utf8',
     timeout: 180_000,

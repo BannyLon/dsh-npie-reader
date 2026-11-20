@@ -10,7 +10,7 @@
  */
 import assert from 'node:assert/strict';
 import { afterEach, describe, test } from 'node:test';
-import { BOOK_DEFAULT_PROMPTS, DEFAULT_PROMPTS, readQuickPrompts, saveQuickPrompts, scopedQuickPrompts } from '../src/client/quick-prompts.js';
+import { BOOK_DEFAULT_PROMPTS, DEFAULT_PROMPTS, PAPER_DEFAULT_PROMPTS, readQuickPrompts, saveQuickPrompts, scopedQuickPrompts } from '../src/client/quick-prompts.js';
 
 /** 够用的假 localStorage + window（模块直接引用全局裸名）。 */
 function stubStorage(initial = {}) {
@@ -80,8 +80,42 @@ describe('双作用域各自一套', () => {
   });
 });
 
-describe('scopedQuickPrompts（article 特有）不受双作用域影响', () => {
-  test('有选段时内置条目换成「选段」措辞，自定义条目原样保留', () => {
+/**
+ * 第三套：论文伴读。
+ *
+ * ★ 论文与电子书共用同一个面板组件（`BookCompanion`），所以「提问套餐」是两者
+ *   唯一的体验差异点之一。抄书那套的后果不只是措辞不对：书的三条都以「这一页
+ *   讲了什么」为单位，而读论文真正会卡住的是「这一页在整篇论证里的位置」和
+ *   「证据够不够」—— 问错了，模型就只好把一页散文当书讲。
+ */
+describe('第三套：论文伴读', () => {
+  test('默认三条按论证结构组织，不是书那套换词', () => {
+    assert.notDeepEqual(PAPER_DEFAULT_PROMPTS, BOOK_DEFAULT_PROMPTS);
+    const bookBodies = new Set(BOOK_DEFAULT_PROMPTS.map((item) => item.body));
+    assert.ok(PAPER_DEFAULT_PROMPTS.every((item) => !bookBodies.has(item.body)), '论文的条目与书重复');
+    // 每一条都得指向「这一页 / 这一篇」—— 宿主只给这一页，让它答整篇就是逼它编。
+    assert.ok(PAPER_DEFAULT_PROMPTS.every((item) => item.body.includes('这一页') || item.body.includes('这一篇')));
+  });
+
+  test('paper 走自己的键，与 article / book 互不串扰', () => {
+    const { store } = stubStorage();
+    const mine = [{ id: 'p', title: 'P', body: '论' }];
+    saveQuickPrompts(mine, 'paper');
+    assert.deepEqual(readQuickPrompts('paper'), mine);
+    assert.equal(store.get('npr.paper-quick-prompts.v1'), JSON.stringify(mine));
+    // 书那套没被碰过 —— 没存过就是默认集，不是论文那套。
+    assert.deepEqual(readQuickPrompts('book'), BOOK_DEFAULT_PROMPTS);
+    assert.ok(!store.has('npr.book-quick-prompts.v1'));
+  });
+
+  test('★ 反向对照：未知作用域仍退回文章那套（老行为不变）', () => {
+    stubStorage();
+    assert.deepEqual(readQuickPrompts('nonsense'), DEFAULT_PROMPTS);
+    assert.deepEqual(readQuickPrompts(), DEFAULT_PROMPTS);
+  });
+});
+
+describe('scopedQuickPrompts（article 特有）不受双作用域影响', () => {  test('有选段时内置条目换成「选段」措辞，自定义条目原样保留', () => {
     const items = [
       ...DEFAULT_PROMPTS,
       { id: 'mine', title: '自定义', body: '我的提示词' },

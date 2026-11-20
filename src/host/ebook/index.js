@@ -4,9 +4,10 @@
  * 归一后的形状（也是缓存文件的内容）：
  *
  *   {
- *     v: 2,
+ *     v: 3,
  *     format: 'epub' | 'mobi' | 'azw3' | 'azw' | 'txt',
  *     title, author, warnings: string[],
+ *     script, scriptRatio,                  // 全书语种（0.62.0 起随缓存落盘）
  *     toc: [{ title, section, depth }],     // section 是 1 起的节号，depth 是目录层级
  *     sections: [{ title, blocks, lines, chars, empty, level }]
  *   }
@@ -20,6 +21,7 @@
  *   与切之后的页号之间由那个模块内部兜底，这里只认它返回的结果。
  */
 import { FIND_LIMIT_MAX, findOccurrences, normalizeNeedle, snippetOf } from '../../book-find.js';
+import { bookScript } from '../../ebook-translate.js';
 import { parseEpub } from './epub.js';
 import { parseMobi } from './mobi.js';
 import { parseTxt } from './plain.js';
@@ -35,7 +37,7 @@ import { splitByHeadings } from './split.js';
 export { EBOOK_EXTENSIONS, isEbookExtension } from '../../library.js';
 
 /** 缓存格式版本。块模型的形状变了就 +1，老缓存会被自动丢弃。 */
-export const EBOOK_CACHE_VERSION = 2;
+export const EBOOK_CACHE_VERSION = 3;
 
 function coded(code, message) {
   const error = new Error(message);
@@ -67,6 +69,14 @@ function normalize(result, { ext, fallbackTitle }) {
    *   所以 EPUB / MOBI / TXT 共用同一套判据，不必每个解析器各写一遍。
    */
   const { sections, toc } = splitByHeadings(raw, rawToc);
+  /*
+   * ★ 语种在**解析阶段**算一次、跟着缓存落盘（0.62.0）。
+   *   它是整本的结论（`bookScript` 遍历所有块），阅读器那边只有目录、没有正文，
+   *   自己算不出来；而「打开书 → 才知道对照按钮该不该灰」每次现算一遍，
+   *   一本 50 万字母的书要 15ms、十几本一起探就是几百毫秒。
+   *   算一次存下来，之后读缓存就带着（见 `store.js` 的 `script`）。
+   */
+  const { script, ratio: scriptRatio } = bookScript({ sections });
   return {
     v: EBOOK_CACHE_VERSION,
     format: String(result.format ?? ext),
@@ -75,6 +85,8 @@ function normalize(result, { ext, fallbackTitle }) {
     warnings: (Array.isArray(result.warnings) ? result.warnings : []).filter(item => typeof item === 'string'),
     toc,
     sections,
+    script,
+    scriptRatio,
   };
 }
 

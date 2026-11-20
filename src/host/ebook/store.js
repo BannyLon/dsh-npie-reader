@@ -6,8 +6,10 @@
  *   正是这个插件一直想避免的手感（PDF 那条路是用会话级文档缓存解决的）。
  * ★ 为什么缓存里**不存 `lines`**：`lines` 完全由 `blocks` 推导（`blocksToLines`），
  *   两份一起存等于让缓存文件大 40%，而读盘是在每次打开书时都要付的。
- * ★ 失效判据 = `v`（块模型版本）+ `size`（文件被换过）。网盘书没有 mtime，
- *   用「体积 + 版本」是能拿到的最强信号；同名同体积不同内容属于极端情况。
+ * ★ 失效判据 = `v`（块模型版本）+ `size`（文件被换过）+ `mtimeMs`（本地书专用）。
+ *   只比体积时，「用编辑器原地改一章、体积没变」会让插件一直读旧正文 —— 而且
+ *   症状是「书里明明改了，插件还念老的」，没人会想到是缓存。本地书拿得到 mtime，
+ *   就必须用；网盘书没有 mtime（三方的 `modified_time` 不可靠），只能退回体积。
  */
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -19,13 +21,33 @@ const BOOK_ID = /^[A-Za-z0-9_-]{1,64}$/;
 /** 缓存文件的上限（一本 100 MB 的合集解出来的块也会小于它）。 */
 const MAX_CACHE_BYTES = 256 * 1024 * 1024;
 
+/**
+ * 这份缓存还能不能用。
+ *
+ * `mtimeMs` 只在**拿得到真 mtime**时传（本地书）；网盘书传 `0`，判据自动退回体积。
+ * ★ **老缓存没有 `mtimeMs` 字段时判废**：本地书一旦开始比 mtime，没有该字段的
+ *   缓存就是「上一版插件的产物」，放它过去等于这条判据从没生效 —— 代价是每本
+ *   本地书多解析一次，只在升级后第一次打开时付。
+ * ★ 判据写成纯函数而不是塞在 `read` 里：`read` 要读盘、要 catch，真跑成本高，
+ *   而这里的分支组合（体积变/没变 × mtime 变/没变 × 网盘/本地）才是易错点。
+ */
+export function cacheIsStale(payload, { size, mtimeMs } = {}) {
+  if (payload === null || typeof payload !== 'object') return true;
+  if (payload.v !== EBOOK_CACHE_VERSION) return true;
+  const wantedSize = Number(size);
+  if (Number.isFinite(wantedSize) && wantedSize > 0 && Number(payload.size) !== wantedSize) return true;
+  const stamp = Number(mtimeMs);
+  if (Number.isFinite(stamp) && stamp > 0 && Number(payload.mtimeMs) !== stamp) return true;
+  return false;
+}
+
 export function createEbookStore({ rootDir, log = () => {} } = {}) {
   if (typeof rootDir !== 'string' || rootDir === '') throw new TypeError('ebookStore: 需要 rootDir');
 
   const pathOf = (bookId) => join(rootDir, `${bookId}.json`);
 
   /** 读缓存。任何异常都当「没有缓存」—— 一份坏缓存不该让书打不开。 */
-  async function read(bookId, size) {
+  async function read(bookId, size, mtimeMs) {
     if (!BOOK_ID.test(String(bookId ?? ''))) return null;
     let text;
     try {
@@ -40,8 +62,7 @@ export function createEbookStore({ rootDir, log = () => {} } = {}) {
     } catch {
       return null;
     }
-    if (payload?.v !== EBOOK_CACHE_VERSION) return null;
-    if (Number.isFinite(size) && size > 0 && Number(payload.size) !== Number(size)) return null;
+    if (cacheIsStale(payload, { size, mtimeMs })) return null;
     if (!Array.isArray(payload.sections) || payload.sections.length === 0) return null;
     return {
       ...payload,
@@ -59,21 +80,34 @@ export function createEbookStore({ rootDir, log = () => {} } = {}) {
       }),
       warnings: Array.isArray(payload.warnings) ? payload.warnings : [],
       toc: Array.isArray(payload.toc) ? payload.toc : [],
+      /*
+       * 语种（0.62.0）：`zh` / `latin` / `unknown`。
+       * ★ 缓存里没有这个字段（老缓存）时回落到 `unknown`，而不是当 `latin` ——
+       *   「不知道」不该被读成「要翻译」。版本号也一起 +1 了，所以正常情况下
+       *   老缓存会先被判废重解析，这条回落只是兜底。
+       */
+      script: typeof payload.script === 'string' ? payload.script : 'unknown',
+      scriptRatio: Number(payload.scriptRatio) || 0,
     };
   }
 
   /** 写缓存（原子替换：先写 tmp 再 rename，避免半份文件被下次读到）。 */
-  async function write(bookId, size, ebook) {
+  async function write(bookId, size, ebook, mtimeMs) {
     if (!BOOK_ID.test(String(bookId ?? ''))) throw new TypeError(`ebookStore: 书 id 不合法（${bookId}）`);
     await mkdir(rootDir, { recursive: true });
     const payload = {
       v: EBOOK_CACHE_VERSION,
       size: Number(size) || 0,
+      // 本地书才有：下次打开时按它判「文件被改过」，网盘书写 0。
+      mtimeMs: Number(mtimeMs) || 0,
       format: ebook.format,
       title: ebook.title,
       author: ebook.author,
       warnings: ebook.warnings,
       toc: ebook.toc,
+      // 语种（0.62.0）：整本判一次存下来，阅读器与翻译助手都读它。
+      script: ebook.script,
+      scriptRatio: ebook.scriptRatio,
       sections: ebook.sections.map(section => ({
         title: section.title,
         chars: section.chars,

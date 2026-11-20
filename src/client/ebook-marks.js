@@ -13,8 +13,14 @@
  * ★ 空块不占坐标：`renderBlocks` 直接跳过空文本，它在 DOM 里不存在。
  */
 
-/** 块与块之间的分隔符。**改这个值等于让所有已存的划线错位**。 */
-export const BLOCK_SEP = '\n';
+/**
+ * 块与块之间的分隔符。**改这个值等于让所有已存的划线错位**。
+ *
+ * ★ 定义在共用层 `annotation-relocate.js`：宿主的重定位与这里的渲染必须读同一个值，
+ *   两边各写一份时改了一处不会报错，只会让「找回来的划线」画到另一个坐标上。
+ */
+import { BLOCK_SEP, pageTextOfBlocks } from '../annotation-relocate.js';
+export { BLOCK_SEP };
 
 /**
  * 每个非空块在页内坐标系里的区间：`[{ index, start, end }]`。
@@ -35,10 +41,7 @@ export function blockSpans(blocks) {
 
 /** 页内坐标系下的全文（只用来核对长度，不参与渲染）。 */
 export function pageText(blocks) {
-  return (Array.isArray(blocks) ? blocks : [])
-    .map(block => String(block?.x ?? ''))
-    .filter(text => text !== '')
-    .join(BLOCK_SEP);
+  return pageTextOfBlocks(blocks);
 }
 
 /** 端点所在的块元素（`[data-block]`），不在文章里就返回 `null`。 */

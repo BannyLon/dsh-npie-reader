@@ -124,6 +124,45 @@ function parseNcx(ncxXml, baseDir) {
 }
 
 /**
+ * 字体混淆用的加密算法 —— 这两个是**无害**的。
+ *
+ * EPUB 允许对嵌入字体做混淆（防止字体被直接拿去用），它会在 `encryption.xml` 里
+ * 声明加密，但正文与 `container.xml` 都是明文。实测 1190 本里 7 本带这个文件，
+ * 全部属于此类且都能正常解析 ⇒ **见到 encryption.xml 就判 DRM 会误伤真能读的书**。
+ */
+const FONT_OBFUSCATION_ALGORITHMS = [
+  'http://www.idpf.org/2008/embedding',
+  'http://ns.adobe.com/pdf/enc#RC',
+];
+
+/**
+ * 分析 `META-INF/encryption.xml`：是不是真的 DRM，以及厂商是谁。
+ *
+ * 判据：出现任何一个**不属于字体混淆**的 `EncryptionMethod` 算法即为 DRM；
+ * 厂商优先取 `<Proprietary>`（掌阅一类），ADEPT 兜底给个能看懂的名字。
+ */
+export function analyzeEncryption(xml) {
+  const text = String(xml ?? '');
+  const algorithms = [];
+  for (const match of text.matchAll(/EncryptionMethod[^>]*\bAlgorithm\s*=\s*["']([^"']+)["']/gi)) {
+    algorithms.push(match[1]);
+  }
+  const proprietary = /<Proprietary>\s*([^<]+?)\s*<\/Proprietary>/i.exec(text)?.[1]?.trim() ?? '';
+  const drmAlgorithms = algorithms.filter(
+    algorithm => !FONT_OBFUSCATION_ALGORITHMS.some(font => algorithm.startsWith(font)),
+  );
+  return {
+    drm: drmAlgorithms.length > 0,
+    vendor: proprietary || (drmAlgorithms.some(algorithm => /adept/i.test(algorithm)) ? 'Adobe ADEPT' : ''),
+  };
+}
+
+/** 这段文本像不像 XML（用来区分「加密后的乱码」与「真的结构不合规范」）。 */
+function looksLikeXml(text) {
+  return /^\s*(<\?xml|<container|<package)/i.test(String(text ?? '').replace(/^\uFEFF/, ''));
+}
+
+/**
  * 解析一本 EPUB。
  *
  * @param buffer - 整份文件字节。
@@ -136,11 +175,35 @@ export function parseEpub(buffer, { fallbackTitle = '' } = {}) {
   const zip = readZip(buffer);
   const warnings = [];
 
-  const container = zip.read('META-INF/container.xml')?.toString('utf8') ?? '';
+  /**
+   * ★ DRM **必须最先判**。加密的书（掌阅 ZhangYue.Inc + RSA）连 `container.xml`
+   *   一起加密，读出来是乱码；往下走只会得到「找不到 rootfile」这种把人带偏的
+   *   结论，用户会以为文件损坏而白白重新下载一本根本没坏的书。
+   *   文案要明说「书本身没有损坏」，否则等于没修。
+   */
+  const encryptionXml = zip.read('META-INF/encryption.xml')?.toString('utf8') ?? '';
+  if (encryptionXml !== '') {
+    const enc = analyzeEncryption(encryptionXml);
+    if (enc.drm) {
+      throw coded(
+        'EPUB_DRM',
+        `这本书有 DRM 加密${enc.vendor ? `（${enc.vendor}）` : ''}，插件读不了。`
+        + '书本身没有损坏，请换一个无 DRM 的版本，或先用工具去除 DRM。',
+      );
+    }
+  }
+
+  /** 容器三种失败各说各的：缺文件 / 是乱码 / 结构不合规范。 */
+  const containerEntry = zip.read('META-INF/container.xml');
+  if (containerEntry === null) throw coded('EPUB_NO_CONTAINER', '这本 EPUB 缺 META-INF/container.xml');
+  const container = containerEntry.toString('utf8');
+  if (!looksLikeXml(container)) {
+    throw coded('EPUB_BAD_CONTAINER', '这本 EPUB 的 container.xml 不是有效 XML（文件可能损坏或带未声明的加密）');
+  }
   const rootfile = /<rootfile\b[^>]*\bfull-path\s*=\s*"([^"]*)"/i.exec(container)?.[1]
     ?? /<rootfile\b[^>]*\bfull-path\s*=\s*'([^']*)'/i.exec(container)?.[1]
     ?? '';
-  if (rootfile === '') throw coded('EPUB_NO_OPF', '这本 EPUB 缺 META-INF/container.xml 或其中的 rootfile');
+  if (rootfile === '') throw coded('EPUB_NO_OPF', '这本 EPUB 的 container.xml 里没有 rootfile 路径');
   const opfPath = resolveHref('', rootfile);
   const opf = zip.read(opfPath)?.toString('utf8') ?? '';
   if (opf === '') throw coded('EPUB_NO_OPF', `这本 EPUB 里找不到 ${opfPath}`);

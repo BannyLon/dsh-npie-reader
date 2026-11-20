@@ -123,8 +123,19 @@ export function normalizeMood(emoji) {
 export const META_OPEN = '<!-- npr ';
 const META_LINE = /^<!--\s*npr\s+(\{.*\})\s*-->\s*$/;
 
+/**
+ * 便签墙的六种纸色（0.64.0）。
+ *
+ * ★ 落盘的是**色名**，不是 `#rrggbb`：颜色得跟着主题走（深浅两套底色），
+ *   存一个十六进制值等于把「写这一条时用的那套主题」焊进文件里 ——
+ *   换到深色主题下，那批便签会变成六块自发光的东西。
+ * ★ 顺序即色板的顺序（写字卡上那排圆点的从左到右），不要随手重排：
+ *   老条目的 `tone` 是色名，改了顺序不会错色，但会让「默认第一色」从黄变成别的。
+ */
+export const NOTE_TONES = Object.freeze(['amber', 'rose', 'sky', 'mint', 'lilac', 'cream']);
+
 /** 元数据里允许出现的字段。**白名单**：多一个字段也不会被写回去，避免把脏数据带进文件。 */
-const META_FIELDS = Object.freeze(['mood', 'book', 'chapter', 'page', 'article', 'vis']);
+const META_FIELDS = Object.freeze(['mood', 'book', 'chapter', 'page', 'article', 'tone', 'vis']);
 
 function pad2(value) {
   return String(value).padStart(2, '0');
@@ -220,6 +231,13 @@ export function normalizeMeta(input) {
     const value = Number(source[field]);
     if (Number.isInteger(value) && value >= 0) meta[field] = value;
   }
+  /*
+   * `tone`：这一条便签用哪张纸（见 `NOTE_TONES`）。
+   * ★ 不在表里的值**丢弃**而不是改写：用户拿别的编辑器手改 Markdown，
+   *   写个 `"tone": "红色"` 是他的自由。丢掉这一格只会退回「按位置自动配色」，
+   *   而抛错会让整条日记读不出来 —— 一个颜色不该有这种权力。
+   */
+  if (NOTE_TONES.includes(source.tone)) meta.tone = source.tone;
   if (source.vis === 'private') meta.vis = 'private';
   return meta;
 }
@@ -267,6 +285,27 @@ const TAG_RE = (() => {
   //   点进去搜不到 —— 比「不认这个标签」坏得多。有了它，超长片段整个不算标签。
   return new RegExp(`(?:^|[${boundary}])#(${tagChar}{1,24})(?!${tagChar})`, 'gu');
 })();
+
+/**
+ * 把 Markdown 的**链接目标**剥掉，只留人读的部分（0.73.1）。
+ *
+ * 图片 `![说明](地址)` 留说明（没有说明给「［图片］」），链接 `[文字](地址)` 留文字。
+ *
+ * ★ 为什么这不是「预览层的美化」，而必须放进**共用**模块：宿主与客户端各自需要它，
+ *   而两边各写一份正则，必然有一天漂移成两种行为 —— 界面上写着「［图片］」，
+ *   `diary_search` 却因为地址里含 `assets` 把每条贴过图的灵感都搜出来。
+ *   同一件事只能有一份实现（与 `paperAsBook()` 那条规则同源）。
+ *
+ * ★ 收尾括号允许缺失：宿主给的预览是**正文前 60 字**，而一条图片地址本身就有
+ *   六十来字 —— 截断之后剩一个没有右括号的 `![](`，按「必须成对」写就会原样
+ *   漏出半截网址。漏出来比不剥还难看。
+ */
+export function stripInlineTargets(input) {
+  let text = String(input ?? '');
+  text = text.replace(/!\[([^\]]*)\]\([^)]*\)?/g, (_, alt) => (String(alt).trim() === '' ? '［图片］' : alt));
+  text = text.replace(/\[([^\]]+)\]\([^)]*\)?/g, '$1');
+  return text;
+}
 
 /** 一段正文里的标签（去重、保持出现顺序）。 */
 export function parseTags(body) {

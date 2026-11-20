@@ -105,6 +105,29 @@ export function createDiarySecret(options = {}) {
     return buffer.length === KEY_BYTES ? buffer : null;
   }
 
+  /**
+   * 判读 `find-generic-password` 的失败。**分错一次就会毁数据**，所以只有两种结论：
+   *
+   *   - `absent`      这台机器上确实没有这条目（或连 `security` 命令都没有）
+   *                   ⇒ 从零建一把是安全的。
+   *   - `unavailable` 读不到、但**不能确定没有**（超时 / 权限被拒 / 未知退出码）
+   *                   ⇒ 钥匙串里可能正躺着一把能解开已有日记的钥匙，
+   *                     此时新建或覆盖 = 密钥分裂，已有日记**永久**打不开。
+   *
+   * ★ 为什么不能沿用「非 0 就当不存在」（0.84.7 修的）：`add-generic-password -U`
+   *   会**覆盖**已存在的条目。一次权限拒绝被当成「不存在」，就会把用户原来的密钥
+   *   换成新的 —— 这不是降级，是把数据毁掉，而且界面只会说「解密失败」。
+   */
+  function classifyFindFailure(result) {
+    const stderr = String(result.stderr ?? '');
+    if (result.code === -2) return 'unavailable';  // 超时：可能有条目没读出来
+    if (result.code === 44) return 'absent';       // errSecItemNotFound
+    // `security` 命令本身不存在（非 macOS）：钥匙串归它管，没有它就不可能有条目。
+    if (result.code === -1 && /ENOENT|no such file/i.test(stderr)) return 'absent';
+    if (/could not be found|specified item/i.test(stderr)) return 'absent';
+    return 'unavailable';
+  }
+
   async function fromKeychain() {
     const found = await run(['find-generic-password', '-a', KEYCHAIN_ACCOUNT, '-s', KEYCHAIN_SERVICE, '-w']);
     if (found.code === 0) {
@@ -114,26 +137,41 @@ export function createDiarySecret(options = {}) {
       // 只能报出来让人处理。
       throw coded('KEY_MALFORMED', '钥匙串里的日记密钥长度不对，无法解密已有日记');
     }
-    if (found.code === -2) return null; // 超时 ⇒ 当不可用，走文件
-    // 不存在 ⇒ 建一把。`-U` 让重复执行幂等（并发启动时两个进程都建也不会打架）。
+    if (classifyFindFailure(found) === 'unavailable') {
+      throw coded('KEYCHAIN_UNAVAILABLE',
+        `读不到日记密钥（${found.code === -2 ? '钥匙串调用超时' : `security 退出码 ${found.code}`}）；`
+        + '为免覆盖已有密钥，这次不新建。稍后重试，或检查「钥匙串访问」的权限');
+    }
+    // 确认没有条目 ⇒ 建一把。`-U` 让重复执行幂等（并发启动时两个进程都建也不会打架）。
     const key = randomBytes(KEY_BYTES);
     const made = await run([
       'add-generic-password', '-a', KEYCHAIN_ACCOUNT, '-s', KEYCHAIN_SERVICE,
       '-w', key.toString('base64'), '-U',
     ]);
-    if (made.code !== 0) return null;
+    if (made.code !== 0) {
+      // 建不进去（没有 GUI 会话 / 权限被拒）≠「读不到」：已经确认过没有条目，
+      // 所以退回文件密钥是安全的。
+      throw coded('KEYCHAIN_ABSENT', '钥匙串不可写，改用本地密钥文件');
+    }
     mode = 'keychain';
     log('[日记] 已在登录钥匙串里创建日记密钥');
     return key;
   }
 
-  async function fromFile() {
+  /** 只读已有的文件密钥，**不创建**。 */
+  async function readFileKey() {
     try {
       const key = decodeKey(await readFile(keyPath, 'utf8'));
       if (key) { mode = 'file'; return key; }
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error;
     }
+    return null;
+  }
+
+  async function fromFile() {
+    const existing = await readFileKey();
+    if (existing) return existing;
     const key = randomBytes(KEY_BYTES);
     await mkdir(dirname(keyPath), { recursive: true });
     await writeFile(keyPath, key.toString('base64'), { encoding: 'utf8', mode: 0o600 });
@@ -144,19 +182,31 @@ export function createDiarySecret(options = {}) {
     return key;
   }
 
-  /** 取密钥（首次会创建）。钥匙串优先，失败退回文件。 */
+  /**
+   * 取密钥。优先级：注入 → 缓存 → 钥匙串 → **已有的**文件密钥 → 新建文件密钥。
+   *
+   * ★ 「读不到」与「没有」必须分开（0.84.7）：
+   *   读不到时只能用已经存在的文件密钥（说明这台机器一直是文件模式）；
+   *   文件也没有就 fail-closed —— 绝不新建。否则一次 5 秒超时就会让已加密的
+   *   日记永久解不开，而用户看到的只是一句「解密失败」。
+   */
   async function key() {
     if (fixed) return fixed;
     if (cached) return cached;
-    let fromChain = null;
     try {
-      fromChain = await fromKeychain();
+      cached = await fromKeychain();
+      return cached;
     } catch (error) {
       if (error?.code === 'KEY_MALFORMED') throw error;
       log(`[日记] 钥匙串不可用：${error?.message ?? error}`);
+      const existing = await readFileKey();
+      if (existing) { cached = existing; return cached; }
+      if (error?.code === 'KEYCHAIN_ABSENT') {
+        cached = await fromFile();
+        return cached;
+      }
+      throw error;
     }
-    cached = fromChain ?? await fromFile();
-    return cached;
   }
 
   /**

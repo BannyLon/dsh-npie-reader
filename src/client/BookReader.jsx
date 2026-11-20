@@ -28,20 +28,38 @@
  *   `tabindex` 都会把整块拖动区减掉（详见 test/window-drag.test.mjs）。
  *   键盘快捷键走 window 级监听，不需要容器可聚焦。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { FIND_LIMIT_MAX, findOccurrences, normalizeNeedle, pageIndexText, probePages, snippetOf } from '../book-find.js';
 import { formatBytes, progressPercent, stateOf } from '../library.js';
 import { BookCompanion } from './BookCompanion.jsx';
 import { AnnotationPanel } from './AnnotationPanel.jsx';
 import { BookDigestPanel } from './BookDigestPanel.jsx';
 import { BookFindPanel } from './BookFindPanel.jsx';
+import { PaperTranslateLayer, PaperWholeBookJobBar } from './PaperTranslateLayer.jsx';
+import { WholeBookConfirm } from './WholeBookConfirm.jsx';
+import {
+  clearWholeBookTranslations, hasPageTranslation, loadBookTranslations, PAGE_STEP_TEXT,
+  pageTranslationVersion, startWholeBookTranslation, stopWholeBookTranslation,
+  subscribePageTranslation, translatedPageCount, translationKey, usePageTranslationTask,
+  useWholeBookState,
+} from './paper-translation.js';
+/**
+ * ★ 与 RSS 页 ⋯ 菜单、论文页「+」菜单共用同一份「点外面关掉」的判据：
+ *   自己再写一遍 `contains` 就是两套判定，迟早漂移。
+ *
+ * ★ 必须**从零依赖的 menu-dismiss.js 取**，不要改回从 ReaderPage.jsx 取 ——
+ *   ReaderPage 本来就 import 本组件（经 LibraryApp），反向取会绕出循环依赖，
+ *   并把整张 RSS 页面的 refinements.css 文本拖进「只渲染 BookReader」的真渲染
+ *   测试 bundle（那套装置没有 CSS loader，会直接打包失败）。
+ */
+import { attachMenuDismiss } from './menu-dismiss.js';
 import { DigestCard } from './DigestCard.jsx';
 import { Icon } from './icons.jsx';
 import { forgetBook, loadPdfjs, openCachedBook } from './pdfjs.js';
 import {
   fetchAnnotations, fetchChapterDigest, fetchDigestStatus, fetchOcrPage, fetchOcrPages, ocrBookPage,
   postAnnotation, postDigestGenerate,
-  postDigestPages, postDigestSegment, postDigestStop, resetDigest, saveBookState,
+  postDigestPages, postDigestSegment, postDigestStop, postTranslatePassage, resetDigest, saveBookState,
 } from './library-api.js';
 import {
   anchorOfRange, annotationsOnPage, coveringAnnotation, normalizeAnnotations,
@@ -52,6 +70,7 @@ import {
   BOOK_BRIGHTNESS, BOOK_TINTS, nextBookTint, normalizeBookBrightness, normalizeBookTint,
 } from '../reading-settings.js';
 import { layerScaleRatio, quoteBarLeft, quoteBarPlacement, selectionQuote, textLayerMetrics } from './book-text.js';
+import { linkBoxesOf, resolveDestPage } from './pdf-links.js';
 import { insidePanel, peekNext, peekOnLeave } from './book-peek.js';
 import {
   FIT_PAGE, FIT_WIDTH, NO_COMMAND, WHEEL_FLIP_COOLDOWN_MS, WHEEL_FLIP_DELTA,
@@ -359,6 +378,128 @@ export function BookReader({
    *   所以偏移跟着气泡一起算、一起失效（见下面 `selectionchange` 那段）。
    */
   const quoteAnchorRef = useRef(null);
+  /**
+   * 这一页的链接热区（参考文献编号、DOI、页内跳转）。
+   *
+   * ★ 每页一份、随渲染更新：坐标是**渲染时那个 scale** 下的 CSS 像素，换页 / 缩放
+   *   就失效，和文字层同一套失效条件。所以它由「渲染这一页」的那个 effect 写，
+   *   而不是另起一个监听（另起一份就得自己判断何时作废，必然漏一处）。
+   */
+  const [linkBoxes, setLinkBoxes] = useState([]);
+  /** 页级按需翻译（D 档）：开关，以及当前页的 pdf.js 对象 + 渲染 scale。
+   *  ★ `pageView` 是给译文层取字用的，不参与阅读器自己的任何计算；
+   *    换页才换对象，缩放变化只让译文层重排（不重新调模型）。 */
+  const [translateOn, setTranslateOn] = useState(false);
+  const [pageView, setPageView] = useState(null);
+  /**
+   * 整本一次翻完（0.71.0）。状态活在 `paper-translation.js` 的模块级任务台里，
+   * 换页 / 缩放 / 换一本书再回来都不会把它弄丢。
+   * ★ 这里**只订阅状态字符串**、不订阅逐页进度：整本跑 40 页时让整棵 2900 行的
+   *   阅读器重渲染 40 次，正是上一轮「进阅读页非常卡」那个形态。进度数字由
+   *   `PaperWholeBookJobBar` 那个小组件自己订阅，重渲染只在它身上发生。
+   */
+  const wholeState = useWholeBookState(book.id);
+  /** 一颗「翻译」按钮 + 一个下拉菜单：逐页 / 整本 / 清除译文三条途径（0.71.0）。 */
+  const [translateMenuOpen, setTranslateMenuOpen] = useState(false);
+  const [clearArmed, setClearArmed] = useState(false);
+  /**
+   * 「翻译全本」的二次确认（0.78.0）。
+   *
+   * ★ 这一颗按钮要花掉几十次模型调用、可能跑一小时。以前点下去就直接开跑，
+   *   没有任何地方说明「这要多久」—— 用户只能凭感觉赌一把。现在先弹一张卡：
+   *   多少页、多少页已有译文、大约多久、能不能中途停。
+   * ★ 弹窗只负责「说清楚 + 收确认」，真正的启动仍在原来的 `startWholeBookTranslation`
+   *   调用点，避免两处各写一遍「开始翻译」（措辞与判据迟早漂移）。
+   */
+  const [wholeConfirmOpen, setWholeConfirmOpen] = useState(false);
+  /**
+   * 「再来一次这一页」（0.78.0）。
+   *
+   * ★ 暂停过之后 `translateOn` 已经是 `true`，菜单再点一次 `setTranslateOn(true)`
+   *   不会触发任何 effect —— 这一页就再也点不动了。这个计数器就是那个勾子：
+   *   每次点「翻译这一页」都 +1，译文层的 effect 依赖它。
+   */
+  const [translateTry, setTranslateTry] = useState(0);
+  /**
+   * 单页翻译状态胶囊的**落脚点**（0.78.1）。
+   *
+   * ★ 用户 2026-11-14：「改成钉在阅读区中心，不随页面滚动」。上一版它挂在译文层里
+   *   （`.npr-book-translation` → 书页 → `.npr-book-stage`），而 stage 是
+   *   `overflow: auto` 的滚动容器 —— 胶囊是**这一页的正中**，页面一滚就跟着走了；
+   *   页面比窗口高时它甚至滚出视野，用户等两分钟看不到任何进度。
+   * ★ 做法同 `.npr-book-view`（0.24.3 为右下角浮动按钮建的那层「不滚动的定位基准」）：
+   *   在 view 里铺一层 `.npr-book-pins`，译文层用 portal 把胶囊送进来。
+   *   状态仍留在译文层（它才是最懂「这一页翻到哪一步」的地方），这里只给一块画布。
+   * ★ 用 state 存节点而不是 ref：首帧 ref 还是 null，不给一次重渲染就永远不会重试，
+   *   胶囊会一直留在书页层（表现为「改了个寂寞」）。
+   */
+  const [pinHost, setPinHost] = useState(null);
+  const translateMenuRef = useRef(null);
+  /**
+   * 这一页**有没有现成译文** —— 顶部那颗按钮两态（「翻译」/「中/英」）的唯一判据。
+   *
+   * ★ 为什么不直接 `hasPageTranslation(book.id, page)`：它读的是模块里的索引，
+   *   翻译完成的那一刻不会触发 React 重渲染 —— 用户静静停在这一页，按钮会一直
+   *   停在「翻译」，看起来就是「翻完了也没记录」。这里订阅**这一页**的版本号，
+   *   译文一到就重算；翻页时 key 变了，订阅随之换一条（整本跑别的页不会晃这一页）。
+   * ★ 版本号本身用不上，要的只是「它变了 ⇒ 重渲染」。
+   */
+  const pageKey = translationKey(book.id, page);
+  useSyncExternalStore(
+    useCallback((listener) => subscribePageTranslation(pageKey, listener), [pageKey]),
+    useCallback(() => pageTranslationVersion(pageKey), [pageKey]),
+    useCallback(() => 0, []),
+  );
+  const pageTranslated = hasPageTranslation(book.id, page);
+  /**
+   * 这一页**此刻**的翻译任务态（0.78.0）。
+   *
+   * ★ 与译文层共用同一份判据：菜单项据此灰掉并说出进度。这是用户报的
+   *   「点了翻译之后按钮还能点」的落点 —— 以前这里根本不知道翻译已经开始了。
+   */
+  const pageTask = usePageTranslationTask(pageKey);
+  const pageBusy = pageTask.state === 'running';
+  /** 逐页翻译只对 PDF 成立（取字 + 版面 IR 都在 pdf.js 那条路上）。 */
+  const translateSupported = book.ext === 'pdf';
+  /**
+   * 打开这本书就把**本机已译的页**读回内存索引。
+   *
+   * ★ 两个实打实的作用：
+   *   ① `ensurePageTranslation()` 里那次「整本 GET」被省掉，第一次点翻译少一跳；
+   *   ② 下拉菜单能说出「本机已存 N 页译文」—— 用户要的「翻译过的要有记录」
+   *      得看得见，否则他没法判断缓存到底在不在（0.71.0–0.71.2 因为段落 id
+   *      被落盘校验全丢，缓存一页都没写进去，而界面毫无迹象）。
+   * ★ 一次性、失败不报：这是提速与显示，读不到就当没缓存，翻页时照常能翻。
+   */
+  useEffect(() => {
+    if (book.id === '') return;
+    void loadBookTranslations(book.id);
+  }, [book.id]);
+  useEffect(() => {
+    if (!translateMenuOpen) return undefined;
+    const off = attachMenuDismiss(document, {
+      menu: translateMenuRef.current,
+      trigger: translateMenuRef.current,
+      close: () => { setTranslateMenuOpen(false); setClearArmed(false); },
+    });
+    const onKey = (event) => {
+      if (event.key !== 'Escape') return;
+      setTranslateMenuOpen(false);
+      setClearArmed(false);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => { off(); document.removeEventListener('keydown', onKey); };
+  }, [translateMenuOpen]);
+  /** 命名目的地 → 页码。同一份 PDF 里同一个名字会被点很多次，解析一次就够。 */
+  const linkDestCache = useRef(new Map());
+  /**
+   * 划词翻译：`{ source, state: 'loading'|'done'|'error', value, error }`。
+   *
+   * ★ `source` 记下发起时选中的原文：气泡会随点别处消失，但翻译结果要留在原处
+   *   （用户多半是想看完再复制），所以结果不挂在 `quote` 上，而是自己带一份原文。
+   * ★ 同一时间只有一份译文：这是「看一眼这句话什么意思」的动作，不是并行任务。
+   */
+  const [quoteTranslation, setQuoteTranslation] = useState(null);
   const [companionQuote, setCompanionQuote] = useState('');
   /**
    * 这本书的全部划线 / 笔记（服务端是唯一真相，这里只存它回过来的那一份）。
@@ -757,6 +898,8 @@ export function BookReader({
       textLayerTaskRef.current = null;
       textLayerRef.current.textContent = '';
       setQuote(null);
+      // 热区同样是「上一页的坐标」：留着它会让用户点到上一页的链接。
+      setLinkBoxes([]);
     }
     const timer = setTimeout(() => {
       void (async () => {
@@ -769,6 +912,9 @@ export function BookReader({
           const nextScale = displayScale({ mode, box, base: nextBase, zoom });
           if (!(nextScale > 0)) return;
           const viewport = pdfPage.getViewport({ scale: nextScale });
+          // D 档：把这一页的对象与 scale 交给译文层。★ 只是存引用，不在这里取字 ——
+          //   `getTextContent()` 由译文层在开关打开时才调，关着时一页都不解析。
+          setPageView({ pdfPage, scale: nextScale, page });
           const dpr = Math.min(globalThis.devicePixelRatio || 1, 2);
           const pixelWidth = Math.max(1, Math.floor(viewport.width * dpr));
           const pixelHeight = Math.max(1, Math.floor(viewport.height * dpr));
@@ -852,6 +998,26 @@ export function BookReader({
             } catch (cause) {
               if (!cancelled && cause?.name !== 'AbortException') setQuote(null);
             }
+          }
+
+          // ---- 链接层 ----------------------------------------------------
+          /**
+           * 页内链接热区（0.68.0）。内置的 pdf.js 6.4.299 **没有**默认
+           * `LinkService`，所以「点参考文献跳到第 9 页」「点 DOI 开浏览器」
+           * 这两件事得自己接 —— 判定与坐标换算在 `pdf-links.js`（纯函数、有单测），
+           * 这里只负责「取注解 → 交给它 → 存起来」。
+           *
+           * ★ 失败**不报错、不打断阅读**：链接只是很少几个热区，取不到也就不显示，
+           *   而 pdf.js 对畸形注解确实会抛（`Invalid annotation element`）。
+           *   把它升级成「这一页加载失败」是把小事说成大事。
+           * ★ 用 `intent: 'display'`：另一种 intent（`print`）里没有 Link 注解。
+           */
+          try {
+            const annotations = await pdfPage.getAnnotations({ intent: 'display' });
+            if (cancelled) return;
+            setLinkBoxes(linkBoxesOf(annotations, viewport));
+          } catch {
+            if (!cancelled) setLinkBoxes([]);
           }
         } catch (cause) {
           // `RenderingCancelledException` 是主动取消，不是错误。
@@ -2040,6 +2206,18 @@ export function BookReader({
   }, [page, book.id]);
 
   /**
+   * 换书要清掉的**跨页**状态。
+   *
+   * ★ 译文浮层不清的话，换到另一本书之后底部还挂着上一本的译文 —— 而它看起来
+   *   完全像是这本书的。翻页**不**清：用户翻页后回看译文是正常用法。
+   * ★ 目的地缓存按书失效：页码是按文档算的，两家出版社的书里同名目的地指的不是一页。
+   */
+  useEffect(() => {
+    setQuoteTranslation(null);
+    linkDestCache.current.clear();
+  }, [book.id]);
+
+  /**
    * 「问伴读」：把这一句交给伴读的上下文，并把面板打开。
    *
    * ★ 不清空 `companionQuote`：气泡会随点别处消失，但伴读里的那一句必须留着 ——
@@ -2068,6 +2246,74 @@ export function BookReader({
       notify?.('复制失败：剪贴板不可用，请重试');
     }
   }, [quote, notify]);
+
+  // ---- 页内链接 ----------------------------------------------------------
+  /**
+   * 点一个链接热区。
+   *
+   * 两种目标分开走：
+   *   · `url` —— 外链（DOI、arXiv 页）。用 `globalThis.open`，与插件里其它
+   *     「打开原文」的位置同一套，不另造一条通道；
+   *   · `dest` —— 页内目的地（参考文献「见第 9 页」、目录、脚注）。要先把
+   *     PDF 的 dest 解析成页码，再走 `go()` —— 直接改 `page` 会绕过滚动落点
+   *     （往下翻要落到页顶），翻页手感会与按钮翻页不一致。
+   *
+   * ★ 解析不出来时**说一句话**，不要静默：那种链接点上去毫无反应，用户会以为
+   *   阅读器卡了，然后反复点。
+   */
+  const openLink = useCallback(async (box) => {
+    if (box === null) return;
+    if (box.url !== '') {
+      try {
+        globalThis.open?.(box.url, '_blank', 'noopener,noreferrer');
+      } catch {
+        notify?.(`链接没能打开：${box.url}`);
+      }
+      return;
+    }
+    const target = await resolveDestPage(doc, box.dest, linkDestCache.current);
+    if (!(target > 0)) {
+      notify?.('这个链接没有指向具体页码（PDF 里的目的地是空的）');
+      return;
+    }
+    go(target);
+  }, [doc, go, notify]);
+
+  // ---- 划词翻译 ----------------------------------------------------------
+  /**
+   * 「翻译」：把选中的那一句交给宿主，用**dsh 里配置的模型**翻成中文。
+   *
+   * 结果不挂在气泡上：气泡随点别处消失，而用户多半想「看完再复制」。所以译文
+   * 落在书页底部一块**独立的浮层**里（`quoteTranslation`），气泡只负责发起。
+   *
+   * ★ `context` 给书名：论文里「Table 2」「the proposed method」离开上下文没法译，
+   *   一个书名就够了，不要把整页文字塞过去（那既慢又容易让模型改写原文）。
+   */
+  const translateQuote = useCallback(async () => {
+    if (quote === null) return;
+    const source = quote.text;
+    setQuoteTranslation({ source, state: 'loading', value: '', error: '' });
+    try {
+      const body = await postTranslatePassage({ text: source, context: book.title });
+      const value = String(body?.text ?? '').trim();
+      if (value === '') throw new Error('模型没有返回译文');
+      setQuoteTranslation({ source, state: 'done', value, error: '' });
+    } catch (error) {
+      setQuoteTranslation({ source, state: 'error', value: '', error: error?.message ?? String(error) });
+    }
+  }, [quote, book.title]);
+
+  /** 把译文放回剪贴板（引用到笔记里是这件事最常见的下一步）。 */
+  const copyTranslation = useCallback(async () => {
+    const value = quoteTranslation?.value ?? '';
+    if (value === '') return;
+    try {
+      await navigator.clipboard.writeText(value);
+      notify?.('译文已复制');
+    } catch {
+      notify?.('复制失败：剪贴板不可用，请重试');
+    }
+  }, [quoteTranslation, notify]);
 
   // ---- 划线 / 笔记 -------------------------------------------------------
   //
@@ -2338,6 +2584,130 @@ export function BookReader({
             <Icon name="search" size={14} />
             <span>搜索</span>
           </button>
+          {/* 翻译（0.71.4）：**一颗**按钮管全部。0.71.3 的「翻译 ˅」+「中/英」两颗并排
+              被用户当场否掉 ——「菜单堆叠在顶部菜单栏，非常拥挤，而且不好理解」，
+              且「根本没办法判断这一页翻译没翻译」。
+              ★ 投诉成立的地方：这两件事本来是**同一件事的两个阶段**，不是两个功能 ——
+                · 这一页还没译文 ⇒ 能做的只有「翻译」；
+                · 这一页已有译文 ⇒ 翻译已成过去式，能做的只有「中/英」。
+                所以按钮文字直接报**当前阶段**、菜单项也随之换一套：用户不用猜这一页
+                翻没翻过，也没有第二颗按钮可以点错。
+              ★ 已译页**不给**「翻译本页」：同一页翻两遍要花两份模型钱。想重翻就走
+                菜单里的「清除译文」，清完按钮自动变回「翻译」。
+              ★ 只有 PDF 有这一颗：逐页翻译靠 pdf.js 取字 + 版面 IR 定位，EPUB / TXT
+                那条重排路没有对应图层 —— 挂一颗点了没反应的按钮比不挂更糟。 */}
+          {translateSupported && (
+          <span className="npr-book-translate-wrap" ref={translateMenuRef}>
+            <button type="button"
+              className={`npr-book-pill-item${translateOn || wholeState === 'running' ? ' is-on' : ''}`}
+              title={pageTranslated
+                ? (translateOn ? '这一页已有译文 · 现在看中文，点开可切回原文' : '这一页已有译文 · 现在看原文，点开可看中文')
+                : '翻译：这一页还没有译文，翻一次就存在本机'}
+              aria-haspopup="menu" aria-expanded={translateMenuOpen}
+              aria-pressed={pageTranslated && translateOn}
+              onClick={() => {
+                // 「确认清除」是一次性武装：菜单一关就解除，不能留到下一次打开。
+                setClearArmed(false);
+                setTranslateMenuOpen((value) => !value);
+              }}>
+              {pageTranslated
+                ? <Icon name="type" size={14} />
+                : <Icon name="languages" size={14} />}
+              <span>{pageTranslated ? '中/英' : '翻译'}</span>
+              <Icon name="chevron-down" size={11} />
+            </button>
+            {translateMenuOpen && (
+              <div className="npr-book-translate-menu" role="menu">
+                {/* 第一项**随状态换**，两种情况互斥、不会同时出现 —— 这就是
+                    「翻译过的页不能再用翻译按钮，没翻过的页不该有中英切换」的落点。 */}
+                {pageTranslated ? (
+                  <button type="button" role="menuitem" className={translateOn ? 'is-on' : ''}
+                    onClick={() => { setTranslateOn(value => !value); setTranslateMenuOpen(false); }}>
+                    <Icon name="type" size={13} />
+                    <span>{translateOn ? '看原文' : '看中文'}
+                      <small>{translateOn ? '这一页的译文先收起，对着原文核' : '这一页已有译文，直接铺上去'}</small></span>
+                  </button>
+                ) : (
+                  /* ★ 翻译中**必须灰掉**（用户 2026-11-13）。不灰的话第二次点是纯
+                     无效操作：in-flight 被复用，界面什么都不变 —— 用户会当成「点坏了」，
+                     于是连点几次。这里把同一份任务态（`usePageTranslationTask`）变成
+                     按钮的 disabled + 一条不确定态进度条，点击与反馈就对上了。
+                     ★ 进度条是**不确定动画**而不是百分比：一页只发一次模型请求，
+                       模型不回流中途进度，任何数字都是编的。秒数才是真读数。 */
+                  <button type="button" role="menuitem" disabled={pageBusy}
+                    className={pageBusy ? 'is-busy' : ''}
+                    aria-busy={pageBusy}
+                    onClick={() => { setTranslateOn(true); setTranslateTry(value => value + 1); setTranslateMenuOpen(false); }}>
+                    <Icon name={pageBusy ? 'clock' : 'languages'} size={13} />
+                    <span>
+                      {pageBusy
+                        ? `${PAGE_STEP_TEXT[pageTask.step] ?? '正在翻译这一页'}…`
+                        : '翻译这一页'}
+                      <small>
+                        {pageBusy
+                          ? (pageTask.batches > 1 && pageTask.batch > 0
+                            ? `第 ${pageTask.batch}/${pageTask.batches} 批 · 翻完自动铺上去`
+                            : '翻完自动铺上去，这一页只翻一次')
+                          : '翻完就显示中文，存在本机，重开还在'}
+                      </small>
+                      {pageBusy && <span className="npr-book-translate-track" aria-hidden="true"><i /></span>}
+                    </span>
+                  </button>
+                )}
+                <button type="button" role="menuitem"
+                  className={wholeState === 'running' || wholeState === 'stopping' ? 'is-on' : ''}
+                  disabled={wholeState === 'stopping'}
+                  onClick={() => {
+                    if (wholeState === 'running' || wholeState === 'stopping') {
+                      stopWholeBookTranslation(book.id);
+                    } else {
+                      // ★ 先弹确认卡，不直接开跑（0.78.0）：这一颗要花几十次模型
+                      //   调用、可能跑一小时，而以前点下去连「要多久」都不说。
+                      setWholeConfirmOpen(true);
+                    }
+                    setTranslateMenuOpen(false);
+                  }}>
+                  <Icon name="book-open" size={13} />
+                  <span>{wholeState === 'running' || wholeState === 'stopping' ? '停止翻译'
+                    : wholeState === 'done' ? '全本完成（可重跑）'
+                      : wholeState === 'stopped' || wholeState === 'failed' ? '继续翻译' : '翻译全本'}
+                    <small>逐页翻完整本，译文存在本机</small></span>
+                </button>
+                {/* ★ 只在**真有缓存**时出现：一页都没翻过就摆一个「清除译文」，
+                    点下去只会回一句「已清空 0 页」。整本跑着的时候也不给清 ——
+                    一边写一边删，最后必然是一半有一半没有。 */}
+                {translatedPageCount(book.id) > 0 && (
+                  <button type="button" role="menuitem" className={clearArmed ? 'is-armed' : ''}
+                    disabled={wholeState === 'running' || wholeState === 'stopping'}
+                    title="清掉这本书已落盘的译文（换模型后想重翻时用）"
+                    onClick={() => {
+                      if (!clearArmed) { setClearArmed(true); return; }
+                      setClearArmed(false);
+                      setTranslateMenuOpen(false);
+                      // 清完回原文：不清 translateOn 的话译文层会立刻把当前页重翻一遍，
+                      // 「清缓存」当场变成一次模型调用。
+                      setTranslateOn(false);
+                      void clearWholeBookTranslations(book.id)
+                        .then((cleared) => notify?.(cleared
+                          ? '这本书的译文缓存已清空，这一页变回「翻译」'
+                          : '没能清掉：译文文件删不掉（磁盘只读或被安全软件挡住），旧译文还在本机'));
+                    }}>
+                    <Icon name="trash-2" size={13} />
+                    <span>{clearArmed ? '确认清除' : '清除译文'}<small>只删缓存，不动 PDF</small></span>
+                  </button>
+                )}
+                {/* 「翻译过的有记录」要看得见：这本书在本机存了几页译文。
+                    ★ 只报**非零**：刚打开、索引还没读回来时报「0 页」是假话，
+                      用户会以为缓存又没了。 */}
+                {translatedPageCount(book.id) > 0 && (
+                  <p className="npr-book-translate-note">
+                    本机已存 {translatedPageCount(book.id)} 页译文，重开这本书会自动读回
+                  </p>
+                )}
+              </div>
+            )}
+          </span>
+          )}
           <button type="button" className={`npr-book-pill-item${digestOpen ? ' is-on' : ''}`}
             title={digestOutline.length > 0 ? '本书目录' : '抽取本书目录（只在本机做，不花钱）'}
             aria-pressed={digestOpen}
@@ -2596,6 +2966,36 @@ export function BookReader({
                      误读成「出错了」。
                   ⇒ 随之删掉的还有 `textless` 状态与 `.npr-book-notice` 样式（类名一旦
                     「定义但没人用」，`scripts/check-classes.mjs` 会红）。 */}
+              {/* 链接层（0.68.0）：页内链接热区 —— 点参考文献编号跳到那一页、点 DOI 开浏览器。
+                  ★ 容器 `pointer-events: none`、只有热区元素自己 `auto`：链接矩形通常只有
+                    几个字宽，代价是「从链接正中起手拖选」会点到链接（与桌面 PDF 阅读器
+                    一致），换来的是页面其余地方照常拖选。
+                  ★ 放在文字层**之上**、划线层之下：链接区的 click 必须优先拿到。
+                  ★ 坐标是这一帧渲染 scale 下的 CSS 像素（与画布显示尺寸同一套），
+                    缩放 / 换页即失效 —— 由渲染那段一起重算。 */}
+              {linkBoxes.length > 0 && (
+                <div className="npr-book-links">
+                  {linkBoxes.map((box) => (box.url !== ''
+                    ? (
+                      <a key={box.key} className="npr-book-link" href={box.url} title={box.url}
+                        target="_blank" rel="noreferrer noopener"
+                        style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
+                        onClick={(event) => { event.preventDefault(); void openLink(box); }} />
+                    )
+                    : (
+                      <button key={box.key} type="button" className="npr-book-link is-jump"
+                        title="跳到这个链接指向的那一页"
+                        style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
+                        onClick={() => { void openLink(box); }} />
+                    )))}
+                </div>
+              )}
+              {/* 页级按需翻译（D 档）：白底块盖住原文段落、重排好的中文铺在上面。
+                  ★ 放在链接层之后、划词气泡之前：它的容器 `pointer-events: none`，
+                    所以选区 / 链接点击照常落到下面的层，只是视觉上换成了中文。
+                  ★ 只在开关打开时挂载；关着时连这一页的文字都不解析。 */}
+              <PaperTranslateLayer bookId={book.id} pageView={pageView} attempt={translateTry}
+                pinHost={pinHost} active={translateOn} notify={notify} />
               {quote !== null && quotePlacement !== null && (
                 <div className="npr-book-quotebar" role="toolbar" aria-label="选中的文字"
                   style={quotePlacement.side === 'above'
@@ -2613,11 +3013,64 @@ export function BookReader({
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => { void createMark({ openNote: true }); }}>笔记</button>
                   <button type="button" onClick={askAboutQuote}>问伴读</button>
+                  <button type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => { void translateQuote(); }}>翻译</button>
                   <button type="button" onClick={() => { void copyQuote(); }}>复制</button>
                 </div>
               )}
             </div>
           </div>
+          {/* 单页翻译胶囊的落脚层（0.78.1）。
+              ★ 必须是 stage 的**兄弟**、不能是子节点：stage 是滚动容器，
+                里面的绝对定位元素会跟着书页一起滚（同下面浮动按钮那条理由）。
+              ★ `pointer-events: none`：这一层铺满整个阅读区，开着就会挡住
+                书页的拖选与链接点击；只有胶囊自己把 pointer-events 打开。
+              ★ 用回调 ref 存节点（`setPinHost`），译文层拿到才开 portal。 */}
+          <div className="npr-book-pins" ref={setPinHost} />
+          {/* 整本翻译的进度条（0.71.0）：独立小组件自己订阅逐页进度，
+              挂在 `.npr-book-view` 上而不是滚动的 stage 里，翻页不会跟着书页滚走。 */}
+          <PaperWholeBookJobBar bookId={book.id} />
+          {/* 「翻译全本」的确认卡（0.78.0）。挂在这里而不是菜单里：
+              ★ 菜单一关就卸载，弹窗会跟着消失（点「翻译全本」正是先关菜单再开弹窗）；
+              ★ `.npr-book-view` 是不滚动的定位基准，固定在窗口中央不会随书页滚走。 */}
+          {wholeConfirmOpen && (
+            <WholeBookConfirm
+              bookId={book.id}
+              title={book.title}
+              total={numPages}
+              onCancel={() => setWholeConfirmOpen(false)}
+              onConfirm={() => {
+                setWholeConfirmOpen(false);
+                // 开跑的同时切到中文视图：不切的话用户在下一页之前看不到任何变化，
+                // 会以为「点了没开始」。
+                setTranslateOn(true);
+                startWholeBookTranslation({ bookId: book.id, doc, numPages, notify });
+              }} />
+          )}
+          {/* 划词翻译的结果（0.68.0）。
+              ★ 独立浮层，**不挂在气泡上**：气泡随点别处就消失，而用户点「翻译」之后
+                多半想看完再复制 —— 挂在气泡里等于「手一抖译文就没了」。
+              ★ 位置钉在阅读区底部：`.npr-book-view` 是**不滚动**的定位基准（同浮动
+                按钮那条理由），放进 stage 里会跟着书页一起滚走。 */}
+          {quoteTranslation !== null && (
+            <div className={`npr-book-translate is-${quoteTranslation.state}`} role="status" aria-live="polite">
+              <div className="npr-book-translate-head">
+                <span>翻译</span>
+                <div className="npr-book-translate-actions">
+                  {quoteTranslation.state === 'done' && (
+                    <button type="button" onClick={() => { void copyTranslation(); }}>复制</button>
+                  )}
+                  <button type="button" aria-label="关闭译文" title="关闭"
+                    onClick={() => setQuoteTranslation(null)}><Icon name="x" size={13} /></button>
+                </div>
+              </div>
+              <p className="npr-book-translate-source" title={quoteTranslation.source}>{quoteTranslation.source}</p>
+              {quoteTranslation.state === 'loading' && <p className="npr-book-translate-body is-muted">正在翻译…</p>}
+              {quoteTranslation.state === 'error' && <p className="npr-book-translate-body is-error">{quoteTranslation.error}</p>}
+              {quoteTranslation.state === 'done' && <p className="npr-book-translate-body">{quoteTranslation.value}</p>}
+            </div>
+          )}
           {/* ---- 右下角：一颗圆按钮，**悬停即向上摊开一列**（0.24.3 改回悬停）-----
               ★ 形态照用户给的那张图：每格是「圆形图标 + 左侧文字标签」，7 格竖直排成一条
                 微微向内弯的带子，最下面那格紧贴按钮。0.22.0 那版是绕按钮 90° 扇开的一串
@@ -2717,6 +3170,19 @@ export function BookReader({
               text: contextText,
               // 用户刚划的那一句（空串 = 没划）。进上下文键，所以划一次只重绑一次。
               quote: companionQuote,
+              /**
+               * 论文与电子书在这里分道。
+               *
+               * ★ 判据只认 `book.source === 'paper'`，**不认 `format` / `ext`**：
+               *   自建 PDF 电子书同样是 `format: 'pdf'`，用它分会把书当成论文，
+               *   模型就开始讲「这一页在论证里承担什么」—— 而用户读的是《干法》。
+               * ★ `meta` 只在论文下给：作者 / 发表处 / 年份 / 摘要都是论文才有的字段，
+               *   书那半边传 `null`，宿主据此一个字都不加（不写「未知」占位）。
+               */
+              kind: book.source === 'paper' ? 'paper' : 'book',
+              meta: book.source === 'paper'
+                ? { authors: book.author ?? '', venue: book.series ?? '', year: book.year || 0, abstract: book.abstract ?? '' }
+                : null,
             }}
             onOcr={runOcr}
             ocrNeeded={ocrNeeded}
