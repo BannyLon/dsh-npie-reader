@@ -560,11 +560,13 @@ error: profile "desktop" is managed exclusively by the Electron application
 
 ### 步骤
 
+0. 先把源码放到本机任意目录（`git clone` 或下载 Release 压缩包都行），
+   记下这个目录的绝对路径。下文 `/你的路径/dsh-npie-reader` 就指它。
 1. 左侧栏点 **「插件」**（不在设置里）。
-2. 点 **「添加插件」**，粘贴本插件的绝对路径：
+2. 点 **「添加插件」**，粘贴上一步那个绝对路径：
 
    ```
-   /Users/habhy/Documents/NPIE-program/dsh_plugins_desktop/dsh-npie-reader
+   /你的路径/dsh-npie-reader
    ```
 
    `link:` 前缀可省。安装面板接受本地绝对路径：`dsh-plugin-manager` 的
@@ -577,7 +579,7 @@ error: profile "desktop" is managed exclusively by the Electron application
 这一步同时完成三件事：
 
 1. `~/.dsh/profiles/desktop/package.json` 的 `dependencies` 增加
-   `"dsh-npie-reader": "link:/Users/habhy/Documents/NPIE-program/dsh_plugins_desktop/dsh-npie-reader"`；
+   `"dsh-npie-reader": "link:/你的路径/dsh-npie-reader"`；
 2. `~/.dsh/profiles/desktop/node_modules/` 下建立软链；
 3. `dsh.profile.bundles` 追加 `dsh-npie-reader`。
 

@@ -35,7 +35,7 @@ function hostSave(store, patch) {
 /** 一套「打开弹窗时」的设置：两条书源 + 已经载入一份书单。 */
 function snapshotWithTwoSources() {
   const sources = validateSettings({
-    bookSources: [{ kind: 'local', path: '/Users/habhy/Books' }, { kind: 'pan', path: '/E书拾取' }],
+    bookSources: [{ kind: 'local', path: '/Users/example/Books' }, { kind: 'pan', path: '/E书拾取' }],
   }).bookSources;
   return {
     ...READING_DEFAULTS,
@@ -145,7 +145,7 @@ describe('appearanceDefaults：「恢复默认」只动外观', () => {
   it('★ 真跑：点一次「恢复默认」之后，书源 / 书单路径 / 模型都还在', () => {
     const store = snapshotWithTwoSources();
     Object.assign(store, {
-      libraryPath: '/Users/habhy/my-books.json',
+      libraryPath: '/Users/example/my-books.json',
       aiModel: 'deepseek/deepseek-chat',
       digestModel: 'deepseek/deepseek-chat',
       fontSize: 22,
@@ -156,7 +156,7 @@ describe('appearanceDefaults：「恢复默认」只动外观', () => {
 
     assert.equal(store.bookSources.length, 2, '书源被「恢复默认」清空了');
     assert.deepEqual(store.libraryListIds.length, 1);
-    assert.equal(store.libraryPath, '/Users/habhy/my-books.json', '外部书单路径被清空了');
+    assert.equal(store.libraryPath, '/Users/example/my-books.json', '外部书单路径被清空了');
     assert.equal(store.aiModel, 'deepseek/deepseek-chat', '翻译模型被改回默认了');
     assert.equal(store.digestModel, 'deepseek/deepseek-chat');
     // 外观本身确实回到默认 —— 否则这条修复就成了「按钮没反应」。

@@ -64,7 +64,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
 import {
@@ -80,7 +80,7 @@ const SHOT_WIDTH = args.includes('--shot-width') ? Number(args[args.indexOf('--s
 const CHROME_CANDIDATES = [
   process.env.NPIE_CHROME,
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Users/habhy/Library/Caches/ms-playwright/chromium_headless_shell-1228/chrome-headless-shell-mac-arm64/chrome-headless-shell',
+  join(homedir(), 'Library/Caches/ms-playwright/chromium_headless_shell-1228/chrome-headless-shell-mac-arm64/chrome-headless-shell'),
 ].filter(Boolean);
 const CHROME = CHROME_CANDIDATES.find((p) => existsSync(p));
 if (!CHROME) {

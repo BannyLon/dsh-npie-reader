@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-pack:
+    name: 构建 + 发布包守卫
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建产物（lib/ 不入库，每次现建）
+        run: npm run build
+
+      - name: 发布包守卫（14 项：文件归属 / vendor 一致性 / 产物齐备）
+        run: npm run verify:pack
+
+  test:
+    name: 单元测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建产物（部分测试直接读 lib/）
+        run: npm run build
+
+      # 只跑不依赖真浏览器的套件。带 Headless Chrome 的 check-*.mjs
+      # （布局 / 主题对比度 / 菜单禁用等）需要本机浏览器，不在 CI 里跑；
+      # 本地用 `npm run verify:all` 全量跑。
+      - name: 无需浏览器的测试
+        run: node --test test/store.test.mjs test/service.test.mjs test/tools.test.mjs test/page-progress.test.mjs test/library.test.mjs test/library-app.test.mjs test/ai-timeout.test.mjs test/settings-patch.test.mjs test/speech-pronunciation.test.mjs
