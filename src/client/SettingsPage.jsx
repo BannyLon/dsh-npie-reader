@@ -446,12 +446,12 @@ export function SettingsPage({ api, onClose, notify, onSubscriptionsChanged, ini
           {tab === 'about' && <section aria-label={`关于 ${BRAND_TITLE}`}>
             <div className="npr-settings-intro"><h2>关于 {BRAND_TITLE}</h2><p>为 DeepSeek Harness 打造的安静阅读空间。</p></div>
             <div className="npr-settings-card npr-settings-about-card">
-              <div className="npr-settings-about-brand"><span>澄</span><div><h3>{BRAND_TITLE}</h3><p>版本 {VERSION} · GPL-3.0-only</p></div></div>
+              <div className="npr-settings-about-brand"><span>澄</span><div><h3>{BRAND_TITLE}</h3><p>版本 {VERSION} · MIT</p></div></div>
               <p className="npr-settings-about-slogan">{SLOGAN_ZH}<span>{SLOGAN_EN}</span></p>
               <p>订阅作者、读原文或中文版本、带着文章向 AI 追问。订阅、阅读数据与译文/改写都保存在本机 Harness 目录，不经过任何远程服务。</p>
             </div>
             <div className="npr-settings-card">
-              <div className="npr-settings-card-head"><h3>许可与数据来源</h3><p>本插件以 GPL-3.0-only 发布，完整许可正文见仓库根目录的 LICENSE。</p></div>
+              <div className="npr-settings-card-head"><h3>许可与数据来源</h3><p>本插件以 MIT 许可发布，完整许可正文见仓库根目录的 LICENSE。</p></div>
               <div className="npr-settings-links">
                 <a href="https://github.com/timqian/chinese-independent-blogs" target="_blank" rel="noopener noreferrer">独立博客目录（MIT）<Icon name="arrow-up-right" size={15} /></a>
               </div>

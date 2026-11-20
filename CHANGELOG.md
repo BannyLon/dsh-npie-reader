@@ -1,5 +1,39 @@
 # Changelog
 
+## 未发布 — 2026-11-20
+
+### 许可澄清（为开源做准备）
+
+**核查结论：本仓库不含任何 GPL 上游代码。`LICENSE` 顶部原先那句「a modified version of an
+earlier work released under GPL-3.0-only」是无依据的表述，已删除。**
+
+- 0.1.1 时按「GPL-3.0 §5 要求」加了那句修改声明，但当时并不存在被修改的上游作品 —— 属误加。
+- 常被误认为上游的 **SubCast** 是 Tauri + Rust 的 AGPL-3.0 桌面应用，本插件是 Node/ESM 宿主 +
+  React 渲染半区的独立实现，只借「字幕按 cue 落段、点段落 seek、播放跟随高亮、断点续听」这套
+  **规格**，未搬运任何代码（0.79.0 的决策原文见本文件）。
+- `dalibre` 仅为功能可移植性评估对象（Go 项目、无阅读引擎），`calibre` 只出现在测试注释里
+  描述其生成的电子书结构 —— 两者均不含其代码。
+- 全部代码提交（67 条）作者均为同一人，源码内无任何 `based on` / `ported from` 声明。
+
+### 许可变更：GPL-3.0-only → MIT
+
+核查确认不存在 copyleft 上游后，GPL 已无法律必要性，且会挡住作者自己未来的闭源集成；
+宿主 `@deepseek-ai/dsh` 与官方插件均为 MIT，其余 11 个插件为 MIT / Apache-2.0。
+**改动成本在尚无外部贡献者时为零，一旦接受外部提交则需全体贡献者同意** —— 因此在开源前完成切换。
+
+- `LICENSE` 全文换为 MIT（`Copyright (c) 2026 Banny`），原「modified version of an earlier
+  work」表述一并删除。
+- `package.json` / `package-lock.json` 的 `license` 字段改为 `MIT`。
+- `README.md` 许可章节改口为 MIT；第三方归属表保持不变（Apache→MIT、MIT→MIT 均兼容）。
+- `THIRD-PARTY-NOTICES.md` 首段同步为 MIT。
+- 设置页「关于」两处文案（版本行、许可说明）改为 MIT，随 `npm run build` 进入产物。
+
+### 新增合规文件
+
+- `THIRD-PARTY-NOTICES.md`：逐项列出 pdf.js / Milkdown / agentero motif /
+  chinese-independent-blogs 的许可与版权行，并说明 dalibre、calibre 不属引用。
+- `vendor/editor/LICENSE`（Milkdown MIT 全文）—— 该产物此前缺许可声明。
+
 ## 0.86.2 — 2026-11-19
 
 **主题：跟随被「滚页面」悄悄关掉了 —— 判据从「有没有 wheel」换成「列表有没有真的动」。**

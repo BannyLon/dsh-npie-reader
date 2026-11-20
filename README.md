@@ -1575,10 +1575,17 @@ cleanup 在 React 提交阶段同步抛 `TypeError`，被 Error Boundary 接住�
 
 ## 许可
 
-GPL-3.0-only。完整许可正文见仓库根目录的 `LICENSE`。
+MIT。完整许可正文见仓库根目录的 `LICENSE`。
 
-`vendor/chinese-independent-blogs/` 下的内置订阅目录来自 MIT 许可的独立博客列表，许可见该目录内 `LICENSE`。
+本仓库的插件代码由本仓库作者原创，不含任何 GPL 上游项目的派生代码。所包含的第三方组件
+均在其各自的宽松许可（MIT / Apache-2.0）下使用，逐项归属见 `THIRD-PARTY-NOTICES.md`。
 
-`vendor/pdfjs/` 是内置的 **pdf.js 6.4.299**（Apache License 2.0，6.3 MB / 192 个文件），
-许可见 `pdf.mjs` / `pdf.worker.mjs` 文件头的 `@licstart` 块与 `wasm/LICENSE_*`。
-版本、来源、为什么整份内置、怎么升级，见 `vendor/pdfjs/README.md`。
+- `vendor/chinese-independent-blogs/`：内置订阅目录，来自 MIT 许可的独立博客列表，
+  许可见该目录内 `LICENSE`。
+- `vendor/pdfjs/`：内置的 **pdf.js 6.4.299**（Apache License 2.0，6.3 MB / 192 个文件），
+  许可见 `pdf.mjs` / `pdf.worker.mjs` 文件头的 `@licstart` 块与 `wasm/LICENSE_*`；
+  版本、来源、为什么整份内置、怎么升级见 `vendor/pdfjs/README.md`。
+- `vendor/editor/`：内置编辑器产物，打包自 `@milkdown/kit`（MIT），
+  许可见 `vendor/editor/LICENSE`。
+- `src/client/paper-reflow/`：页级排版算法移植自 agentero motif（MIT），
+  许可见该目录内 `MOTIF-LICENSE.txt`。

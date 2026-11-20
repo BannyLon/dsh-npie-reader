@@ -268,6 +268,10 @@ async function main() {
       if (rel === 'cordis.patch.yml') return '宿主补丁声明';
       if (rel === 'README.md' || rel === 'CHANGELOG.md') return '文档';
       if (rel === 'LICENSE') return '许可证';
+      // 第三方组件的版权行与许可正文都在这里。与 LICENSE 同等地位：署名义务要求它随包。
+      if (rel === 'THIRD-PARTY-NOTICES.md') return '第三方署名';
+      // 编辑器产物本身不入库（约 374 KB 的构建结果），但 Milkdown 的 MIT 署名必须随包。
+      if (rel === 'vendor/editor/LICENSE') return '上游编辑器署名';
       // 上游「中文独立博客」目录的内容已内联进 client.js，但**署名义务还在** ⇒ 它的
       // LICENSE 必须随包。这条不是「顺手留着的垃圾」。
       if (rel === 'vendor/chinese-independent-blogs/LICENSE') return '上游目录署名';

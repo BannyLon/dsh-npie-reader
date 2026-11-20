@@ -307,7 +307,7 @@ describe('A4 · 正文不受影响 + 设置页开关 + 合规', () => {
     assert.match(settingsSource, /className="npr-switch"/);
   });
 
-  it('MIT 移植保留原作者署名（GPL-3.0 单向兼容的前提）', () => {
+  it('MIT 移植保留原作者署名（署名是硬要求，与许可类型无关）', () => {
     assert.match(pronSource, /MIT/);
     assert.match(pronSource, /Copyright \(c\) 2026 Zanbin Xu/);
   });
