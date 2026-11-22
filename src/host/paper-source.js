@@ -41,7 +41,12 @@ const PDF_MAX_BYTES = 120 * 1024 * 1024;
  */
 async function fetchText(url, { accept = '*/*', timeoutMs = 25_000, maxBytes = META_MAX_BYTES } = {}) {
   const verdict = await checkPublicUrl(url);
-  if (!verdict?.ok) throw new Error(`拒绝访问 ${url}：${verdict?.reason ?? '地址未通过校验'}`);
+  /**
+   * ★ 报错只报**主机名**，不报整条 URL：这条消息会原样出现在对话框里，而整条
+   *   带 `search_query=…` 的 URL 会把那行红字撑成三行（用户 2026-11-22 的截图）。
+   *   用户需要知道的是「哪个站点没抓成、为什么」，不需要看查询串。
+   */
+  if (!verdict?.ok) throw new Error(`${new URL(url).host} 没通过地址校验：${verdict?.reason ?? '未知原因'}`);
   const response = await fetch(url, {
     headers: { accept, 'user-agent': USER_AGENT },
     signal: AbortSignal.timeout(timeoutMs),

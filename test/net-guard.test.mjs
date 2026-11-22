@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   checkPublicUrl, isPrivateAddress, isPrivateHostname, isPrivateIPv4, isPrivateIPv6,
+  isProxyFakeAddress,
 } from '../src/host/net-guard.js';
 import { fetchPage } from '../src/host/page-fetch.js';
 
@@ -52,6 +53,30 @@ describe('isPrivateIPv4：私网与保留段', () => {
     const narrow = (ip) => ip.split('.')[0] === '172' && ip.split('.')[1] === '16';
     assert.equal(narrow('172.17.0.1'), false, '窄判据漏掉了 172.17');
     assert.equal(isPrivateIPv4('172.17.0.1'), true, '我们的判据必须抓住它');
+  });
+});
+
+describe('isProxyFakeAddress：只认 198.18/15 这个基准测试段', () => {
+  it('收 198.18.0.0–198.19.255.255，段两侧一个都不收', () => {
+    for (const ip of ['198.18.0.0', '198.18.0.49', '198.19.255.255']) {
+      assert.equal(isProxyFakeAddress(ip), true, ip);
+    }
+    for (const ip of ['198.17.255.255', '198.20.0.1', '198.18.0.256', '127.0.0.1', '8.8.8.8', 'fc00::1']) {
+      assert.equal(isProxyFakeAddress(ip), false, ip);
+    }
+  });
+
+  it('非法写法不炸（这一层跑在用户机器给的 DNS 结果上）', () => {
+    for (const bad of ['', '1.2.3', '1.2.3.4.5', 'a.b.c.d', null, undefined, '198.18.0.x']) {
+      assert.equal(isProxyFakeAddress(bad), false, String(bad));
+    }
+  });
+
+  it('★ isPrivateIPv4 仍把这段判为私网 —— 放宽的只有 checkPublicUrl 那一步', () => {
+    // 守住边界：别为了 fake-ip 把「198.18 是保留段」这个事实也改掉，
+    // 否则依赖 isPrivateAddress 的其他调用点会跟着松动。
+    assert.equal(isPrivateIPv4('198.18.0.49'), true);
+    assert.equal(isProxyFakeAddress('198.18.0.49'), true);
   });
 });
 
@@ -166,6 +191,41 @@ describe('checkPublicUrl：解析结果也要判', () => {
       const verdict = await checkPublicUrl(url, { resolve: async () => ['93.184.216.34'] });
       assert.equal(verdict.ok, false, url);
     }
+  });
+
+  it('★ 代理 fake-ip（198.18/15）⇒ 放行（0.90.1：不开这个口子所有外抓都发不出去）', async () => {
+    // 用户现场：export.arxiv.org → 198.18.0.49，curl 通而插件报「解析到内网地址」。
+    // TUN 模式下系统解析器对任何域名都回这个段的占位地址，真正的连接由代理按域名完成。
+    for (const address of ['198.18.0.49', '198.19.255.255']) {
+      const verdict = await checkPublicUrl('https://export.arxiv.org/api/query', {
+        resolve: resolver({ 'export.arxiv.org': [address] }),
+      });
+      assert.equal(verdict.ok, true, `${address} 是代理的 fake-ip，不该当内网拦`);
+    }
+  });
+
+  it('★ fake-ip 混着真私网 ⇒ 仍拒（不能因为放了一个就整批放行）', async () => {
+    const verdict = await checkPublicUrl('https://evil.test/a', {
+      resolve: resolver({ 'evil.test': ['198.18.0.49', '127.0.0.1'] }),
+    });
+    assert.equal(verdict.ok, false, 'DNS 被投毒：一个 fake-ip + 一个回环，仍必须拒');
+    assert.match(verdict.reason, /内网地址/);
+  });
+
+  it('★ 裸 fake-ip 地址 ⇒ 仍拒（只放行「解析结果」，不放行手写 IP）', async () => {
+    let called = 0;
+    const verdict = await checkPublicUrl('http://198.18.0.5/api/books', {
+      resolve: async () => { called += 1; return []; },
+    });
+    assert.equal(verdict.ok, false);
+    assert.equal(called, 0, '裸 IP 应该在 DNS 之前就被拒');
+  });
+
+  it('IPv6 的 fake-ip 池不猜：照旧按 ULA 拒', async () => {
+    const verdict = await checkPublicUrl('https://v6.test/a', {
+      resolve: resolver({ 'v6.test': ['fc00::1'] }),
+    });
+    assert.equal(verdict.ok, false);
   });
 
   it('反向对照：把私网判定换成恒 false，同一批地址全部会被放行', async () => {

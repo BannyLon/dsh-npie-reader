@@ -17,6 +17,10 @@
  *   ③ 域名必须查 DNS，**任一**解析结果落在私网段就拒 —— 只查第一条会被
  *      「公网 A 记录 + 私网 A 记录」混合的域名绕过。
  *
+ * ★ 唯一的例外是**代理的 fake-ip 段**（`198.18/15`）：开了 TUN 的代理对任何域名
+ *   都回一个这个段的占位地址，它不是「指向内网」而是「这台机器有代理」。
+ *   见 `isProxyFakeAddress` —— 不放行的话，一次都抓不出去（0.90.1 的现场）。
+ *
  * ★ 解析失败一律**拒绝**（fail-closed）：宁可「这次读不到原文」，也不要在解析器
  *   被投毒/劫持时放行。调用方（`hydrateBody`）本来就把任何失败退化成 null。
  *
@@ -143,6 +147,39 @@ export function isPrivateAddress(address) {
 }
 
 /**
+ * 这个地址是不是**代理客户端给的虚拟 IP**（fake-ip）。
+ *
+ * 症状现场（用户 2026-11-22，0.90.0）：论文的导入与搜索**全部**失败，错误是
+ * 「域名解析到内网地址（export.arxiv.org → 198.18.0.49）」—— 而同一个地址
+ * 用 `curl` 是通的。原因是他的代理开了 TUN / 虚拟 IP 模式：系统解析器对**任何**
+ * 域名都回一个 `198.18.x.x` 占位地址，真正的解析与连接由代理按**域名**完成。
+ *
+ * 于是「解析到 198.18/15」不是「指向内网」，而是「这台机器上有个代理」。
+ * 把它当内网拦下来的后果不是「挡了一次可疑请求」，而是**所有外抓都不通**，
+ * 而这条守卫的初衷（挡住恶意 feed 指向 `127.0.0.1` / `192.168.x` / 云元数据）
+ * 一点都不需要这个段：`198.18/15`（RFC 2544 基准测试段）既不是 RFC1918，
+ * 也不是链路本地，正常内网服务不会坐在那里。
+ *
+ * ★ 只放行**解析结果**，不放行**裸 IP**：`http://198.18.0.5/` 这种手写地址照旧
+ *   在 `isPrivateHostname` 那一步被拒 —— 没有人会「正常地」访问一个基准测试段。
+ * ★ 同一批解析结果里只要还有一个真的私网地址（`127.0.0.1` / `10.x` …），
+ *   仍然整条拒绝：那才是「DNS 被投毒指到本机」的形态。
+ * ★ IPv6 不猜：代理的 fake-ip v6 池（`fc00::/18`）与 ULA 重叠，认不准就不动。
+ *
+ * @param {string} address
+ * @returns {boolean}
+ */
+export function isProxyFakeAddress(address) {
+  const parts = String(address ?? '').trim().split('.');
+  if (parts.length !== 4) return false;
+  if (!parts.every((part) => /^\d{1,3}$/.test(part))) return false;
+  const nums = parts.map(Number);
+  if (!nums.every((num) => num <= 255)) return false;
+  const [first, second] = nums;
+  return first === 198 && (second === 18 || second === 19);
+}
+
+/**
  * 主机名是否**不用查 DNS** 就能判定指向本机/内网。
  *
  * ★ `*.local`（mDNS）与 `*.internal`（云厂商内部域名）也拦：它们在企业网/云上
@@ -199,6 +236,12 @@ export async function checkPublicUrl(rawUrl, options = {}) {
       return { ok: false, reason: `解析结果不可用（${host}）` };
     }
     if (isPrivateAddress(address)) {
+      /**
+       * 代理的 fake-ip（`198.18/15`）不算「指向内网」，见 `isProxyFakeAddress`
+       * 上面那段：它是「这台机器装了代理」的指纹，把它拦掉等于让插件一条外抓
+       * 都发不出去。
+       */
+      if (isProxyFakeAddress(address)) continue;
       return { ok: false, reason: `域名解析到内网地址（${host} → ${address}）` };
     }
   }
