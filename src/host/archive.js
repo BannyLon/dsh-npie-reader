@@ -55,17 +55,40 @@ export function originOf(value) {
 }
 
 /**
- * 去重用的 URL 归一：去掉 hash 与尾部斜杠，主机小写。
+ * 追踪参数：同一篇文章从不同渠道进来会带不同后缀，媒体名与广告 ID 都属于这类。
+ *
+ * ★ 为什么必须剥掉：旧实现把整个 `search` 原样拼进 key，于是同一条
+ *   `…/post/abc?utm_source=twitter` 与 `…/post/abc?utm_source=weibo` 是两个键 ——
+ *   订阅里就出现两条一模一样的文章。这是「偶尔重复条目」的根因。
+ * ★ 只列**确定无语义**的参数。`?page=`、`?id=`、`?p=` 这类会影响内容，不能碰。
+ */
+const TRACKING_PARAM = /^(utm_[a-z_]+|fbclid|gclid|dclid|msclkid|yclid|igshid|mc_cid|mc_eid|_hsenc|_hsmi|spm|scm|share_token|share_source|ref_src|ref_url|vero_id|oly_enc_id|oly_anon_id)$/i;
+
+/**
+ * 去重用的 URL 归一：去 hash、去尾斜杠、主机小写、剥追踪参数、`http` 与 `https` 视为同一篇。
  *
  * ★ 只用于**比较**，绝不用于写入。`/ep/a/` 与 `/ep/a` 是同一个页面，但把
  *   归一后的值写进条目会让「打开原文」跳到可能不存在的地址。
+ * ★ 协议统一成 https 而不是把 http 的也改成 https 去抓：只是让 `http://x/a` 与
+ *   `https://x/a` 撞成同一个键，实际抓取仍用条目里的原始地址。
+ * ★ 路径**大小写敏感**，不能 lowercase：`/Post/ABC` 与 `/post/abc` 在部分站点是两个页面。
  */
 export function normalizeEntryUrl(value) {
   try {
     const url = new URL(String(value));
     url.hash = '';
+    const web = url.protocol === 'http:' || url.protocol === 'https:';
+    if (web) {
+      url.protocol = 'https:';
+      url.hostname = url.hostname.replace(/^www\./i, '').toLowerCase();
+    }
+    for (const key of [...url.searchParams.keys()]) {
+      if (TRACKING_PARAM.test(key)) url.searchParams.delete(key);
+    }
     const path = url.pathname.replace(/\/+$/, '');
-    return `${url.origin.toLowerCase()}${path}${url.search}`;
+    const query = url.searchParams.toString();
+    const origin = web ? `https://${url.hostname}${url.port === '' ? '' : `:${url.port}`}` : url.origin.toLowerCase();
+    return `${origin}${path}${query === '' ? '' : `?${query}`}`;
   } catch {
     return String(value ?? '').trim();
   }

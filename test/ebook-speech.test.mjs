@@ -264,6 +264,57 @@ describe('A1 · 本机引擎真跑：一次一块、链式推进、stop 后不�
     synth.spoken[1].onend();
     assert.equal(synth.spoken.length, 2, 'stop 之后还在往后念 = 换页了声音没停');
   });
+
+  // 0.87.0：单块失败不再终止整本。旧写法一次 onerror 就 run=null + onError，
+  // 症状是「听一半突然停」，而 Chromium 的合成失败常常只波及某一块。
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+
+  it('★ 单块失败只跳过这一块，继续念下一块', async () => {
+    const synth = makeSynth();
+    const errors = [];
+    const engine = createLocalEngine({
+      synth,
+      makeUtterance: chunk => ({ text: chunk }),
+      onError: error => errors.push(error.message),
+    });
+    engine.play(['一', '二', '三'], { voice: CHINESE_VOICES[0], speed: 1 });
+    assert.equal(synth.spoken.length, 1);
+    synth.spoken[0].onerror({ error: 'synthesis-failed' });
+    await tick();
+    assert.equal(synth.spoken.length, 2, '单块失败后没有继续 —— 用户听到的是「读一半停了」');
+    assert.equal(synth.spoken[1].text, '二', '跳过失败块时必须前进，不能重念同一块');
+    assert.equal(errors.length, 0, '单块失败不该弹错误给用户');
+  });
+
+  it('★ 连续 3 块失败才判定真故障', async () => {
+    const synth = makeSynth();
+    const errors = [];
+    const engine = createLocalEngine({
+      synth,
+      makeUtterance: chunk => ({ text: chunk }),
+      onError: error => errors.push(error.message),
+    });
+    engine.play(['一', '二', '三', '四'], { voice: CHINESE_VOICES[0], speed: 1 });
+    for (let i = 0; i < 3; i += 1) {
+      synth.spoken.at(-1).onerror({ error: 'network' });
+      await tick();
+    }
+    assert.equal(errors.length, 1, '连续 3 块都失败却没有任何提示');
+    assert.equal(synth.spoken.length, 3, '第 3 块失败后不该再念第 4 块');
+  });
+
+  it('★ 自己 cancel 引发的 interrupted 不算失败', async () => {
+    const synth = makeSynth();
+    const errors = [];
+    const engine = createLocalEngine({
+      synth, makeUtterance: chunk => ({ text: chunk }), onError: error => errors.push(error.message),
+    });
+    engine.play(['一', '二'], { voice: CHINESE_VOICES[0], speed: 1 });
+    synth.spoken[0].onerror({ error: 'interrupted' });
+    await tick();
+    assert.equal(synth.spoken.length, 1, 'cancel 之后还在念 = 换页了声音没停');
+    assert.equal(errors.length, 0, '用户自己按停不该报错');
+  });
 });
 
 describe('A1 · 接线守卫：按钮真的接上了，且该停就停', () => {

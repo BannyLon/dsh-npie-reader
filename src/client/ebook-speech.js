@@ -223,9 +223,24 @@ export function createLocalEngine({ synth, makeUtterance, onState = () => {}, on
         utter.rate = speed;
         const found = (synth.getVoices?.() ?? []).find(item => item.name === voice?.name);
         if (found) utter.voice = found;
-        utter.onend = () => speakAt(at + 1);
-        utter.onerror = () => {
-          if (!token.cancelled) { run = null; onState('idle'); onError(new Error('这一段读不出来')); }
+        utter.onend = () => { token.failures = 0; speakAt(at + 1); };
+        // ★ 0.87.0：单块失败不再终止整本书的朗读。
+        //   旧写法一次 error 就 `run = null` + `onError`，症状是「听到一半突然停」；
+        //   而 Chromium 的合成失败常常只波及某一块。连续 3 块都不出来才认定是真故障。
+        utter.onerror = (event) => {
+          if (token.cancelled) return;
+          const reason = event?.error ?? '';
+          // 这两种是我们自己调 cancel 时产生的，不是失败
+          if (reason === 'interrupted' || reason === 'canceled') { run = null; onState('idle'); return; }
+          token.failures = (token.failures ?? 0) + 1;
+          if (token.failures >= 3) {
+            run = null;
+            onState('idle');
+            onError(new Error(`这一段读不出来（连续 3 段合成失败：${reason || '未知原因'}）`));
+            return;
+          }
+          // 让出一拍再念下一块：在 error 回调里同步 speak 常被浏览器丢掉
+          globalThis.setTimeout(() => speakAt(at + 1), 0);
         };
         synth.speak(utter);
       };

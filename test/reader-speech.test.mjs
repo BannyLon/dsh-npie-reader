@@ -125,6 +125,47 @@ describe('0.44：朗读 —— 怎么切块', () => {
   });
 });
 
+describe('0.87.0：中英混读的分句（旧实现漏了 ASCII 句点）', () => {
+  it('★ 英文按句点分句', () => {
+    const text = 'Hello there. This is a test. And a question?';
+    const chunks = speechChunks(text, 20);
+    assert.equal(chunks.length, 3, `英文没按句点切开：${JSON.stringify(chunks)}`);
+    assert.equal(chunks.join(''), text, '切块丢了字符');
+    assert.equal(chunks.every((chunk) => chunk.length <= 20), true);
+  });
+
+  it('★ 小数点 / 版本号 / 缩写后面的点不切', () => {
+    const cases = [
+      'It costs 3.14 dollars.',
+      'Version v0.86.6 is out.',
+      'Use e.g. this one.',
+      'Mr. Smith arrived.',
+    ];
+    for (const text of cases) {
+      const chunks = speechChunks(text, 100);
+      assert.equal(chunks.length, 1,
+        `在非句末的点上切开了：${text} → ${JSON.stringify(chunks)}`);
+    }
+  });
+
+  it('省略号不切出单字符块', () => {
+    const chunks = speechChunks('他走了……然后呢。', 100);
+    assert.equal(chunks.length, 1, `省略号被拆开了：${JSON.stringify(chunks)}`);
+    assert.equal(chunks.join(''), '他走了……然后呢。');
+  });
+
+  it('★ 英文长句硬切不把单词截断', () => {
+    const text = 'aaaa bbbb cccc dddd eeee ffff gggg';
+    const chunks = speechChunks(text, 12);
+    assert.equal(chunks.every((chunk) => chunk.length <= 12), true,
+      `有块超过上限：${chunks.map((chunk) => chunk.length).join('/')}`);
+    assert.equal(chunks.join(''), text, '切块丢了字符');
+    for (const chunk of chunks.slice(0, -1)) {
+      assert.equal(chunk.endsWith(' '), true, `单词被拦腰截断：${JSON.stringify(chunk)}`);
+    }
+  });
+});
+
 describe('0.44：朗读 —— 组件接线（纯函数表达不了的部分）', () => {
   it('★ 没有 speechSynthesis 时说清为什么，而不是静默什么都不发生', () => {
     assert.match(readerSource, /speechSynthesis/);

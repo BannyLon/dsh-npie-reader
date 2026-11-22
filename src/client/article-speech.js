@@ -140,19 +140,119 @@ export const SPEECH_SAMPLE = '这是一段试听：2026 年的秋天，AI 让阅
  *   半句，中间没有任何停顿。按句末标点切，块与块之间天然有停顿。
  * ★ 超长单句（没有标点的长段落）还是要硬切：不切就会超过上限，又回到截断。
  */
+/** 中文句末标点：后面可以直接接下一个字，不需要空白。 */
+const CJK_ENDERS = '。！？；';
+/** 紧跟句末标点的闭合符号，必须留在前一块，否则下一块以「」开头，念出来像漏字。 */
+const CLOSERS = '」』”’）)]}》〉';
+
+/**
+ * 常见英文缩写：后面那个 `.` 不是句末。
+ *
+ * ★ 不处理这一条的后果不是崩溃，是**多切一刀** —— 每多一块就多一次静默间隔，
+ *   用户听到的是「Dr. 之后莫名顿一下」。成本很低，顺手挡掉。
+ */
+const ABBREVIATIONS = new Set([
+  'mr', 'mrs', 'ms', 'dr', 'prof', 'sr', 'jr', 'st', 'vs', 'etc', 'eg', 'ie',
+  'no', 'fig', 'figs', 'al', 'inc', 'ltd', 'co', 'dept', 'est', 'vol', 'pp', 'approx',
+]);
+
+/**
+ * 一个 ASCII `.` 是不是句子结束。
+ *
+ * ★ 这是 0.87.0 修的那条主缺陷：旧实现的分句正则只有 `[。！？；!?;]`，**漏了 ASCII
+ *   句点**。英文段落因此完全不分句，只能走「按上限硬切」那条兜底，600 字一段英文
+ *   常在单词中间断开 —— 用户听到的是「中英混读断句不自然」。
+ * ★ 但也不能见 `.` 就切：`3.14`、`v0.86.6`、`e.g.`、`U.S.`、`J. K.` 一切就把词拆开。
+ *   所以两道闸门：后面必须是空白（挡住小数点/版本号），前面不能是缩写或单个大写字母。
+ */
+function periodEndsSentence(text, at) {
+  const next = text[at + 1] ?? '';
+  if (next !== '' && !/\s/.test(next)) return false;
+  const prev = text[at - 1] ?? '';
+  if (prev === '.') return (text[at - 2] ?? '') === '.'; // `...` 只有最后一点算句末
+  // `e.g.` / `i.e.` / `U.S.` 这类「字母.字母.」的缩写：第二个点不是句末
+  if (/(?:^|[^A-Za-z])[A-Za-z]\.[A-Za-z]$/.test(text.slice(0, at))) return false;
+  if (/[A-Za-z]/.test(prev)) {
+    const word = (text.slice(0, at).match(/([A-Za-z]+)$/) ?? [])[1] ?? '';
+    if (word.length === 1 && /[A-Z]/.test(word)) return false; // 人名缩写 `J.`
+    if (ABBREVIATIONS.has(word.toLowerCase())) return false;
+  }
+  return true;
+}
+
+/**
+ * 从 `at` 开始的一个句子边界有多长（0 = 这里不是边界）。
+ *
+ * ★ 必须返回「长度」而不是布尔：`……`、`?!`、`...` 都是**多个字符构成一个边界**。
+ *   按布尔处理会在每个字符上各切一次，切出 `?` `!` 这种单字符块。
+ */
+function boundaryLength(text, at) {
+  const ch = text[at];
+  if (ch === '.' ) return periodEndsSentence(text, at) ? 1 : 0;
+  const strong = CJK_ENDERS.includes(ch) || ch === '…' || ch === '!' || ch === '?' || ch === ';';
+  if (!strong) return 0;
+  let end = at + 1;
+  while (end < text.length) {
+    const next = text[end];
+    if (CJK_ENDERS.includes(next) || next === '…' || next === '!' || next === '?') { end += 1; continue; }
+    if (next === ';') { end += 1; continue; }
+    if (next === '.' && periodEndsSentence(text, end)) { end += 1; continue; }
+    break;
+  }
+  return end - at;
+}
+
+/**
+ * 朗读切块。
+ *
+ * ★ 为什么按句子边界切而不是定长切：定长切会把一句话拦腰截断，念出来是两个
+ *   半句，中间没有任何停顿。按句末标点切，块与块之间天然有停顿。
+ * ★ 超长单句（没有标点的长段落）还是要硬切 —— 但优先切在空白处，见 `pushHard`。
+ */
 export function speechChunks(text, maxLength = 600) {
   const limit = Number.isFinite(maxLength) && maxLength > 0 ? maxLength : 600;
   const clean = String(text ?? '').replace(/\s+/g, ' ').trim();
   if (clean === '') return [];
-  // 句末标点（含中文的 。！？；与英文的 .!?;）后面切开，标点留在前一块
-  const sentences = clean.split(/(?<=[。！？；!?;])\s*/).filter((part) => part.trim() !== '');
+
+  const sentences = [];
+  let start = 0;
+  for (let at = 0; at < clean.length; at += 1) {
+    const span = boundaryLength(clean, at);
+    if (span === 0) continue;
+    let end = at + span;
+    while (end < clean.length && CLOSERS.includes(clean[end])) end += 1;
+    // 中文句末后的空白直接丢掉（念出来正好一句接一句）；英文那句保留一个空格，
+    // 否则两块拼起来会变成 `Hello.World`，TTS 会把它当一个词。
+    const cjk = CJK_ENDERS.includes(clean[at]) || clean[at] === '…';
+    let stop = end;
+    if (cjk) while (stop < clean.length && /\s/.test(clean[stop])) stop += 1;
+    sentences.push(clean.slice(start, end));
+    start = stop;
+    at = stop - 1;
+  }
+  if (start < clean.length) sentences.push(clean.slice(start));
+
   const chunks = [];
   let current = '';
+  // 超长单句硬切：英文优先切在空白处，避免把单词拦腰截断（切点不能太靠前，
+  // 否则块会碎成一两个词，反而更卡）
+  const pushHard = (sentence) => {
+    let rest = sentence;
+    while (rest.length > limit) {
+      let cut = limit;
+      const space = rest.lastIndexOf(' ', limit - 1);
+      if (space > limit * 0.6) cut = space + 1;
+      chunks.push(rest.slice(0, cut));
+      rest = rest.slice(cut);
+    }
+    if (rest !== '') chunks.push(rest);
+  };
+
   for (const sentence of sentences) {
+    if (sentence === '') continue;
     if (sentence.length > limit) {
       if (current !== '') { chunks.push(current); current = ''; }
-      // 超长单句硬切
-      for (let at = 0; at < sentence.length; at += limit) chunks.push(sentence.slice(at, at + limit));
+      pushHard(sentence);
       continue;
     }
     if ((current + sentence).length > limit) {

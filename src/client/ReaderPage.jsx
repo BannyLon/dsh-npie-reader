@@ -2603,7 +2603,7 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     const picked = pickVoice(synth.getVoices(), parsed.voice);
     // 没有中文语音就明说，不退回英语：那会把中文念成噪音，比不念更糟
     if (!picked) { notify('这台机器没有中文语音，中文文章读不了', true); return; }
-    const run = { cancelled: false };
+    const run = { cancelled: false, failures: 0 };
     speechRun.current = run;
     const speakAt = (at) => {
       if (run.cancelled) return;
@@ -2613,8 +2613,26 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
       utter.rate = speechRateRef.current;
       const voice = synth.getVoices().find((item) => item.name === picked.name);
       if (voice) utter.voice = voice;
-      utter.onend = () => speakAt(at + 1);
-      utter.onerror = () => { if (!run.cancelled) { setSpeaking(false); speechRun.current = null; } };
+      utter.onend = () => { run.failures = 0; speakAt(at + 1); };
+      // ★ 0.87.0：一块读不出来就跳过继续，不再整篇停住。
+      //   旧写法在这里 `setSpeaking(false)` 直接收尾，症状是「读到一半没了」，
+      //   而 onerror 的常见触发（长文本、临时网络合成）往往是单块的，不是全局故障。
+      utter.onerror = (event) => {
+        if (run.cancelled) return;
+        const reason = event?.error ?? '';
+        // interrupted / canceled 是**我们自己**调 cancel 产生的（停止、换文章），
+        // 不是失败；当成失败会继续念下一篇的内容。
+        if (reason === 'interrupted' || reason === 'canceled') { setSpeaking(false); speechRun.current = null; return; }
+        run.failures += 1;
+        if (run.failures >= 3) {
+          setSpeaking(false);
+          speechRun.current = null;
+          notify(`朗读中断：连续 3 段合不出来（${reason || '合成失败'}）`, true);
+          return;
+        }
+        // 让出一拍再念下一块：Chromium 在 error 回调里同步 speak 常被直接丢掉
+        globalThis.setTimeout(() => speakAt(at + 1), 0);
+      };
       synth.speak(utter);
     };
     setSpeaking(true);
