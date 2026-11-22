@@ -6,6 +6,7 @@ import {
   overlapRetryPrompt,
   parseDigest,
 } from './digest-prompt.js';
+import { OUTLINE_SYSTEM_PROMPT, buildOutlineInput, parseOutline } from './reflection-outline.js';
 import { buildSynthesisPrompt, parseSynthesis } from './book-skill.js';
 import { buildEpisodeDigestPrompt } from './episode-digest.js';
 import { maskInlineTokens, restoreInlineTokens } from './translation-mask.js';
@@ -1312,6 +1313,40 @@ export async function generateBookSynthesis(ctx, { bookTitle = '', profile = 'no
   const parsed = parseSynthesis(raw);
   if (parsed === null) return null;
   return { ...parsed, generatedAt: new Date().toISOString() };
+}
+
+/**
+ * 一键生成读后感提纲（0.88.0）。
+ *
+ * 材料是**这本书自己的东西**：章节结构与逐章要点、用户划过的句子与批注、
+ * 他已经写下的半截正文。没有这些材料时（没做过逐章解读、也没划过线），
+ * 这一下只会得到一份通用骨架 —— 那正是界面里「套用模板」已经能做的事。
+ * 所以 `outlineReady` 由调用方（service）判，**不在这里**：这里只管「有材料就写」。
+ *
+ * ★ 只调**一次**，不重试格式。与 `generateChapterDigest` 不同：那次失败的代价是
+ *   「这一章的解读没了」，值得再试一次；这里失败的代价是「用户多点一下」，
+ *   而重试一次是再花一次钱去赌一个格式 —— 不划算。
+ *
+ * @param {{bookTitle?: string, author?: string, chapters?: Array, annotations?: Array, existing?: string}} material
+ * @param {object} [options] 透传给 `complete()`：`signal` / `model` / `timeoutMs` …
+ * @returns {Promise<{outline: string, headings: string[], sources: object, generatedAt: string}>}
+ *   输出不能用时抛 `error.outlineUnusable = true`（界面据此说「换一次试试」，
+ *   而不是把模型的原话贴给用户）。
+ */
+export async function generateReflectionOutline(ctx, material = {}, options = {}) {
+  const built = buildOutlineInput(material);
+  const raw = await complete(ctx, OUTLINE_SYSTEM_PROMPT, built.text, options);
+  const parsed = parseOutline(raw);
+  if (parsed === null) {
+    const error = new Error('模型这次给的提纲不完整（没有一个能用的结构），可以再点一次');
+    error.outlineUnusable = true;
+    throw error;
+  }
+  return {
+    ...parsed,
+    sources: { chapters: built.chapters, annotations: built.annotations, truncated: built.truncated },
+    generatedAt: new Date().toISOString(),
+  };
 }
 
 /**

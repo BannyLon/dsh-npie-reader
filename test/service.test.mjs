@@ -91,7 +91,7 @@ const REMOTE_METHODS = [
   'entryMeta', 'episodeDigest', 'fetchFullText',
   'generateVersion', 'getArticle', 'getSettings', 'getTranscript', 'getTranscriptTranslation', 'getVersionContent', 'listAiModels', 'listCatalog', 'listChannels', 'listEntries',
   'listSubscriptions', 'opmlExport', 'opmlImport', 'opmlPreview', 'prepareAsr', 'prepareChat', 'probeCatalogService',
-  'refresh', 'removeCatalogSource', 'removeSubscription', 'resolveSubscription', 'saveAsrConfig', 'saveSettings', 'searchArticles', 'setBookContext',
+  'refresh', 'removeCatalogSource', 'removeSubscription', 'resolveSubscription', 'saveAsrConfig', 'saveSettings', 'searchAll', 'searchArticles', 'setBookContext',
   'setCatalogHidden', 'setCatalogService', 'setDiaryContext', 'setFavorite', 'setHidden', 'setRead', 'setReadingContext', 'startTranscription', 'transcriptionStatus', 'translateTranscriptBatch', 'updateSubscription',
 ];
 

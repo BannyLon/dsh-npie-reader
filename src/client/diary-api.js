@@ -271,6 +271,41 @@ export async function fetchDiaryStats() {
   return await jsonRequest('/stats');
 }
 
+/**
+ * 阅读周报（0.88.0）。
+ *
+ * ★ `week` 只传 `2026-W47` 这种形状，**不传日期**：一周的边界由宿主按本地时区算
+ *   （`weekRange`）。客户端传一个日期的话，同一台机器上两个时区解释会打架 ——
+ *   而那种错不会报错，只会让某一周多一天或少一天。
+ * @param {string} [week] - 缺省 = 本机当前时间所在周。
+ * @param {number} [weeks] - 一次返回几周（侧栏列表用），默认 8。
+ */
+export async function fetchWeekly(week, weeks) {
+  const query = new URLSearchParams();
+  if (typeof week === 'string' && week !== '') query.set('week', week);
+  if (Number.isFinite(weeks) && weeks > 0) query.set('weeks', String(Math.trunc(weeks)));
+  const suffix = query.toString() === '' ? '' : `?${query.toString()}`;
+  // 周报要读 8 周的日记文件（最多 56 个）+ 划线目录，给比普通请求更长的超时。
+  return await jsonRequest(`/weekly${suffix}`, {}, { timeoutMs: 60_000 });
+}
+
+/**
+ * 读后感一键提纲（0.88.0）。
+ *
+ * ★ 超时给 90 秒：一次模型调用 + 最多 40 章的要点读取。默认 20 秒的话，
+ *   材料稍多的书就会稳定超时 —— 而用户看到的「请求超时」和「模型太慢」是两件事，
+ *   他只会觉得这个按钮坏了。
+ * ★ `draft` 要一起送：提纲要**接着**用户已经写的半截写，不是另起一套。
+ *   只送 bookId 的话，用户写了两段再点一次，模型会把那两段的思路绕开。
+ */
+export async function requestReflectionOutline(bookId, draft) {
+  return await jsonRequest('/reflection/outline', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ bookId, draft: typeof draft === 'string' ? draft : '' }),
+  }, { timeoutMs: 90_000 });
+}
+
 /** 在系统文件管理器里打开日记目录（`module` 决定打开 `daily/` 还是 `private/`）。 */
 export async function revealDiaryFolder(module = '') {
   return await jsonRequest('/reveal', {

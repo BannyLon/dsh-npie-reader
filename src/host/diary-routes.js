@@ -22,6 +22,8 @@
  *   GET    /search?q=…&limit=…        跨天搜
  *   GET    /export?private=1          全部日记（一次性出口；默认**不含**私密）
  *   GET    /stats                     多少天、占多少字节、目录在哪、密钥在哪
+ *   GET    /weekly?week=2026-W47      阅读周报（0.88.0；缺省=本机当前时间所在周）
+ *   POST   /reflection/outline        读后感一键提纲（0.88.0；body: { bookId, draft? }）
  *   GET    /secret                    密钥状态（会触发取密钥，只在真正需要时调）
  *   POST   /reveal                    在访达/资源管理器里打开日记目录
  *
@@ -121,6 +123,12 @@ function diaryErrorStatus(error) {
   // 0.86.0：模块名认不出是**请求不对**（400）。落到 500 的话，用户看到的是
   // 「插件坏了」，而真正要改的是那个 `module=` 参数。
   if (code === 'BAD_MODULE') return 400;
+  // 0.88.0：周键形状对但越界（`2026-W99`）也是**请求不对**。
+  if (code === 'BAD_WEEK') return 400;
+  // 0.88.0：提纲那两条 —— 书被移走了是 404（那本书真的不在了），
+  // 请求体不是 JSON 是 400（客户端写错了）。
+  if (code === 'BOOK_MISSING') return 404;
+  if (code === 'BAD_JSON') return 400;
   // 口令闸门：弱口令是**请求不对**（400），锁着是**没权限**（403），
   // 口令文件读不出来是**我们自己坏了**（500，别让用户去改口令试）。
   if (code === 'GATE_WEAK' || code === 'GATE_UNSET') return 400;
@@ -269,7 +277,7 @@ export function makeDiaryRoutes(handlers = {}) {
   const {
     read, readFull, append, updateEntry, removeEntry, listMonth, dashboard, search, tags, timeline, byBook, bySource,
     reflections, assets, removeDay,
-    exportAll, stats, secretStatus, reveal, gate,
+    exportAll, stats, secretStatus, reveal, gate, weekly, reflectionOutline,
     log = () => {},
   } = handlers;
 
@@ -372,6 +380,69 @@ export function makeDiaryRoutes(handlers = {}) {
         try {
           return sendJson(res, 200, { ok: true, ...(await stats()) });
         } catch (error) {
+          return fail(res, error);
+        }
+      }
+
+      // ---- GET /weekly?week=2026-W47&weeks=8 --------------------------------
+      //   阅读周报（0.88.0）。
+      //   ★ `week` 只接受 `YYYY-Www` 或**不给**（= 本机当前时间所在周）。
+      //     不给日期型入参是刻意的：日期的时区解释权在宿主（`weekRange` 用本地时区），
+      //     让客户端传一个 `2026-11-18T16:00:00Z` 就变成「按谁的时区算这一天」的争论。
+      //   ★ 形状不对 ⇒ 400，不静默退化成「本周」—— 用户点到某一周却看到本周的内容，
+      //     会以为那周的数据丢了。
+      if (parts.length === 1 && parts[0] === 'weekly') {
+        if (method !== 'GET') return methodNotAllowed(res);
+        const week = (url.searchParams.get('week') ?? '').trim();
+        if (week !== '' && !/^\d{4}-W\d{2}$/.test(week)) {
+          return sendJson(res, 400, { ok: false, error: `无效的周：${week}`, code: 'BAD_WEEK' });
+        }
+        if (typeof weekly !== 'function') {
+          return sendJson(res, 501, { ok: false, error: '周报没有接上' });
+        }
+        const weeks = Number(url.searchParams.get('weeks') ?? '') || undefined;
+        try {
+          return sendJson(res, 200, { ok: true, ...(await weekly({ week: week === '' ? undefined : week, weeks })) });
+        } catch (error) {
+          return fail(res, error);
+        }
+      }
+
+      // ---- POST /reflection/outline -----------------------------------------
+      //   读后感一键提纲（0.88.0）。body: `{ bookId, draft? }`
+      //   ★ 为什么挂在日记前缀下：它的**落点**是日记（用户把提纲接在正文里），
+      //     而材料来自书架。挂在书架那边的话，「写」这件事的入口就散在两条前缀里了。
+      //   ★ 这套调用要几十秒（一次模型调用 + 逐章读要点），所以客户端那边给的是
+      //     60 秒超时与「再点一次」；**这里不做后台任务 + 轮询** —— 与逐章解读不同，
+      //     这是一次性的小活，做轮询要多一整套状态机，收益只是一个进度条。
+      if (parts.length === 2 && parts[0] === 'reflection' && parts[1] === 'outline') {
+        if (method !== 'POST') return methodNotAllowed(res);
+        if (typeof reflectionOutline !== 'function') {
+          return sendJson(res, 501, { ok: false, error: '提纲生成没有接上' });
+        }
+        try {
+          // ★ `readBody` 回的是**已解析的对象**（空 body ⇒ `{}`）。这里不要再
+          //   `JSON.parse()` 一次 —— 那会把对象转成 "[object Object]" 再解析，
+          //   于是每一个正常请求都变成 400 BAD_JSON。第一版就是这么写的。
+          const body = await readBody(req);
+          const bookId = typeof body?.bookId === 'string' ? body.bookId.trim() : '';
+          if (bookId === '') {
+            return sendJson(res, 400, { ok: false, error: '缺少 bookId', code: 'BAD_BOOK' });
+          }
+          const draft = typeof body?.draft === 'string' ? body.draft.slice(0, 8000) : '';
+          return sendJson(res, 200, { ok: true, ...(await reflectionOutline({ bookId, draft })) });
+        } catch (error) {
+          // `readBody` 对坏 JSON 抛的是 `SyntaxError`，对「不是对象」抛的是一句
+          // 普通 Error —— 两者都是**请求不对**，一起归 400。落到 500 的话，
+          // 用户看到的是「插件坏了」，而真正要改的是那个请求体。
+          if (error instanceof SyntaxError || error?.message === 'body must be a JSON object') {
+            return sendJson(res, 400, { ok: false, error: '请求体不是合法的 JSON 对象', code: 'BAD_JSON' });
+          }
+          // 模型给了半成品：不是请求不对（400 会让用户去改按钮），也不是我们坏了
+          // （500 会让他以为插件崩了）。502 = 上游这次给的东西不能用，再试一次。
+          if (error?.outlineUnusable === true) {
+            return sendJson(res, 502, { ok: false, error: error.message, code: 'OUTLINE_UNUSABLE' });
+          }
           return fail(res, error);
         }
       }

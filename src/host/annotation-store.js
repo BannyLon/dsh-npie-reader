@@ -267,5 +267,43 @@ export function createAnnotationStore({ rootDir, log = () => {}, relocate } = {}
     return out;
   }
 
-  return { dir, fileOf, list, add, update, remove, counts };
+  /**
+   * 某个时间窗口内**新划的**条目，只给「谁、什么时候」，不带摘录正文。
+   *
+   * ★ 专供周报。为什么单独开一个方法而不是让周报调 `counts()` + `list()`：
+   *   ① `counts()` 只有总数，没有时间 —— 用它算「本周划了几条」是错的，
+   *      它会把三个月前划的 200 条全算进本周；
+   *   ② `list()` 会把 `quote`（用户划的原文，通常是整段）一起带出来，
+   *      而周报只需要「甲书 3 条」这个量。摘录跟着走一遍，等于把书里的内容
+   *      抄进周报 JSON，再被前端塞进 DOM —— 没有理由。
+   * ★ 返回 `null` 表示**目录读不到**（权限 / 盘掉线），与「这一周没划」的 `[]`
+   *   区分开：周报上「0 处」和「不知道」是两个不同的话。
+   */
+  async function recent({ from = 0, to = Number.MAX_SAFE_INTEGER } = {}) {
+    const { readdir } = await import('node:fs/promises');
+    let names;
+    try {
+      names = await readdir(dir);
+    } catch (error) {
+      if (error?.code === 'ENOENT') return [];
+      return null;
+    }
+    const low = Number(from) > 0 ? Number(from) : 0;
+    const high = Number(to) > 0 ? Number(to) : Number.MAX_SAFE_INTEGER;
+    const out = [];
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue;
+      const bookId = name.slice(0, -5);
+      if (!isBookId(bookId)) continue;
+      const items = await readAll(bookId).catch(() => []);
+      for (const item of items) {
+        const at = Number(item.createdAt) || 0;
+        if (at < low || at > high) continue;
+        out.push({ bookId, createdAt: at });
+      }
+    }
+    return out;
+  }
+
+  return { dir, fileOf, list, add, update, remove, counts, recent };
 }

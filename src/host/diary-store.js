@@ -1061,6 +1061,48 @@ export function createDiaryStore(options = {}) {
   }
 
   /**
+   * 反向链路计数（0.88.0，跨源检索的「双链」那一半）。
+   *
+   * 回答的是：「这篇文章 / 这本书下面，我写过几条？」
+   *
+   * ★ 为什么不是一个 key 一个调用（`bySource({ article: key })` 已经能做这件事）：
+   *   那个函数一次扫一遍全部日记。检索结果一屏二十条，二十次调用就是二十遍全扫
+   *   （本机 400 个文件 × 20）。这里一次扫完，用两个 Set 匹配 —— 二十次变一次。
+   *
+   * ★ 只认 `meta.article` / `meta.book`，**不按 `|source|` 那串文字猜**：
+   *   书名可以改、文章标题会被截断（`parseSource` 那套是给人看的），
+   *   拿它当外键就会漏。两个字段是写日记时确定落下的结构化引用。
+   *
+   * ★ 私密条目**不算**（`scanDays` 默认不读私密）。与 `bySource` 保持同一条边界：
+   *   周报、检索、工具三处口径一致，用户侧的「几条」才对得上。
+   *
+   * @param {{articleKeys?: string[], bookIds?: string[]}} input
+   * @returns `{ articles: { [key]: n }, books: { [bookId]: n }, scanned, truncated }`
+   */
+  async function linkCounts(input = {}) {
+    const articleKeys = new Set((Array.isArray(input.articleKeys) ? input.articleKeys : [])
+      .filter((key) => typeof key === 'string' && key !== ''));
+    const bookIds = new Set((Array.isArray(input.bookIds) ? input.bookIds : [])
+      .filter((id) => typeof id === 'string' && id !== ''));
+    const articles = {};
+    const books = {};
+    if (articleKeys.size === 0 && bookIds.size === 0) {
+      return { articles, books, scanned: 0, truncated: false };
+    }
+    const scan = await scanDays(({ entry }) => {
+      const article = entry?.meta?.article;
+      if (typeof article === 'string' && articleKeys.has(article)) {
+        articles[article] = (articles[article] ?? 0) + 1;
+      }
+      const book = entry?.meta?.book;
+      if (typeof book === 'string' && bookIds.has(book)) {
+        books[book] = (books[book] ?? 0) + 1;
+      }
+    });
+    return { articles, books, scanned: scan.scanned, truncated: scan.truncated };
+  }
+
+  /**
    * 全部日记正文里出现过的图片名（0.73.1，给 `diaryAssets.prune()` 当白名单）。
    *
    * ★ **只扫公开的 `daily/`**，这是有意的：私密条目禁止贴图（见 `DiaryComposer`
@@ -1243,6 +1285,7 @@ export function createDiaryStore(options = {}) {
     timeline,
     byBook,
     bySource,
+    linkCounts,
     reflectionIndex,
     exportAll,
     stats,

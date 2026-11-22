@@ -142,7 +142,7 @@ describe('搜索：跟着模块走', () => {
   });
 });
 
-describe('界面侧：四颗按钮真的把模块传下去了', () => {
+describe('界面侧：工具栏按钮真的把模块传下去了', () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..');
   const diaryApp = stripComments(readFileSync(join(root, 'src', 'client', 'DiaryApp.jsx'), 'utf8'));
   const api = stripComments(readFileSync(join(root, 'src', 'client', 'diary-api.js'), 'utf8'));
@@ -153,16 +153,29 @@ describe('界面侧：四颗按钮真的把模块传下去了', () => {
     assert.match(diaryApp, /searchDiary\(query, 40, moduleValue\)/, '搜索没带模块 —— 读后感里会搜到灵感');
   });
 
-  it('私密模块的下载走两次确认那条路', () => {
-    assert.match(diaryApp, /mod\.vis === 'private' \? exportWithPrivate\(\) : exportAll\(\)/,
-      '私密模块直接走 exportAll —— 明文会一次点击就落到下载目录');
+  it('私密模块**没有**一键导出明文的路径（明文只能走页脚那条两步确认）', () => {
+    // ★ 0.88.0 改了形态：私密日记顶栏那颗导出按钮**撤掉了**
+    //   （用户 2026-11-22：「我建议日记不要有这个下载」）。它原来走的三元
+    //   `mod.vis === 'private' ? exportWithPrivate() : exportAll()` 必须不存在 ——
+    //   还在，就说明按钮又挂回来了、且和公开模块共用同一条判断。
+    assert.doesNotMatch(diaryApp, /mod\.vis === 'private' \? exportWithPrivate\(\) : exportAll\(\)/,
+      '私密顶栏又挂回导出按钮了 —— 明文会一次点击就落到下载目录');
+    // 顶栏那颗只服务公开模块。
+    assert.match(diaryApp, /\{mod\.vis !== 'private' && \(/,
+      '顶栏导出没有按模块收口 —— 私密那一页又会出现一颗「导出」');
+    // 明文那条路确实还在，只挂在私密的页脚（解锁后 + 点两次）。
     assert.match(diaryApp, /fetchDiaryExport\(\{ includePrivate: true, module: 'private' \}\)/,
       '导出私密仍然夹带着公开日记');
   });
 
-  it('垃圾桶只在灵感模块出现（贴图入口只有灵感那条快速记录）', () => {
-    assert.match(diaryApp, /moduleValue === 'inspiration' && \(\s*<button[^>]*aria-label="清理没在用的图片"/,
+  it('「清理图片」只在灵感模块出现，且带文字说明', () => {
+    // 0.88.0：从侧栏工具栏搬到日期栏，与「删这一天」同一行。
+    assert.match(diaryApp, /moduleValue === 'inspiration' && \(\s*<button[^>]*className="npr-diary-prune"/,
       '垃圾桶进了读后感/私密 —— 一颗不可撤销的清理按钮摆在不相干的页面上');
+    // ★ 必须带文字：它和「删这一天」并排，两颗图标都是垃圾桶。
+    //   用户 2026-11-22：「这个放两个垃圾桶图标，很难区分，都用图标加文字说明」。
+    assert.match(diaryApp, /npr-diary-prune[\s\S]{0,400}?<span>清理图片<\/span>/,
+      '「清理图片」又变回一颗裸图标 —— 和右边那颗垃圾桶分不出来');
   });
 
   it('文件名说出这次导的是什么，不再写死「日记」', () => {

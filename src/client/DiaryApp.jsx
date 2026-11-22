@@ -62,7 +62,7 @@ import {
   appendDiaryEntry, downloadDiaryBundle, fetchDiaryBook, fetchDiaryDashboard, fetchDiaryDay, fetchDiaryExport,
   fetchDiaryGate, fetchDiaryMonth, fetchDiarySecret, fetchDiarySource, fetchDiaryStats, fetchDiaryTags, fetchDiaryTimeline,
   fetchReflectionIndex,
-  lockDiaryGate, pruneDiaryAssets, removeDiaryDay, removeDiaryEntry, revealDiaryFolder, searchDiary, setupDiaryGate, unlockDiaryGate,
+  lockDiaryGate, pruneDiaryAssets, removeDiaryDay, removeDiaryEntry, requestReflectionOutline, revealDiaryFolder, searchDiary, setupDiaryGate, unlockDiaryGate,
 } from './diary-api.js';
 import { fetchAnnotations, fetchBooks, fetchStates } from './library-api.js';
 import { BOOK_STATE_LABELS, formatBytes, hasFinished } from '../library.js';
@@ -80,6 +80,7 @@ import { placeRowMenu } from './row-menu.js';
 import { BookCover } from './BookCover.jsx';
 import { DiaryCalendar } from './DiaryCalendar.jsx';
 import { DiaryComposer } from './DiaryComposer.jsx';
+import { isPristineTemplate, mergeOutlineIntoDraft, needsTemplateConfirm } from './reflection-draft.js';
 import { formatExt } from './book-cover.js';
 import { ensureStyles } from './ReaderPage.jsx';
 import { ViewSwitch } from './ViewSwitch.jsx';
@@ -423,6 +424,14 @@ const AI_ENTRY_PROMPT = [
 const MODULE_BY_VALUE = new Map(DIARY_MODULES.map((item) => [item.value, item]));
 
 /**
+ * 模板里的那几个小标题。
+ *
+ * ★ 从 `REFLECTION_TEMPLATE` **推出来**，不另抄一份字面量：模板文案改一个字，
+ *   两边就对不上，而失败方式是「套用模板」按钮永远显示「未套用」，点一次插一遍。
+ */
+const REFLECTION_HEADINGS = REFLECTION_TEMPLATE.split('\n').filter((line) => line.startsWith('## '));
+
+/**
  * 五档心情。灵感与私密两个模块共用。
  *
  * ★ 抽成组件而不是复制两遍：改一次配色就得记得改两处，而「只改了一处」在界面上
@@ -470,6 +479,22 @@ export function DiaryApp({
     DIARY_MODULES.some((item) => item.value === intent?.module) ? intent.module : 'inspiration'
   ));
   const mod = MODULE_BY_VALUE.get(moduleValue) ?? DIARY_MODULES[0];
+  /**
+   * 周报**暂时没有界面入口**（0.88.0）。
+   *
+   * ★ 用户 2026-11-22：「周报功能我没想好，而且你设计的简直丑到爆炸，极度的不好看
+   *   也不实用。该功能先保留接口，不要显示在 UI 界面上，等我想成熟了再继续。」
+   *   所以这一版做的是**撤界面、留接口**：
+   *     保留 → `src/host/weekly.js`、`service.weeklyReport()`、`GET /weekly`、
+   *            `diary-api.fetchWeekly()`、`WeeklyReport.jsx` 本体与它的 42 条测试；
+   *     撤掉 → 工具栏那颗「阅读周报」按钮、`weeklyOpen` 状态、整页早返回。
+   *   `WeeklyReport.jsx` 现在没有任何生产调用点，esbuild 会整块 tree-shake 掉，
+   *   不进产物；它留在仓库里是为了下一次接着改，不是死代码。
+   *
+   * ★ 方向也没定：现有那张周报把「读 / 书 / 写 / 划 / 论文」混成一张，而记录本身
+   *   是**三个独立模块**（灵感 / 私密日记 / 读后感）。用户说的「周报肯定是各管各的」
+   *   意味着它将来必须按模块拆开 —— 这件事等他定了形态再做，不要先按猜的写一版。
+   */
 
   /**
    * 开场说明页（灵感「寸心拾遗 · 思想原点」0.53.0；私密「私密日记 · 只在本机」0.56.2）。
@@ -666,6 +691,28 @@ export function DiaryApp({
     localStorage.setItem('npr.diaryMarksOpen', next ? '1' : '0');
   };
   const [refDraft, setRefDraft] = useState('');
+  /**
+   * 「生成提纲」（0.88.0）。
+   *
+   * ★ 失败要留一条**能看见**的错误：这个按钮点下去要等十几秒，失败后什么都不显示的话，
+   *   用户会以为「点了没反应」，然后连点五下（五次模型调用）。
+   * ★ 用 `outlineBusy` 挡住重复点击，而不是靠按钮 `disabled` 之外的状态 ——
+   *   两个窗口各点一次的话，后到的结果会把先到的覆盖掉。
+   */
+  const [outlineBusy, setOutlineBusy] = useState(false);
+  const [outlineError, setOutlineError] = useState('');
+  /**
+   * 「换成模板」的上膛状态（0.88.0 定稿）。
+   *
+   * ★ 为什么需要它：模板与提纲是**两套等价的结构**，不是「骨架 + 内容」。正文里已经
+   *   有提纲（或用户自己写的字）时再点「套用模板」，按「接在末尾」的规矩就会得到
+   *   两套小标题 —— 用户 2026-11-22 的截图正是这个：上面四节提纲，下面又冒出
+   *   「一句话总结 / 核心收获 / 行动指南 / 金句摘录」四个空标题。
+   *   所以这条路径改成**替换**；而替换会删掉正文里已有的东西，必须两步（同「导出
+   *   私密明文」）：第一次只是上膛，按钮变「确认替换？」，再点一次才真换。
+   * ★ 正文为空时**不用**上膛：那里没有任何东西可删，多一次点击只是刁难。
+   */
+  const [templateArmed, setTemplateArmed] = useState(false);
 
   const [exportArmed, setExportArmed] = useState(false);
   // 0.71.0：四个视图共用一份宽度与一个 key（见 sidebar-width.js）。
@@ -805,13 +852,16 @@ export function DiaryApp({
    */
   const insertRef = useRef(null);
   /**
-   * 正文里是否已经带着模板的四个小标题。
+   * 正文里是否已经带着模板的**全部**小标题。
    *
    * ★ 不用 `refDraft.trim() !== ''` 判断：那样「写了两句话再套模板」和
-   *   「已经套过又点一次」长得一模一样 —— 而后者会把四个标题**再插一遍**，
+   *   「已经套过又点一次」长得一模一样 —— 而后者会把标题**再插一遍**，
    *   正文里于是出现两套「## 一句话总结」。按钮现在按这个标志变成「已套用」并禁用。
+   * ★ 必须**四个都在**才算（0.88.0）：原来只判「包含 ## 一句话总结」，而模型给的
+   *   提纲里恰好也可能有一节叫「一句话总结」—— 于是提纲落进正文之后，按钮立刻变成
+   *   「已套用」并禁用，用户反而回不到模板（而那时候正是他想恢复结构的时候）。
    */
-  const refTemplated = refDraft.includes('## 一句话总结');
+  const refTemplated = REFLECTION_HEADINGS.every((line) => refDraft.includes(line));
   /** 中间那张解锁卡。侧栏「那年今日」锁着时把人带到这里（见 `askUnlock`）。 */
   const gateRef = useRef(null);
 
@@ -1071,6 +1121,27 @@ export function DiaryApp({
   }, [moduleValue, monthKey, selected, gate.unlocked]);
   useEffect(() => { fetchDiaryStats().then(setStats).catch(() => {}); }, [day.chars, day.privateCount]);
 
+  /*
+   * 正文一变就撤销「换成模板」的上膛。
+   *
+   * ★ 上膛的语义是「我下一秒就要用模板换掉这里」，只要用户改了一个字，这个前提
+   *   就不成立 —— 留着上膛等于把他**新写的**那句也算进「可以删的」。
+   * ★ 只在 `refDraft` 变化时跑；点第一次上膛本身不改正文，所以不会被自己清掉。
+   */
+  useEffect(() => { setTemplateArmed(false); }, [refDraft]);
+
+  /*
+   * 上膛 4 秒内没有第二次点击就自己撤销。
+   *
+   * ★ 没有这条，上膛会一直挂着：用户看一眼、去改别的设置、回来随手一点 —— 那一下
+   *   就是「替换」，而他早忘了自己上过膛。有超时的话，最坏情况只是白点一次。
+   */
+  useEffect(() => {
+    if (!templateArmed) return undefined;
+    const timer = setTimeout(() => setTemplateArmed(false), 4000);
+    return () => clearTimeout(timer);
+  }, [templateArmed]);
+
   /**
    * 从「阅读 → 读完」那一行的「写读后感」过来：**直接打开那本书**。
    *
@@ -1099,6 +1170,23 @@ export function DiaryApp({
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [intent?.bookId]);
+
+  /**
+   * 跨源检索点到「日记」结果：直接落到那一天（0.88.0）。
+   *
+   * ★ 也要把**月份**一起拨过去：日记页左上是日历，`selected` 变了而月份还停在本月时，
+   *   用户会看到「右边的正文是三个月前的、左边的日历停在本月」—— 两处各说各话。
+   * ★ 模块走白名单：检索结果带 `module`，但传错一个字就会让 `mod.kind` 变 undefined
+   *   （下面几十处在用它），症状是整页白屏。退回灵感模块至少能用。
+   */
+  useEffect(() => {
+    if (typeof intent?.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(intent.date)) return;
+    setModuleValue(DIARY_MODULES.some((item) => item.value === intent.module) ? intent.module : 'inspiration');
+    setSelected(intent.date);
+    const parsed = parseMonthKey(intent.date.slice(0, 7));
+    if (parsed !== null) setMonth(parsed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intent?.date, intent?.at]);
 
   // 模块切换时才拉它自己的数据（不在切模块时把所有东西都拉一遍）。
   useEffect(() => {
@@ -1384,6 +1472,86 @@ export function DiaryApp({
     if (!ok) return;
     setRefDraft(REFLECTION_TEMPLATE);
     notify?.(`已把《${book.title}》的读后感记下来`);
+  }
+
+  /**
+   * 生成读后感提纲（0.88.0）。
+   *
+   * ★ **不覆盖**用户已经写的字：正文为空就放进去，非空就接在末尾，并且在提示里
+   *   说清「已接在末尾」。覆盖是不可逆的 —— 用户可能写了三段才想起来点这一下。
+   * ★ 追加时先补 `\n\n`：贴着最后一行接上去的话，Markdown 会把它们并成同一段。
+   */
+  async function generateOutline() {
+    if (outlineBusy) return;
+    if (!book?.id) { setOutlineError('先在左边选一本书'); return; }
+    setOutlineBusy(true);
+    setOutlineError('');
+    /*
+     * 正文还是**原封不动的模板**吗（用户一个字没写）？
+     *
+     * ★ 用户 2026-11-22 的截图：先「套用模板」再「生成提纲」，正文里于是有
+     *   两套结构 —— 模板的「一句话总结 / 核心收获 / 行动指南 / 金句摘录」，
+     *   加上提纲自己的章节，「一句话总结」在屏幕中间出现两次。他的原话是
+     *   「如果同时使用的话，就会让输入框里很乱」。
+     * ★ 那四个空标题里一个字都不是用户写的，所以这种情况**替换**是安全的；
+     *   只要他动过（删了一节、或填了一句话），`isPristineTemplate` 就不再成立，
+     *   走原来的追加 —— 他的字一个都不能少（见 `reflection-draft.js` 文件头）。
+     * ★ 取 `refDraft` 的闭包值而不是在 updater 里判断：`replaceApplied` 要用来选
+     *   提示语，而 updater 必须保持纯、执行时机也不保证。
+     */
+    const replaceApplied = isPristineTemplate(refDraft, REFLECTION_TEMPLATE);
+    try {
+      const result = await requestReflectionOutline(book.id, refDraft);
+      const outline = String(result?.outline ?? '').trim();
+      if (outline === '') throw new Error('模型这次没有给出提纲，可以再点一次');
+      // 「不覆盖已写的字」这条判据在 `mergeOutlineIntoDraft()` 里，带单测
+      // （`test/reflection-draft.test.mjs`）—— 它碰的是用户正文，不能只在 JSX 里内联。
+      setRefDraft((current) => mergeOutlineIntoDraft(current, outline, { template: REFLECTION_TEMPLATE }));
+      // `thin` 是宿主如实报的「材料不多」（没做过逐章解读、也没划过线）。
+      // 不说出来的话，用户看到一份比较泛的提纲，会以为这个功能就这水平。
+      if (replaceApplied) {
+        notify?.('模板换成了这本书的提纲 —— 想恢复四个空标题，再点「套用模板」');
+      } else {
+        notify?.(result?.thin
+          ? '提纲已生成（材料不多，先读几章会更准）'
+          : '提纲已生成，接着往下写就行');
+      }
+    } catch (failure) {
+      setOutlineError(failure?.message ?? String(failure));
+    } finally {
+      setOutlineBusy(false);
+    }
+  }
+
+  /**
+   * 「套用模板」/「换成模板」（0.88.0 定稿）。
+   *
+   * ★ 语义只有一条：**模板是整份骨架，不是补丁**。
+   *   - 正文空 ⇒ 装上（一次点击）；
+   *   - 正文里已经是完整模板 ⇒ 按钮显示「已套用」并禁用（判据 `refTemplated`）；
+   *   - 正文里有别的东西（一份提纲、或他手打的三段）⇒ **替换**，两步确认。
+   * ★ 为什么不再「接在末尾」：上一版是为了照顾「写了三段才想起来点模板」，但代价是
+   *   正文里永远出现两套小标题 —— 用户 2026-11-22 的原话是「如果同时使用的话，
+   *   就会让输入框里很乱」。真想把两式都留着的人可以先把正文复制出去；而想恢复
+   *   骨架的人每次都得手动删掉一半，后者才是常态。
+   * ★ 替换会删掉正文，所以走两步（与「导出私密明文」同一种规矩）：第一次只是上膛，
+   *   按钮变「确认替换？」，再点一次才真换。中途改一个字，上膛立刻撤销（见上面那条 effect）。
+   */
+  function applyTemplate() {
+    if (refTemplated) return;
+    // 「有没有东西会被删」这条判据在 `needsTemplateConfirm()` 里，带单测
+    // （`test/reflection-draft.test.mjs`）—— 它守的是「一次点击能删掉多少」。
+    if (!needsTemplateConfirm(refDraft, REFLECTION_TEMPLATE)) {
+      setRefDraft(REFLECTION_TEMPLATE);
+      return;
+    }
+    if (!templateArmed) {
+      setTemplateArmed(true);
+      return;
+    }
+    setRefDraft(REFLECTION_TEMPLATE);
+    setTemplateArmed(false);
+    notify?.('正文换成了四个空标题（原来的内容已替换）');
   }
 
   async function removeAt(entry) {
@@ -2260,6 +2428,8 @@ export function DiaryApp({
   /** 顶栏空着（两张开场页 / 读后感说明页）：只剩一条 44px 的拖动行。 */
   const bareHead = !showHead;
 
+  /* 周报的整页早返回已随界面一起撤掉（0.88.0，见上面 `weeklyOpen` 那一段注释）。 */
+
   return (
     /*
      * ★ `has-companion` 从 `chat` 改成 `aiOpen || chat`：面板**一打开**就该占位置。
@@ -2291,11 +2461,11 @@ export function DiaryApp({
                 ? { ...current, open: false, query: '', hits: [], scanned: 0, truncated: false }
                 : { ...current, open: true }))}><Icon name="search" /></button>
             {/*
-              ★ 这四颗按钮原来对三个模块**完全一样**（0.86.0 修）。用户 2026-11-19：
+              ★ 这**两颗**按钮原来对三个模块完全一样（0.86.0 修）。用户 2026-11-19：
                 「不管是切换那个，点击文件夹图标打开的都是这个文件夹」「明明我切到
                 读后感了，点击下载下载的还是日记」。
-              ★ 现在每颗都带当前模块：搜索按 `kind` 收窄、导出按 `module` 走、
-                文件夹按 `vis` 分到 `daily/` 或 `private/`。
+              ★ 现在每颗都带当前模块：文件夹按 `vis` 分到 `daily/` 或 `private/`、
+                导出按 `module` 走。
               ★ 文案要**如实**：灵感与读后感同处一个 `.md`，所以两档的文件夹是同一个，
                 硬写两套路径会是假话。差别在「选中哪一份」。
             */}
@@ -2305,22 +2475,22 @@ export function DiaryApp({
                 : `打开${mod.label}文件所在文件夹（灵感与读后感存在同一个 .md 里）`}
               aria-label={mod.vis === 'private' ? '打开私密日记文件夹' : `打开${mod.label}文件所在文件夹`}
               onClick={() => void reveal()}><Icon name="folder" /></button>
-            <button type="button" className="npr-icon"
-              title={mod.vis === 'private'
-                ? '导出私密日记明文（要点两次）'
-                : `导出${mod.label}（单文件 Markdown）`}
-              aria-label={`导出${mod.label}`}
-              /* ★ 私密走两次确认那条路（`exportWithPrivate`）：它是唯一会往下载目录写
-                 明文的地方，一次点击就能造成不可逆后果。 */
-              onClick={() => void (mod.vis === 'private' ? exportWithPrivate() : exportAll())}><Icon name="download" /></button>
-            {/* 清理没在用的图（0.73.1）。★ 标题必须写明「不会动日记内容」：
-                一颗垃圾桶图标摆在日记页顶栏，最自然的误读是「它会删我的日记」。
-                ★ 只在灵感模块出现（0.86.0）：贴图入口只有灵感那条快速记录
-                （`DiaryComposer` 明确不支持贴图），摆在读后感里是一颗与这一页
-                毫无关系的按钮，而且它**不可撤销** —— 不相干的按钮不该挨着它。 */}
-            {moduleValue === 'inspiration' && (
-              <button type="button" className="npr-icon" title="清理没在用的图片（只删没有任何灵感引用的图，不会动日记内容）"
-                aria-label="清理没在用的图片" onClick={() => void pruneAssets()}><Icon name="trash-2" /></button>
+            {/*
+              导出（0.88.0：私密模块**没有**这一颗）。
+              ★ 用户 2026-11-22：「我建议日记不要有这个下载」。两条独立的理由：
+                ① 语义不对 —— 私密日记的落点就是本机那个加密文件，而「导出」写的是
+                   **明文**，它其实是「解密一份副本到下载目录」，不是「备份」；
+                ② 那颗按钮的失败形态很差：锁着时点它只回一句「先解锁再导出」，
+                   而错误行在三个模块间共用，切到灵感/读后感还挂着（同一天的
+                   截图 bug）。私密模块自己有更合适的入口 —— 页脚的
+                   「导出私密明文」，它只在解锁后出现，且要点两次。
+              ★ 所以顶栏这一颗只服务灵感与读后感。
+            */}
+            {mod.vis !== 'private' && (
+              <button type="button" className="npr-icon"
+                title={`导出${mod.label}（单文件 Markdown）`}
+                aria-label={`导出${mod.label}`}
+                onClick={() => void exportAll()}><Icon name="download" /></button>
             )}
           </div>
 
@@ -2334,7 +2504,22 @@ export function DiaryApp({
                  *   「读后感页上列着灵感条目」，点进去跳到那一天，一头雾水。
                  *   这比「重新搜一遍」更可预期：换模块 = 换上下文，旧上下文作废。
                  */
-                onClick={() => { setModuleValue(item.value); setMood(''); setAiError(''); setRevealed(new Set()); clearFilter(); }}>{item.label}</button>
+                onClick={() => {
+                  setModuleValue(item.value); setMood(''); setAiError(''); setRevealed(new Set()); clearFilter();
+                  /*
+                   * ★ 换模块必须**连错误行一起清**（0.88.0 修的真 bug）。
+                   *   用户 2026-11-22 的截图：在「私密日记」点下载，红字回
+                   *   「私密日记还是锁着的，先解锁再导出」；切到「灵感速记」和
+                   *   「读后感」之后，这行红字**还在**，而这页根本没有私密日记。
+                   *   根因是 `error` 是一个跨模块共用的 state，而这次换模块只清了
+                   *   `aiError`。三个模块是独立的操作页，上一位留下的报错没有理由
+                   *   跟着人走 —— 那是串档。
+                   * ★ `exportArmed`（「上膛」状态）同理：它属于「导出私密明文」那条
+                   *   两步确认，留在别的模块里意味着下一次点击会**少一次确认**。
+                   */
+                  setError('');
+                  setExportArmed(false);
+                }}>{item.label}</button>
             ))}
           </div>
 
@@ -2852,6 +3037,35 @@ export function DiaryApp({
                   <p className="npr-diary-sub">{headSub}</p>
                 </div>
                 {/*
+                  * 清理没在用的图（0.73.1 引入，0.88.0 从侧栏工具栏搬到这里）。
+                  *
+                  * ★ 用户 2026-11-22：「灵感速记功能图标太多了，直接影响了侧边栏的
+                  *   宽度，建议『删除』是不是可以放右边，和『删这一天』一行。」
+                  *   侧栏那一条要同时装下 ViewSwitch 的四颗视图图标、搜索、文件夹、
+                  *   导出 —— 再挂一颗垃圾桶，工具栏就比 268px 的侧栏还宽，把整列挤变形。
+                  * ★ 搬过来之后语义也更顺：它删的是**图**，而这一行写的就是「这一天」。
+                  * ★ 必须**带文字**（0.88.0 定稿时改的）。第一版只画一颗裸图标，与右边
+                  *   「删这一天」并排 —— 用户 2026-11-22 的截图里两颗垃圾桶一模一样，
+                  *   他的原话是「这个放两个垃圾桶图标，很难区分，都用图标加文字说明」。
+                  *   同一行里出现两个同形状的删除图标时，只有文字能承担区分；把说明
+                  *   藏进 tooltip 等于两条都要靠悬停才认得出来。
+                  * ★ 标题必须写明「不会动日记内容」：一颗垃圾桶摆在日历旁，最自然的
+                  *   误读是「它会删我的日记」。
+                  * ★ 仍然**只在灵感模块**（0.86.0）：贴图入口只有灵感那条快速记录
+                  *   （`DiaryComposer` 明确不支持贴图），摆在读后感里是一颗与这一页
+                  *   毫无关系的按钮，而且它**不可撤销** —— 不相干的按钮不该挨着它。
+                  * ★ 代价说清楚：开场页（`showHead` 为假）没有这一行，那颗按钮也就
+                  *   不存在，与「删这一天」完全同一条规矩 —— 它本来就只在有记录时才有意义。
+                  */}
+                {moduleValue === 'inspiration' && (
+                  <button type="button" className="npr-diary-prune"
+                    title="清理没在用的图片（只删没有任何灵感引用的图，不会动日记内容）"
+                    onClick={() => void pruneAssets()}>
+                    <Icon name="trash-2" size={13} />
+                    <span>清理图片</span>
+                  </button>
+                )}
+                {/*
                   * 「删这一天」（0.75.0）。
                   *
                   * ★ 位置：日期栏、AI 按钮**左边**。它说的是「这一天」，所以只能长在
@@ -3103,13 +3317,38 @@ export function DiaryApp({
                       header={(
                         <div className="npr-diary-tplbar">
                           <span className="npr-diary-tplbar-label">结构化读后感模板</span>
-                          <button type="button" className="npr-diary-tplbtn" disabled={refTemplated}
-                            title={refTemplated
-                              ? '正文里已经有这四个小标题了。想恢复结构，把它们补回来即可 —— 再点一次会把模板重复插一遍。'
-                              : '把「一句话总结 / 核心收获 / 行动指南 / 金句摘录」四个小标题填进正文'}
-                            onClick={() => setRefDraft((current) => (current.trim() === '' ? REFLECTION_TEMPLATE : `${current.replace(/\s+$/, '')}\n\n${REFLECTION_TEMPLATE}`))}>
-                            {refTemplated ? '已套用' : '套用模板'}
+                          {/*
+                            生成提纲（0.88.0）。位置在「套用模板」**左边**：两者都会往正文
+                            里放结构，但这一颗会真去读这本书的章节要点与划线，代价高、也更
+                            贴题 —— 挨在一起，让用户一眼看出「模板是空的，提纲是这本书的」。
+                            ★ 两者**不叠加**（0.88.0 定稿）：正文还是没动过的空模板时，
+                              提纲会把它替掉而不是接在末尾 —— 否则屏幕里会出现两套结构
+                              （「一句话总结」出现两次）。判据在 `isPristineTemplate()`。
+                            ★ 生成中显示「正在生成…」而不是只转个圈：这一步可能十几秒，
+                              没有文字的话用户会以为点了没反应。
+                          */}
+                          <button type="button" className="npr-diary-tplbtn" disabled={outlineBusy || !book?.id}
+                            title={outlineBusy
+                              ? '正在读这本书的章节要点和你划过的句子…'
+                              : '按这本书的章节要点与你划过的句子，生成一份能直接往下写的提纲。已经写下的字不会被覆盖；如果正文还是没动过的空模板，提纲会替掉它，不会叠成两套结构。'}
+                            onClick={() => void generateOutline()}>
+                            {outlineBusy ? '正在生成…' : '生成提纲'}
                           </button>
+                          <button type="button" className={`npr-diary-tplbtn${templateArmed ? ' is-armed' : ''}`}
+                            disabled={refTemplated}
+                            title={refTemplated
+                              ? '正文里已经有这四个小标题了 —— 再点一次会把模板重复插一遍，所以这里禁用了。'
+                              : templateArmed
+                                ? '再点一次：正文里现有的内容会被四个空标题替换掉。改一个字、或者等一下不点，就取消。'
+                                : refDraft.trim() === ''
+                                  ? '把「一句话总结 / 核心收获 / 行动指南 / 金句摘录」四个小标题装进正文。它是通用骨架；「生成提纲」是这本书专属的，点了会把它替掉。'
+                                  : '正文里已经有内容（提纲，或你写的字）。点一下会把正文换成四个空标题 —— 要点两次，第一次只是确认这一步。'}
+                            onClick={applyTemplate}>
+                            {refTemplated ? '已套用' : templateArmed ? '确认替换？' : refDraft.trim() === '' ? '套用模板' : '换成模板'}
+                          </button>
+                          {outlineError !== '' ? (
+                            <span className="npr-diary-tplerr" role="alert">{outlineError}</span>
+                          ) : null}
                         </div>
                       )}
                       actions={(

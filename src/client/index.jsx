@@ -38,6 +38,13 @@ const TYPERT_REMOTE = {
     method('listChannels', false),
     method('listEntries'),
     method('searchArticles'),
+    /*
+     * 0.88.0：跨源检索。走 Remote 而不是日记那条 HTTP 前缀 —— 它是一次查询、
+     * 不读文件流，而结果的四类要一起回来（分开取就会有「有的组先到、有的组转圈」）。
+     * ★ 参数仍是 `{ request }` 一个对象：`method()` 默认声明 1 个必填 request，
+     *   传 `false` 会变成「不需要参数」，调用侧就给不了查询词了。
+     */
+    method('searchAll'),
     method('getArticle'),
     method('getTranscript'),
     method('getTranscriptTranslation'),
@@ -136,6 +143,11 @@ function registerReader(ctx) {
     listChannels: () => call('listChannels'),
     listEntries: (params) => call('listEntries', params),
     searchArticles: (params) => call('searchArticles', params),
+    /**
+     * 跨源检索（0.88.0）：一次查订阅 / 书 / 论文 / 日记。
+     * ★ `limit` 是**每一路**的上限，不是总数 —— 四路各自 5 条，面板才装得下。
+     */
+    searchAll: (params) => call('searchAll', params),
     getArticle: (key) => call('getArticle', { key }),
     /**
      * 单集字幕（P0）。`refresh` 是「忽略缓存重抓」—— 只由面板上的「重新获取」传 true。

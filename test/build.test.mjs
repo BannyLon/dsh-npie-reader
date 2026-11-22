@@ -234,11 +234,31 @@ describe('书架（电子书）的接线', () => {
      *     `SettingsPage` / `dialogs.jsx` 的接线；host 侧五个新模块（feed-resolve /
      *     google-translate / asr-ollama / asr-cloud / episode-digest）**不进 client bundle**；
      *   - 新闸 1,860,000，余量 ≈ 66 KB。下一次再要抬，请照旧先分开量。
+     *
+     * ★ 0.88.0 抬到 1,920,000（读后感一键提纲 + 跨源检索）。照旧先量再抬：
+     *   - 抬闸当轮实测 **1,889,861 字符**（旧闸 1,860,000，超出 **29,861**，1.6%）；
+     *   - 分开量（esbuild metafile 探针，临时文件未入库）：**`node_modules` 命中 0 个
+     *     input、0 字节** ⇒ 没有依赖被内联，涨的全是第一方；
+     *   - 差额对得上的是**当轮新增的两个客户端文件**：`WeeklyReport.jsx` 17.4 KB +
+     *     `SearchPalette.jsx` 8.5 KB + `reflection-draft.js` 0.3 KB = **26.2 KB**，
+     *     其余 ≈ 3.7 KB 是 `DiaryApp` / `ReaderPage` / `PapersApp` / `index.jsx` 的接线
+     *     与那段 CSS（`refinements.css` 252.1 KB）；
+     *   - 按模块量仍然平摊，**没有单个爆掉的模块**（最大 `refinements.css` 252.1 KB）；
+     *     新组件的体积大头是中文界面文案 —— esbuild 把汉字转成 `\uXXXX`，
+     *     一个字 6 字节，这也是本项目一贯的取舍：**说人话优先于省字节**；
+     *   - 宿主侧三个新模块（`weekly.js` / `search-all.js` / `reflection-outline.js`）
+     *     **不进 client bundle**，所以没算在这里；
+     *   - **0.88.0 定稿时周报界面已撤下**（用户 2026-11-22：「该功能先保留接口，不要
+     *     显示在 UI 界面上」）⇒ `WeeklyReport.jsx` 没有生产调用点，被 tree-shake 掉，
+     *     实测回落到 **1,851,602 字符**（比抬闸当轮少 38,259）。
+     *   - **闸不跟着回降**：1,920,000 对 1,851,602 的余量是 ≈ 68 KB，回降到 1,860,000
+     *     只剩 ≈ 8 KB —— 下一次动任何一页都会红，那种闸只会教人「先去把数字改大」。
+     *     下一次再要抬，请照旧先分开量。
      */
     const foreign = foreignBytes(text);
     assert.equal(foreign < 4096, true,
       `产物里有 ${(foreign / 1024).toFixed(0)} KB 非第一方代码 —— 有依赖被内联了`);
-    assert.ok(text.length < 1_860_000,
+    assert.ok(text.length < 1_920_000,
       `client.js 有 ${(text.length / 1024).toFixed(0)} KB，第一方代码已经到荒谬的量级`);
   });
 

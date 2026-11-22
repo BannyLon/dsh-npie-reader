@@ -194,7 +194,7 @@ function PaperDialog({ mode, onClose, onImport, onSearch, notify }) {
   );
 }
 
-export function PapersApp({ reading, onExit, notify, api, SessionProvider, renderSlot }) {
+export function PapersApp({ reading, onExit, notify, api, SessionProvider, renderSlot, intent, onIntentDone, onOpenSettings }) {
   // 0.71.0：四个视图共用一份宽度与一个 key。论文页原来写死 340 且分隔条只是装饰。
   const [listWidth, setListWidth] = useState(readSidebarWidth);
   /**
@@ -234,6 +234,20 @@ export function PapersApp({ reading, onExit, notify, api, SessionProvider, rende
   const [localQuery, setLocalQuery] = useState('');
   const [trashView, setTrashView] = useState(false);
   const [selectedId, setSelectedId] = useState('');
+  /**
+   * 跨源检索点「论文」结果（0.88.0）：选中那一篇。
+   *
+   * ★ 只选中、**不直接进阅读器**：用户可能是想确认「是这一篇吗」，也可能是想读。
+   *   直接把人推进 PDF 阅读器，他还要先退出来才能看摘要 —— 多一次反向操作。
+   * ★ 带上 `intent.at` 做依赖：同一篇论文连点两次也要重新选中（值相同时
+   *   effect 不跑，症状是「第二次点了没反应」）。
+   */
+  useEffect(() => {
+    if (typeof intent?.paperId !== 'string' || intent.paperId === '') return;
+    setSelectedId(intent.paperId);
+    onIntentDone?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intent?.paperId, intent?.at]);
   const [dialog, setDialog] = useState('');
   /**
    * 伴读那颗「+」打开的快捷提示词面板。
@@ -872,6 +886,16 @@ export function PapersApp({ reading, onExit, notify, api, SessionProvider, rende
             )}
           </div>
           <button type="button" className={`npr-icon${loading ? ' is-loading' : ''}`} title="刷新" aria-label="刷新" onClick={() => void load()}><Icon name="refresh-cw" /></button>
+          {/*
+            插件设置（0.88.0）。用户 2026-11-22：「论文阅读，侧边栏右上角增加进入设置的入口」。
+            ★ 位置与订阅页**同一颗、同一处**（`.npr-settings-button` 自带 `margin-left:auto`
+              把它推到最右）：设置管的是整个插件，不是这一页的列表 —— 在订阅页它在工具栏
+              最右端，在论文页没有理由换个位置（同一件事两个位置，用户每换一页就要重找）。
+            ★ 不自己渲染设置页：`SettingsPage` 挂在 `ReaderPage` 的**三元之外**（顶层），
+              所以这里只需要一个「打开」的回调；在论文页打开、关闭后仍然停在论文页。
+          */}
+          <button type="button" className="npr-icon npr-settings-button" title="插件设置" aria-label="插件设置"
+            onClick={() => onOpenSettings?.()}><Icon name="settings" size={17} /></button>
           <input ref={fileInput} type="file" accept="application/pdf,.pdf" hidden
             onChange={(event) => void doUpload(event.target.files?.[0])} />
         </div>

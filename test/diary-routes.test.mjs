@@ -110,6 +110,25 @@ before(async () => {
     exportAll: options => fullStore.exportAll(options),
     stats: () => fullStore.stats(),
     secretStatus: () => fullStore.secret.status(),
+    // 0.88.0：周报。路由层只负责「形状校验 + 转发」，聚合本身在
+    // `test/weekly-service.test.mjs`（真 store）与 `test/weekly.test.mjs`（纯函数）里。
+    // 这里给一个能回显入参的桩，用来钉住「参数真的传下去了」。
+    weekly: async (options) => ({ week: options?.week ?? '2026-W47', echoed: options, report: { empty: true }, recent: [] }),
+    // 0.88.0：读后感提纲。这里只测「状态码分得开 + 参数真的传下去」，
+    // 材料组装在 `test/reflection-outline-service.test.mjs`。
+    reflectionOutline: async ({ bookId, draft }) => {
+      if (bookId === 'missing') {
+        const error = new Error('找不到这本书');
+        error.code = 'BOOK_MISSING';
+        throw error;
+      }
+      if (bookId === 'half') {
+        const error = new Error('模型这次给的提纲不完整');
+        error.outlineUnusable = true;
+        throw error;
+      }
+      return { outline: '## 一\n\n## 二', headings: ['一', '二'], book: { id: bookId, title: '书' }, thin: false, echoedDraft: draft ?? '' };
+    },
     reveal: async () => ({ root: fullStore.root() }),
     log: () => {},
   });
@@ -854,5 +873,110 @@ describe('GET /dashboard', () => {
       '锁着时「那年今日」只该剩日期与年份差，摘要必须摘掉');
     assert.equal(shut.json.days, open.json.days, '天数不涉内容，锁着也要给');
     assert.equal(shut.json.streak, open.json.streak, '连续天数不涉内容，锁着也要给');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 阅读周报（0.88.0）
+// ---------------------------------------------------------------------------
+
+describe('周报路由 /weekly', () => {
+  it('★ 不带 week ⇒ 交给宿主按本机当前时间算（路由不补一个日期）', async () => {
+    const res = await callFull('/weekly');
+    assert.equal(res.status, 200);
+    assert.equal(res.json.ok, true);
+    // 断言「没有把 week 变成空串传下去」：空串会让宿主走到 `weekRange('')`，
+    // 而那条路返回 null ⇒ 400。这两种错在界面上都表现成「周报打不开」。
+    assert.equal(res.json.echoed?.week, undefined);
+  });
+
+  it('week 原样透传，weeks 转成数字', async () => {
+    const res = await callFull('/weekly?week=2026-W47&weeks=4');
+    assert.equal(res.status, 200);
+    assert.equal(res.json.echoed?.week, '2026-W47');
+    assert.equal(res.json.echoed?.weeks, 4, 'weeks 没转成 number 的话宿主那边 Number() 也救不回来（NaN）');
+  });
+
+  it('★ 形状不对 ⇒ 400，不静默退化成「本周」', async () => {
+    for (const bad of ['/weekly?week=2026-11-18', '/weekly?week=', '/weekly?week=W47', '/weekly?week=2026-W4']) {
+      const res = await callFull(bad);
+      // `week=` 是空串：与「没传」等价，所以这一条应当**通过**而不是 400。
+      if (bad.endsWith('week=')) {
+        assert.equal(res.status, 200, '空 week 应该按「没传」处理');
+        continue;
+      }
+      assert.equal(res.status, 400, `${bad} 应该 400`);
+      assert.equal(res.json.code, 'BAD_WEEK');
+    }
+  });
+
+  it('缺依赖 ⇒ 501（不影响这个前缀下的其它路由）', async () => {
+    const res = await call('/weekly');
+    assert.equal(res.status, 501);
+    // 反向对照：同一个实例的 /stats 仍然正常 —— 缺周报不该带走整页。
+    const stats = await call('/stats');
+    assert.equal(stats.status, 200);
+  });
+
+  it('非 GET ⇒ 405', async () => {
+    const res = await callFull('/weekly', { method: 'POST', json: {} });
+    assert.equal(res.status, 405);
+  });
+
+  it('★ 信任栅栏：非回环一律 403', async () => {
+    const res = fakeRes();
+    await apiFull.handler(fakeReq({
+      url: `${API}/weekly`,
+      headers: { host: 'evil.example:52431' },
+    }), res);
+    assert.equal(res.status, 403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 读后感一键提纲（0.88.0）
+// ---------------------------------------------------------------------------
+
+describe('读后感提纲 /reflection/outline', () => {
+  it('bookId 与 draft 都传下去，200 回提纲', async () => {
+    const res = await callFull('/reflection/outline', { method: 'POST', json: { bookId: 'b00001', draft: '我写了一段' } });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.ok, true);
+    assert.equal(res.json.book.id, 'b00001');
+    assert.equal(res.json.echoedDraft, '我写了一段', 'draft 没传下去 ⇒ 提纲会绕开用户已写的思路');
+  });
+
+  it('★ 缺 bookId ⇒ 400（不是 500，也不是静默用空 id 去查）', async () => {
+    const res = await callFull('/reflection/outline', { method: 'POST', json: {} });
+    assert.equal(res.status, 400);
+    assert.equal(res.json.code, 'BAD_BOOK');
+  });
+
+  it('★ 请求体不是 JSON ⇒ 400，而不是「插件坏了」', async () => {
+    const res = await callFull('/reflection/outline', {
+      method: 'POST',
+      body: 'not-json',
+      headers: { 'content-type': 'application/json' },
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.json.code, 'BAD_JSON');
+  });
+
+  it('书被移走了 ⇒ 404；模型给了半成品 ⇒ 502', async () => {
+    const missing = await callFull('/reflection/outline', { method: 'POST', json: { bookId: 'missing' } });
+    assert.equal(missing.status, 404);
+    assert.equal(missing.json.code, 'BOOK_MISSING');
+
+    const half = await callFull('/reflection/outline', { method: 'POST', json: { bookId: 'half' } });
+    // 502 而不是 400/500：请求没问题、插件也没坏，是上游这次给的东西不能用。
+    assert.equal(half.status, 502);
+    assert.equal(half.json.code, 'OUTLINE_UNUSABLE');
+  });
+
+  it('缺依赖 ⇒ 501；非 POST ⇒ 405', async () => {
+    const noHandler = await call('/reflection/outline', { method: 'POST', json: { bookId: 'b00001' } });
+    assert.equal(noHandler.status, 501);
+    const wrongMethod = await callFull('/reflection/outline', { method: 'GET' });
+    assert.equal(wrongMethod.status, 405);
   });
 });

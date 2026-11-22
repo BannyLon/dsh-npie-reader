@@ -3321,8 +3321,19 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
      ② 但**入口必须常显**：藏在 hover 里的删除入口等于没有入口（用户 2026-09 定的）。
    ★ 不给它和 AI 按钮一样描边：两个描边按钮并排会被读成「一对同级动作」，
      而「整理这一天」与「删掉这一天」的重量差一个数量级。 */
-.npr-root .npr-diary-wipe { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; height: 28px; padding: 0 9px; border: 0; border-radius: 8px; background: transparent; color: var(--npr-faint); font: inherit; font-size: 12px; cursor: pointer; }
-.npr-root .npr-diary-wipe:hover { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent); color: var(--dsw-alias-state-error-primary); }
+/*
+ * 日期栏上那两个删除类动作：「清理图片」与「删这一天」。
+ *
+ * ★ 两者**共用同一条规则**（0.88.0 定稿时合并的）。第一版里「清理图片」是一颗
+ *   28×28 的裸图标，于是这一行出现两颗一模一样的垃圾桶 —— 用户 2026-11-22 的
+ *   截图配的原话是「这个放两个垃圾桶图标，很难区分，都用图标加文字说明」。
+ *   现在两颗都是「图标 + 文字」，形状完全一致，**靠文字区分**，所以规则也合成一条：
+ *   将来若要给其中一颗加分化样式，必须两边一起看，不能只改一边让它们重新变得不一致。
+ * ★ 颜色用 `--npr-faint`、hover 才泛红：两个都是删除类动作，但**都不该是这一行
+ *   上最显眼的东西** —— 显眼的是右边那颗 AI 主按钮。
+ */
+.npr-root :is(.npr-diary-wipe, .npr-diary-prune) { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; height: 28px; padding: 0 9px; border: 0; border-radius: 8px; background: transparent; color: var(--npr-faint); font: inherit; font-size: 12px; cursor: pointer; }
+.npr-root :is(.npr-diary-wipe, .npr-diary-prune):hover { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent); color: var(--dsw-alias-state-error-primary); }
 /* 确认框的内容（0.75.0）：一句合计 + 逐条清单 + 一句「文件去哪了」。 */
 .npr-wipe-lead { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--npr-muted); font-variant-numeric: tabular-nums; }
 .npr-wipe-flag { margin-left: 8px; padding: 1px 6px; border-radius: 999px; background: color-mix(in srgb, var(--npr-fg) 8%, transparent); font-size: 11px; }
@@ -3977,6 +3988,18 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 .npr-root .npr-diary-tplbtn { flex: 0 0 auto; height: 24px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--npr-fg) 14%, transparent); border-radius: 999px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; cursor: pointer; }
 .npr-root .npr-diary-tplbtn:hover:not(:disabled) { border-color: color-mix(in srgb, var(--npr-fg) 28%, transparent); color: var(--npr-fg); }
 .npr-root .npr-diary-tplbtn:disabled { opacity: .45; cursor: default; }
+/*
+ * 「确认替换？」那一档（0.88.0 定稿）。
+ *
+ * ★ 必须是**看得见的变化**，不能只换文字：这两颗按钮长得一样、挨在一起，
+ *   文字从「换成模板」变成「确认替换？」只差三个字，视线一晃就错过了 ——
+ *   而错过它的代价是「以为点的是取消，其实删了正文」。
+ * ★ 染成错误色（与「删这一天」「清空」同一档）：它确实是一步删除。
+ * ★ 形状不变（不放大、不加阴影）：它是同一颗按钮的第二种状态，不是弹出来的
+ *   另一个控件 —— 尺寸一跳，旁边的「生成提纲」会跟着挪位。
+ */
+.npr-root .npr-diary-tplbtn.is-armed { border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 46%, transparent); color: var(--dsw-alias-state-error-primary); }
+.npr-root .npr-diary-tplbtn.is-armed:hover:not(:disabled) { border-color: var(--dsw-alias-state-error-primary); color: var(--dsw-alias-state-error-primary); }
 /* 危险动作用低饱和文字：「清空」和「记下来」在底栏并排，权重不能接近。 */
 .npr-root .npr-diary-linkish.is-danger:hover { color: #e5484d; }
 /* 「记下来」在读后感里再加一档分量：纸面比别处厚，按钮也要跟上。 */
@@ -5878,4 +5901,193 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
 @media (prefers-reduced-motion: reduce) {
   .npr-dig-busy span { animation: none; width: 100%; opacity: .5; }
   .npr-dig-at, .npr-dig-again { transition: none; }
+}
+
+/* ── 阅读周报（0.88.0）──────────────────────────────────────────────────────
+   骨架与日记页/书架逐块对应（`.npr-workarea > .npr-layout > aside + section`），
+   所以网格、拖动区、窄容器下的纵向翻转全部复用既有规则 —— 这里只画「周报自己
+   那层皮」：左栏是周列表，右栏是卡片流。
+
+   ★ 卡片一律 `.5px` 细线 + `--npr-bg-2` 底，不用阴影、不用圆角 12px 以上：
+     这一页会有 5 张卡片纵向排下来，阴影一叠就变成「一堆浮起来的方块」，
+     而它们其实是同一张纸上的五段。
+
+   ★★ 界面已撤（用户 2026-11-22：「该功能先保留接口，不要显示在 UI 界面上」）。
+      这 100 多行样式**故意留着**，理由说清楚：
+        · CSS 在本项目里是**内联字符串**（`ensureStyles`），tree-shake 不掉 ——
+          就算删掉，产物也只是少 ≈ 6 KB，不会变成「干净的零」；
+        · 而删掉意味着下次接回界面时要把这十几种卡片 / 列表 / 错误态重画一遍，
+          那时候最容易的错法就是「大致照着印象写一版」，样式于是漂开。
+      所以：下面这些类目前**没有使用者**，接回界面时直接用，别重写。
+      `WeeklyReport.jsx` 的 JS 那半边确实被 tree-shake 了（`WeeklyView` 在产物里
+      命中 0 次），只有样式还留着。 */
+.npr-weekly-brand { font-size: 12.5px; font-weight: 600; color: var(--npr-fg); margin-right: auto; padding-left: 2px; }
+
+.npr-weekly-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px 8px 14px; display: flex; flex-direction: column; gap: 2px; }
+.npr-weekly-item {
+  display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left;
+  padding: 8px 10px; border: 0; border-radius: 8px; background: transparent;
+  color: var(--npr-fg); cursor: pointer; font: inherit;
+}
+.npr-weekly-item:hover { background: var(--npr-hover); }
+.npr-weekly-item.is-current { background: color-mix(in srgb, var(--npr-accent) 12%, transparent); }
+.npr-weekly-item-label { font-size: 12.5px; font-weight: 600; }
+.npr-weekly-item-head { font-size: 11.5px; line-height: 1.5; color: var(--npr-muted); }
+.npr-weekly-item.is-current .npr-weekly-item-head { color: var(--npr-fg); }
+.npr-weekly-foot {
+  flex: none; padding: 10px 14px 14px; font-size: 11px; line-height: 1.6;
+  color: var(--npr-faint); border-top: .5px solid var(--npr-border);
+}
+
+.npr-weekly-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.npr-weekly-head {
+  flex: none; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 16px clamp(18px, 3%, 32px) 10px;
+}
+.npr-weekly-head-title h2 { margin: 0; font-size: 17px; font-weight: 650; color: var(--npr-fg); letter-spacing: .01em; }
+.npr-weekly-head-title p { margin: 4px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--npr-muted); }
+.npr-weekly-nav { display: flex; gap: 4px; flex: none; }
+.npr-weekly-nav .npr-icon:disabled { opacity: .35; cursor: default; }
+
+.npr-weekly-body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  padding: 0 clamp(18px, 3%, 32px) 40px;
+  display: flex; flex-direction: column; gap: 14px;
+  /* 一行 60+ 个汉字读起来累；周报的正文列比阅读页窄一档。 */
+  max-width: 760px;
+}
+.npr-weekly-summary { margin: 2px 0 0; font-size: 13.5px; font-weight: 600; color: var(--npr-fg); }
+.npr-weekly-summary[data-loading="1"] { opacity: .55; }
+
+.npr-weekly-card {
+  border: .5px solid var(--npr-border); border-radius: 10px; background: var(--npr-bg-2);
+  padding: 12px 14px 13px;
+}
+.npr-weekly-card > header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.npr-weekly-card h3 { margin: 0; font-size: 12px; font-weight: 650; letter-spacing: .08em; color: var(--npr-muted); }
+.npr-weekly-badge { margin-left: auto; font-size: 11.5px; color: var(--npr-faint); }
+
+.npr-weekly-row {
+  display: flex; align-items: baseline; gap: 7px; width: 100%; text-align: left;
+  padding: 5px 6px; border: 0; border-radius: 6px; background: transparent;
+  color: var(--npr-fg); font: inherit; font-size: 13px; line-height: 1.55; cursor: pointer;
+}
+.npr-weekly-row[data-plain="1"] { cursor: default; }
+.npr-weekly-row:not([data-plain="1"]):hover { background: var(--npr-hover); }
+.npr-weekly-row svg { flex: none; color: var(--npr-faint); position: relative; top: 1px; }
+.npr-weekly-row-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.npr-weekly-row-meta { flex: none; font-size: 11.5px; color: var(--npr-faint); }
+
+.npr-weekly-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
+.npr-weekly-chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 2px 8px; border-radius: 999px;
+  background: color-mix(in srgb, var(--npr-fg) 6%, transparent);
+  font-size: 11.5px; color: var(--npr-muted);
+}
+.npr-weekly-chip b { color: var(--npr-fg); font-weight: 600; }
+
+.npr-weekly-stats { display: flex; gap: 16px; margin: 2px 0 8px; font-size: 12px; color: var(--npr-muted); }
+.npr-weekly-stats b { font-size: 15px; font-weight: 650; color: var(--npr-fg); margin-right: 2px; }
+
+.npr-weekly-note { margin: 6px 0 0; font-size: 11.5px; line-height: 1.6; color: var(--npr-faint); }
+.npr-weekly-empty { margin: 4px 0 2px; font-size: 12.5px; line-height: 1.7; color: var(--npr-faint); }
+.npr-weekly-hint { margin: 2px 0 0; font-size: 12.5px; line-height: 1.7; color: var(--npr-muted); }
+.npr-weekly-error {
+  border: .5px solid var(--dsw-alias-state-error-primary); border-radius: 10px;
+  padding: 12px 14px; font-size: 12.5px; line-height: 1.6; color: var(--npr-fg);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent);
+}
+.npr-weekly-error p { margin: 0 0 8px; }
+.npr-weekly-error button {
+  font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 7px; cursor: pointer;
+  border: .5px solid var(--npr-border-strong); background: transparent; color: var(--npr-fg);
+}
+
+/* 「生成提纲」失败时的那一行（0.88.0）。
+   ★ 挤在模板条里，所以只能单行 + 省略号：错误正文（「请求超时（90 秒）」之类）
+     长度不可控，折行会把下面的编辑框整体往下推，而那正是用户正在看的地方。 */
+.npr-diary-tplerr {
+  flex: 0 1 auto; min-width: 0; max-width: 46%;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: 11px; color: var(--dsw-alias-state-error-primary);
+}
+
+/* ── 跨源检索面板（0.88.0）─────────────────────────────────────────────────
+   浮在整页之上，但**不做全屏白底**：下面那层内容还在（用户可能想边搜边看）。
+   遮罩只压暗一点，并且只在面板自己这一块拦截点击（见 JSX 里的 target 判据）。
+
+   ★ `z-index: 70` 是这一页最高的一层（现有最高是 60 的弹窗）。理由：它是
+     **从任何视图唤起**的，包括正开着弹窗的时候 —— 比它低的层会被弹窗盖住，
+     症状是「⌘K 按了没反应」而其实面板已经渲染了。 */
+.npr-root .npr-palette-scrim {
+  position: fixed; inset: 0; z-index: 70;
+  display: flex; justify-content: center; align-items: flex-start;
+  padding: 12vh 16px 24px;
+  background: color-mix(in srgb, #000 32%, transparent);
+}
+.npr-root .npr-palette {
+  width: min(580px, 100%);
+  max-height: 68vh; display: flex; flex-direction: column; min-height: 0;
+  border: .5px solid var(--npr-border-strong); border-radius: 12px;
+  background: var(--npr-bg); color: var(--npr-fg);
+  box-shadow: 0 18px 48px color-mix(in srgb, #000 28%, transparent);
+  overflow: hidden;
+}
+.npr-palette-head {
+  flex: none; display: flex; align-items: center; gap: 9px;
+  padding: 11px 13px; border-bottom: .5px solid var(--npr-border);
+  color: var(--npr-muted);
+}
+.npr-palette-head input {
+  flex: 1 1 auto; min-width: 0; border: 0; outline: none; background: transparent;
+  color: var(--npr-fg); font: inherit; font-size: 14px; height: 24px;
+}
+.npr-palette-head input::placeholder { color: var(--npr-faint); }
+.npr-palette-busy { flex: none; font-size: 11.5px; color: var(--npr-faint); }
+.npr-palette-esc {
+  flex: none; font: inherit; font-size: 11px; padding: 2px 7px; border-radius: 5px; cursor: pointer;
+  border: .5px solid var(--npr-border); background: transparent; color: var(--npr-faint);
+}
+.npr-palette-esc:hover { color: var(--npr-fg); border-color: var(--npr-border-strong); }
+
+.npr-palette-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 0 8px; }
+.npr-palette-hint { margin: 14px 16px; font-size: 12.5px; line-height: 1.7; color: var(--npr-muted); }
+.npr-palette-error {
+  margin: 10px 13px 0; padding: 8px 10px; border-radius: 8px; font-size: 12px; line-height: 1.6;
+  color: var(--npr-fg); background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);
+}
+.npr-palette-group > header {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 9px 14px 4px;
+}
+.npr-palette-group h3 { margin: 0; font-size: 11px; font-weight: 650; letter-spacing: .08em; color: var(--npr-faint); }
+.npr-palette-group header span { margin-left: auto; font-size: 11px; color: var(--npr-faint); }
+.npr-palette-note { margin: 0 14px 6px; font-size: 11px; line-height: 1.6; color: var(--npr-faint); }
+
+.npr-palette-hit {
+  display: grid; grid-template-columns: 1fr auto; gap: 1px 10px;
+  width: 100%; text-align: left; padding: 7px 14px; border: 0; background: transparent;
+  color: var(--npr-fg); font: inherit; cursor: pointer;
+}
+.npr-palette-hit.is-active { background: var(--npr-hover); }
+.npr-palette-hit-title {
+  grid-column: 1; min-width: 0; font-size: 13px; line-height: 1.5;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.npr-palette-hit-sub { grid-column: 1; font-size: 11px; color: var(--npr-faint); }
+.npr-palette-hit-snippet {
+  grid-column: 1 / -1; font-size: 11.5px; line-height: 1.6; color: var(--npr-muted);
+  /* 摘要最多两行：一条占三行的话，一屏只能看三条结果。 */
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.npr-palette-hit-link {
+  grid-column: 2; grid-row: 1; justify-self: end; align-self: start;
+  font-size: 10.5px; padding: 1px 7px; border-radius: 999px;
+  color: var(--npr-accent-strong);
+  background: color-mix(in srgb, var(--npr-accent) 12%, transparent);
+}
+.npr-palette-foot {
+  margin: 10px 14px 2px; padding-top: 8px; border-top: .5px solid var(--npr-border);
+  font-size: 11px; color: var(--npr-faint);
 }

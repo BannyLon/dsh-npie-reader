@@ -58,6 +58,7 @@ import { DiaryApp } from './DiaryApp.jsx';
 import { QuickCapture } from './QuickCapture.jsx';
 import { seedBlock } from './quick-draft.js';
 import { ViewSwitch } from './ViewSwitch.jsx';
+import { SearchPalette } from './SearchPalette.jsx';
 import {
   SIDEBAR_MIN_WIDTH, SIDEBAR_WIDTH,
   clampSidebarWidth, readSidebarWidth, saveSidebarWidth,
@@ -140,7 +141,7 @@ const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--
    用户第一次报障时侧边栏是 220px（那是拖动下限）—— 换行与齿轮被裁两条全中；
    他自己拖到 251px 时看着就对了（那张「这样才对」的截图）。取 256：比 252 多 4px 余量。
    ★ 三位数（「已隐藏 123」）仍会换行 —— 那是设计好的兜底（换行不等于裁字），不是缺陷。 */
-.npr-root{--npr-sidebar-min:256px}
+.npr-root{--npr-sidebar-min:288px}
 .npr-layout{flex:1;min-height:0;display:grid;grid-template-columns:max(var(--npr-sidebar-min),min(var(--npr-list-width),calc(100cqw - 330px))) 1px minmax(0,1fr)}
 .npr-sidebar{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--npr-bg-2)}
 .npr-sidebar-toolbar{display:flex;align-items:center;gap:2px;height:44px;flex-shrink:0;padding:5px 8px 5px 12px}
@@ -477,8 +478,9 @@ const PANEL_CSS = `.npr-root{--npr-bg:var(--dsw-alias-bg-base);--npr-bg-2:var(--
    面板 500px 时 42cqw = 210px，而工具栏那一行的固定项就要 238px（三档视图开关 88 +
    频道按钮 46 + 四颗图标 112 + 间距 10 + 内边距 20），于是最右那颗设置齿轮被裁掉半个、
    筛选条「已隐藏 1」的数字也被切 —— 用户 2026-10-28 的截图就是这个。
-   三件事一起做：① 列宽一个下限（0.45.2 起是 --npr-sidebar-min = 256px，见 .npr-layout
-   上面那段说明；0.45.1 曾用 232px，那只够「不溢出」，不够「不换行」），
+   三件事一起做：① 列宽一个下限（0.88.0 起是 --npr-sidebar-min = 288px，见 .npr-layout
+   上面那段说明；0.45.2 是 256、0.45.1 是 232 —— 那两个数只够「不溢出 / 不换行」，
+   而 RSS 那一行到 0.88.0 已经装了八项，256 下标题列只剩两个字宽），
    ② 工具栏在窄面板里收紧（图标 28→24、间距 2→0、右内边距 8→4），
    ③ 筛选 chip 的内边距 10→8。
    ★ 不用 @container 量侧边栏自己：.npr-sidebar 一旦设 container-type，它内部**所有**
@@ -525,8 +527,10 @@ const FALLBACK_READING = { ...READING_DEFAULTS };
  * CSS 那条管「面板宽度算出来的列宽」，常数管「拖动与首屏读回」—— 两条路径写岔
  * 就会出现「拖到 220 不换行、但窗口一缩就换行」这种只在一条路径上复现的怪状态。
  *
- * ★ 256 是量出来的，依据写在 `PANEL_CSS` 里那段注释（工具栏 240 / 单行 chip 244 /
- *   两位数计数 252）。
+ * ★ 288 是两条依据取大的那个：`PANEL_CSS` 里那段量的是「不溢出 / 不换行」的底线
+ *   （工具栏 240 / 单行 chip 244 / 两位数计数 252，0.45.2 取 256），而 0.88.0 加的是
+ *   另一条 —— RSS 那一行装到八项之后，标题列在 256 下只剩两个字宽，用户看到的是
+ *   一路省略号（「Cognitive Revolution 中文精…」读不出是哪一篇）。
  */
 export { SIDEBAR_MIN_WIDTH };
 
@@ -823,6 +827,16 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
    *   把恢复加回来。
    */
   const [mode, setMode] = useState('feeds');
+  /**
+   * 跨源检索面板（0.88.0）。
+   *
+   * ★ 与左边那颗放大镜（`searchOpen` / `query`）**是两件事**：那颗的语义是
+   *   「在当前列表里筛」，这颗是「四处一起找」。合成一个的话，用户在订阅列表
+   *   按搜索会得到书和论文 —— 列表没变、内容全不是他要的。
+   */
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  /** 带着一篇论文进论文页（跨源检索里点论文结果）。 */
+  const [paperIntent, setPaperIntent] = useState(null);
   const [channels, setChannels] = useState([]);
   const [channel, setChannel] = useState(() => localStorage.getItem('npr.channel') || 'feeds:all');
   /* 筛选 / 搜索词按**频道**记（0.44.9）。首帧就取回来，否则打开面板会先按「全部」
@@ -1346,6 +1360,44 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     setMode('feeds');
   };
 
+  /**
+   * 跨源检索里点一条结果 → 跳到那一处（0.88.0）。
+   *
+   * ★ 四种目标各有各的入口，**不能只切视图**：切到书架但不打开那本书，用户落地后
+   *   还要在一千多本里自己找 —— 那和没跳一样。
+   * ★ `book` 不传页码/章节：这一条是从**解读**里搜出来的（第几章讲到），而
+   *   电子书阅读器按页定位。硬把章节号当页码传，会落在一段无关的正文上。
+   *   这里只负责「打开这本书」，具体在哪一页由书自己的进度决定。
+   */
+  const jumpFromSearch = (target) => {
+    if (!target || typeof target !== 'object') return;
+    if (target.kind === 'article' && target.key) {
+      void openArticle(target.key);
+      setMode('feeds');
+      return;
+    }
+    if (target.kind === 'book' && target.bookId) {
+      openBookFromDiary({ bookId: target.bookId, page: null });
+      return;
+    }
+    if (target.kind === 'paper' && target.paperId) {
+      setPaperIntent({ paperId: target.paperId, at: Date.now() });
+      setMode('paper');
+      return;
+    }
+    if (target.kind === 'diary' && target.date) {
+      // 先记意图再切视图（理由同 `writeReflection`）：反过来的话 DiaryApp 挂载那一刻
+      // 拿到的还是 null，会落在「今天」上，而用户点的是三个月前那一天。
+      // `scope` 只在将来允许搜私密时才有值；现在恒是 public，落到灵感模块。
+      setDiaryIntent({
+        module: target.scope === 'private' ? 'private' : 'inspiration',
+        date: target.date,
+        at: Date.now(),
+      });
+      setMode('diary');
+    }
+  };
+
   /** 强制去原文页抓全文：订阅源只给摘要时的手动补全入口。 */
   const fetchFullText = async (key) => {
     if (fetchingFullTextRef.current) return;
@@ -1683,6 +1735,29 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [mode, dialog, pickerOpen, askContext, appearanceOpen, menuOpen, rowMenu, addMenu, showAddFeed]);
+
+  /**
+   * `⌘K` / `Ctrl+K` = 跨源检索（0.88.0）。
+   *
+   * ★ **独立于 `mode`，也不判「焦点在输入框里」**：这正是它比左边那颗放大镜强的地方 ——
+   *   在书房里读到一半、在日记里写了一半，都能直接按出来查别的。判焦点的话，
+   *   最需要它的场合（正在编辑）反而按不出来。
+   * ★ `preventDefault()` 必须调：Chromium 在部分平台上把 ⌘K 绑成「聚焦地址栏」
+   *   之类的默认行为，不拦会让面板闪一下就被抢走。
+   * ★ 再按一次 = 收起（切换），而不是只能靠 Esc。用户按完发现按错了，
+   *   下意识会再按一次同一个键。
+   */
+  useEffect(() => {
+    const onKey = (event) => {
+      const key = typeof event.key === 'string' ? event.key.toLowerCase() : '';
+      if (key !== 'k') return;
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      event.preventDefault();
+      setPaletteOpen((open) => !open);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // 书架被设置关掉时强制回订阅。
   // ★ 关掉书架必须**同时**把用户从书架里请出去：只把入口按钮藏掉的话，
@@ -2764,7 +2839,9 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
         /* 论文（2026-11-06）。它自带同一套 `.npr-workarea > .npr-layout` 骨架，
            所以布局与窗口拖动区两边共用；阅读器那一半直接复用 `BookReader`。 */
         <PapersApp reading={reading} onExit={(next) => setMode(next === 'library' || next === 'diary' ? next : 'feeds')}
-          notify={notify} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot} />
+          notify={notify} api={api} SessionProvider={SessionProvider} renderSlot={renderSlot}
+          intent={paperIntent} onIntentDone={() => setPaperIntent(null)}
+          onOpenSettings={() => setDialog('settings')} />
       ) : mode === 'diary' ? (
         // 日记同理：自带同一套骨架 + 自己的 `[data-window-drag]` 顶栏。
         // ★ 它**不**接收 `onExit={() => setMode('feeds')}` 那种无参回调 —— 三个视图之后，
@@ -3439,6 +3516,11 @@ export function ReaderPage({ api, SessionProvider, renderSlot }) {
           ))}
         </div>
       )}
+      {/* 跨源检索（0.88.0）。挂在根节点里、**不在任何一个子视图内**：
+          `mode` 一换就把四个子视图整块换掉，面板若挂在里面就会跟着被卸载 ——
+          症状是「切了视图，正在搜的东西没了」。 */}
+      <SearchPalette open={paletteOpen} onClose={() => setPaletteOpen(false)}
+        api={api} onJump={jumpFromSearch} />
     </div>
   );
 }

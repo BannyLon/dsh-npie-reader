@@ -135,6 +135,13 @@ describe('图标名', () => {
       'ReaderPage.jsx: item.icon',
       // 来源：TABS 每项的 icon 字段（0.44.4 从三元组改成对象，才扫得到）
       'SettingsPage.jsx: icon',
+      // 阅读周报（0.88.0）：周报每一行的行图标走 `Row` 的 `mark` 属性，
+      // 只有 `Row` 里那一处 `<Icon name={mark} />`，静态扫不到名字。
+      // ★ 取值端**已经核对**：调用处写的是 `mark="circle-check"` / `"pencil"` /
+      //   `"highlighter"` / `"file-check"` 四个字面量，由下面那条
+      //   「周报 Row 的 mark 属性」断言逐个查表。所以这里登记的是位置，不是漏网。
+      // ★ 顺序按收集顺序 —— `WeeklyReport.jsx` 排最后，别按「读起来顺」挪上去。
+      'WeeklyReport.jsx: mark',
     ];
     /**
      * ★ 同名多处的计数（0.72.3）。
@@ -220,5 +227,29 @@ describe('图标名', () => {
     assert.ok(checkedFiles.some((line) => line.startsWith('SettingsPage.jsx'))
       && checkedFiles.some((line) => line.startsWith('row-menu.js')),
       `两端都要扫到才算数，实际命中：${checkedFiles.join(' ') || '(无)'}`);
+  });
+
+  /**
+   * 周报行图标（0.88.0）。
+   *
+   * `WeeklyReport.jsx` 里的行图标是 `<Icon name={mark} />` —— 名字在 `Row` 的
+   * `mark` 属性上，上面两条都够不着（不是 `name="…"`，也不是 `icon: '…'`）。
+   * 所以把检查挪到**取值那一端**：调用处写的是 `mark="…"` 字面量，逐个查表。
+   *
+   * ★ 配一条反向对照：把 `circle-check` 改成 `circle-chek` 也要扫得到，
+   *   否则 `checked` 可能是靠别的属性凑出来的数。
+   */
+  test('周报 Row 的 mark 属性也必须是真名字', () => {
+    const missing = [];
+    let checked = 0;
+    for (const { file, text } of clientSources()) {
+      for (const hit of text.matchAll(/(?<![-\w])mark="([^"]+)"/g)) {
+        checked++;
+        if (!defined.has(hit[1])) missing.push(`${file}: ${hit[1]}`);
+      }
+    }
+    assert.deepEqual(missing, [], `周报行图标不存在（会静默画成圆圈）：\n${missing.join('\n')}`);
+    // 四个行图标：读完 / 读后感 / 划线 / 论文读完。
+    assert.ok(checked >= 4, `只核到 ${checked} 处 mark="…"，正则可能已失配`);
   });
 });

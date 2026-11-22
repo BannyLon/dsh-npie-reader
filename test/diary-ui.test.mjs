@@ -63,20 +63,24 @@ function resetsFocusOnDiary(code) {
 const modeEffect = effectAt(reader, "if (mode !== 'library') return;");
 
 describe('入口：三个 tab 都在，且语义说得清', () => {
-  it('ViewSwitch 渲染三个按钮（订阅 / 书 / 日记），选中态各自独立', () => {
+  it('ViewSwitch 渲染四个按钮里的「订阅 / 书 / 记录」，选中态各自独立', () => {
     assert.match(viewSwitch, /aria-label="订阅"/, '没有「订阅」按钮');
     assert.match(viewSwitch, /aria-label="书"/, '没有「书」按钮');
-    assert.match(viewSwitch, /aria-label="日记"/, '没有「日记」按钮 —— 第三个 tab 的入口丢了');
+    // ★ 第四颗叫「记录」不叫「日记」（0.88.0，用户 2026-11-22）：它里面装的三块
+    //   有一块就叫「日记」，主视图再叫「日记」就是同一屏两个同名入口。
+    assert.match(viewSwitch, /aria-label="记录"/, '没有「记录」按钮 —— 第四颗主视图的入口丢了');
+    assert.doesNotMatch(viewSwitch, /aria-label="日记"/,
+      '主视图又叫回「日记」了 —— 与它内部那块「私密日记」同名，用户分不清「进去」还是「就在这儿」');
     // 三个 `aria-pressed` 必须分别绑到三种模式上，不能复制粘贴成同一个。
     for (const value of ['feeds', 'library', 'diary']) {
       assert.match(viewSwitch, new RegExp(`aria-pressed=\\{mode === '${value}'\\}`), `${value} 的选中态没绑对`);
     }
   });
 
-  it('★ 分组标签是「主视图」而不是「阅读模式」（日记不是一种阅读）', () => {
+  it('★ 分组标签是「主视图」而不是「阅读模式」（记录不是一种阅读）', () => {
     assert.match(viewSwitch, /role="group" aria-label="主视图"/);
     // 反向对照：旧文案不能以任何形式留在这一层 —— 读屏用户听到「阅读模式」再摸到
-    // 「日记」，会以为那是一种阅读方式。
+    // 「记录」，会以为那是一种阅读方式。
     assert.doesNotMatch(viewSwitch, /aria-label="阅读模式"/);
   });
 
@@ -1740,12 +1744,42 @@ describe('0.44.2：写作区的纸面与区块标签', () => {
   it('「套用模板」不会把模板插第二遍', () => {
     // 0.44.1 及以前：按钮只看「正文空不空」，于是已经套过又点一次，
     // 四个 `##` 会被追加第二遍，正文里出现两套「一句话总结」。
-    assert.match(diary, /const refTemplated = refDraft\.includes\('## 一句话总结'\)/,
-      '没有判断正文里是否已经有模板骨架');
+    assert.match(diary, /const refTemplated = REFLECTION_HEADINGS\.every\(/,
+      '没有判断正文里是否已经有模板骨架（而且必须是**四个都在**，见下一条）');
     assert.match(diary, /disabled=\{refTemplated\}/, '已套用时按钮仍然可点');
-    assert.match(diary, /\{refTemplated \? '已套用' : '套用模板'\}/, '按钮没有反映「已套用」状态');
+    assert.match(diary, /\{refTemplated \? '已套用' : templateArmed \? '确认替换？' : refDraft\.trim\(\) === '' \? '套用模板' : '换成模板'\}/,
+      '按钮没有反映「已套用 / 确认替换 / 套用 / 换成」四态');
     // 反向对照：正文非空但还没套过模板时，仍然应该能套 —— 禁用条件不能是「非空」。
     assert.doesNotMatch(diary, /disabled=\{refDraft\.trim\(\)/, '禁用条件写成了「正文非空」—— 写了几个字就再也套不上模板');
+  });
+
+  it('★ 模板不再接在正文末尾 —— 那一拼就是两套结构（0.88.0 定稿）', () => {
+    // 用户 2026-11-22 的现场：先「生成提纲」（正文四节），再点「套用模板」，
+    // 于是提纲四节 + 模板四节并列，同一屏两套小标题。旧实现是「非空就追加」，
+    // 而模板是**整份骨架**，不是补丁。
+    assert.equal(diary.includes('\\n\\n${REFLECTION_TEMPLATE}'), false,
+      '还有地方把模板拼到正文后面 —— 提纲 + 模板会叠成两套小标题');
+    assert.match(diary, /function applyTemplate\(\)/,
+      '没有统一入口 —— 拼接逻辑散在 JSX 里，判据守不住');
+    assert.match(diary, /needsTemplateConfirm\(refDraft, REFLECTION_TEMPLATE\)/,
+      '「要不要二次确认」没有走那支带单测的判据');
+    assert.match(diary, /onClick=\{applyTemplate\}/, '按钮没接到 applyTemplate');
+    // 上膛必须有出口：改字撤销 + 超时撤销，缺一个都会留下「忘了自己上过膛」的误删。
+    assert.match(diary, /useEffect\(\(\) => \{ setTemplateArmed\(false\); \}, \[refDraft\]\)/,
+      '改字没有撤销上膛 —— 用户新写的那句也会被算进「可以删的」');
+    assert.match(diary, /setTimeout\(\(\) => setTemplateArmed\(false\), 4000\)/,
+      '上膛没有超时 —— 挂着不撤，回来随手指一下就删了正文');
+  });
+
+  it('★ 只出现一个同名小标题不算「已套用」—— 提纲里也可能有「一句话总结」', () => {
+    // 0.88.0 修的真缺陷：旧判据是 `refDraft.includes('## 一句话总结')`，而模型给的
+    // 提纲里恰好可能有一节就叫这个名字 ⇒ 提纲一落进正文，「套用模板」立刻变成
+    // 「已套用」并禁用，用户反而回不到模板（而那正是他想恢复结构的时候）。
+    assert.doesNotMatch(diary, /refTemplated = refDraft\.includes\(/,
+      '又退回「只认一个小标题」的判据 —— 提纲里出现同名标题时按钮会误判为已套用');
+    // 标题清单必须从模板推导，不能另抄一份字面量（抄一份就会与模板脱钩）。
+    assert.match(diary, /const REFLECTION_HEADINGS = REFLECTION_TEMPLATE\.split\('\\n'\)\.filter\(/,
+      '标题清单没有从 REFLECTION_TEMPLATE 推导 —— 模板改一个字两边就对不上');
   });
 
   it('写作区是一张纸，不是四张卡片', () => {
@@ -2139,5 +2173,114 @@ describe('0.73：灵感记到今天，预览不印 Markdown 标记', () => {
     // 反向对照：可见文本再退回 `row.preview`，星号就重新出现在屏幕上。
     assert.equal(diary.includes('{row.preview ||'), false, '还有一处直接印原始 preview');
     assert.equal(diary.includes('{hit.snippet}'), false, '还有一处直接印原始 snippet');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.88.0：三个模块是**三个独立操作页**（用户 2026-11-22 定的共识）
+//
+// ★ 用户原话：「记录是分为三个独立的部分（灵感记录+日记+读后感），它们是独立的，
+//   操作页是独立的」。这一组守的是「独立」在界面上的三条硬要求 —— 每一条坏掉
+//   都不会报错，只会让人看到**别的模块的东西**：
+//     ① 上一个模块的报错红字跟到下一个模块（串档）；
+//     ② 私密日记的顶栏挂着一颗把明文写进下载目录的按钮；
+//     ③ 侧栏工具栏被塞进一颗与「写日记」无关的垃圾桶，把 268px 挤变形。
+// ---------------------------------------------------------------------------
+describe('0.88.0：三个模块的操作页互不串档', () => {
+  /** 侧栏工具栏那一段（`npr-sidebar-toolbar` → 模块选择块之前）。 */
+  function sidebarToolbar(code) {
+    const start = code.indexOf('<div className="npr-sidebar-toolbar" data-window-drag>');
+    const end = code.indexOf('<div className="npr-diary-modes"', start);
+    return start >= 0 && end > start ? code.slice(start, end) : '';
+  }
+
+  /** 右侧顶栏那一段（`npr-book-toolbar` → 正文区之前）。 */
+  function readerToolbar(code) {
+    const start = code.indexOf('<div className="npr-book-toolbar" data-window-drag>');
+    const end = code.indexOf('<div className="npr-diary-main">', start);
+    return start >= 0 && end > start ? code.slice(start, end) : '';
+  }
+
+  /** 模块切换按钮（`aria-pressed` → `{item.label}`）的整段，含 onClick。 */
+  function moduleSwitch(code) {
+    const start = code.indexOf('aria-pressed={moduleValue === item.value}');
+    const end = code.indexOf('{item.label}</button>', start);
+    return start >= 0 && end > start ? code.slice(start, end) : '';
+  }
+
+  it('★ 三个锚点都在（锚点失效时宁可报错，也不要静默全绿）', () => {
+    assert.notEqual(sidebarToolbar(diary), '', '侧栏工具栏锚点失效');
+    assert.notEqual(readerToolbar(diary), '', '右侧顶栏锚点失效');
+    assert.notEqual(moduleSwitch(diary), '', '模块切换按钮锚点失效');
+  });
+
+  it('★ 换模块必须连错误行一起清空 —— 否则「私密日记还是锁着的」会跟到别的模块', () => {
+    // 用户 2026-11-22 的截图：在私密日记点下载拿到 403 红字，切到「灵感速记」
+    // 和「读后感」之后那行红字还在，而那两页根本没有私密日记。
+    // 根因是 `error` 是跨模块共用的 state，换模块只清了 `aiError`。
+    const block = moduleSwitch(diary);
+    assert.match(block, /setError\(''\)/, '换模块没有清错误行 —— 上一个模块的红字会跟过来');
+    // `exportArmed` 是「导出私密明文」的两步确认上膛状态。留在别的模块里意味着
+    // 下一次点击少一次确认 —— 那是把一个不可逆动作的闸门拆了。
+    assert.match(block, /setExportArmed\(false\)/, '换模块没有复位「上膛」状态');
+
+    // 反向对照：把 `setError('')` 从那一段里拿掉，必须变红。
+    const stripped = block.replace(/setError\(''\);\s*/, '');
+    assert.notEqual(stripped, block, '反向对照的替换没生效，这条是假绿');
+    const broken = diary.replace(block, stripped);
+    assert.notEqual(broken, diary, '反向对照没改写成功');
+    assert.doesNotMatch(moduleSwitch(broken), /setError\(''\)/, '拿掉之后居然还判绿 —— 这条判据没咬住');
+  });
+
+  it('★ 私密日记顶栏不再有导出按钮（只服务灵感与读后感）', () => {
+    // 用户 2026-11-22：「我建议日记不要有这个下载」。
+    const bar = sidebarToolbar(diary);
+    assert.match(bar, /\{mod\.vis !== 'private' && \(/, '导出按钮没有按模块收口');
+    // 私密那条「解密一份明文到下载目录」的路只剩页脚那一条（解锁后 + 点两次），
+    // 顶栏不该有第二条。
+    assert.doesNotMatch(bar, /exportWithPrivate/, '顶栏还挂着导出私密明文那条路');
+
+    // 反向对照：条件改成恒真，上面第一条必须变红。
+    const broken = diary.replace("{mod.vis !== 'private' && (", '{true && (');
+    assert.notEqual(broken, diary, '反向对照没改写成功');
+    assert.doesNotMatch(sidebarToolbar(broken), /mod\.vis !== 'private'/, '改成恒真之后居然还判绿');
+  });
+
+  it('★ 「清理没在用的图」搬到了日期栏 —— 侧栏不再为它变宽', () => {
+    // 用户 2026-11-22：「灵感速记功能图标太多了，直接影响了侧边栏的宽度，
+    // 建议『删除』是不是可以放右边，和『删这一天』一行」。
+    assert.doesNotMatch(sidebarToolbar(diary), /pruneAssets/, '侧栏工具栏里还挂着清理图片的按钮');
+    assert.match(readerToolbar(diary), /npr-diary-prune[\s\S]{0,320}?pruneAssets/, '日期栏里找不到清理图片的按钮');
+
+    // 反向对照：把它塞回侧栏，第一条必须变红。
+    const broken = diary.replace('<Icon name="folder" />',
+      '<Icon name="folder" /><button type="button" onClick={() => void pruneAssets()} />');
+    assert.notEqual(broken, diary, '反向对照的替换没生效');
+    assert.match(sidebarToolbar(broken), /pruneAssets/, '塞回侧栏之后居然还判绿');
+  });
+
+  it('★ 侧栏工具栏的图标数不再回涨（3 颗：搜索 / 文件夹 / 导出）', () => {
+    // 这条不是风格洁癖：268px 的侧栏装不下第四颗，加一颗就把整列挤变形（用户
+    // 2026-11-22 的截图就是被撑开的）。周报那颗已在 0.88.0 撤下、垃圾桶搬走，
+    // 导出只在灵感/读后感出现 ⇒ 现在是 3。
+    const count = (sidebarToolbar(diary).match(/className="npr-icon"/g) ?? []).length;
+    assert.ok(count <= 3, `侧栏工具栏有 ${count} 颗图标，已经超过 3 —— 侧栏会被挤宽`);
+  });
+
+  it('★ 日期栏那两个删除动作**都带文字**（两颗同形状垃圾桶只能靠文字区分）', () => {
+    // 用户 2026-11-22 的第二张截图：两个垃圾桶并排，一颗裸图标 + 一颗带字，
+    // 原话「这个放两个垃圾桶图标，很难区分，都用图标加文字说明」。
+    // ★ 判据落在**取值端**：两颗的图标名都是 `trash-2`，比图标名区分不出来，
+    //   只能比文字。
+    const bar = readerToolbar(diary);
+    assert.match(bar, /npr-diary-prune[\s\S]{0,400}?<span>清理图片<\/span>/,
+      '「清理图片」没有配文字 —— 又变回一颗裸图标');
+    assert.match(bar, /npr-diary-wipe[\s\S]{0,400}?<span>删这一天<\/span>/,
+      '「删这一天」的文字不见了');
+
+    // 反向对照：把「清理图片」四个字拿掉，上面第一条必须变红。
+    const broken = diary.replace('<span>清理图片</span>', '');
+    assert.notEqual(broken, diary, '反向对照的替换没生效');
+    assert.doesNotMatch(readerToolbar(broken), /<span>清理图片<\/span>/, '拿掉文字之后居然还判绿');
   });
 });

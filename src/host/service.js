@@ -35,6 +35,8 @@ import {
   toWav,
 } from './asr.js';
 import { extractMainHtml } from './fulltext.js';
+import { summarizeWeekly, weekRange, weeklyHeadline } from './weekly.js';
+import { PER_SOURCE_LIMIT, assembleGroups, attachLinks, normalizeQuery } from './search-all.js';
 import {
   CLOUD_ASR_PROVIDERS,
   CLOUD_SLICE_SECONDS,
@@ -66,7 +68,7 @@ import {
   READING_CONTEXT_INTRO, bookReadingContext, diaryContext,
   readingMaterial, readingScopeInstruction, sanitizePaperMeta,
 } from '../reading-scope.js';
-import { aiModelInUse, createGenerationGuard, generateBookSynthesis, generateChapterDigest, generateEbookSectionTranslation, generateEpisodeDigest, generateRewrite, generateStructuredTranslation, listAiModels, translatePageParagraphs as translatePageParagraphsWithModel, translatePassage, translateSubtitleParagraphs } from './ai.js';
+import { aiModelInUse, createGenerationGuard, generateBookSynthesis, generateChapterDigest, generateEbookSectionTranslation, generateEpisodeDigest, generateReflectionOutline, generateRewrite, generateStructuredTranslation, listAiModels, translatePageParagraphs as translatePageParagraphsWithModel, translatePassage, translateSubtitleParagraphs } from './ai.js';
 import { isValidAiModel } from '../ai-model.js';
 import { DIGEST_MIN_CHARS } from './digest-prompt.js';
 import { SKILL_PROFILES, buildSkillPackage, detectProfile, skillSlugFor } from './book-skill.js';
@@ -700,6 +702,11 @@ export class RssService {
         bySource: options => this.diary.bySource(options),
         exportAll: options => this.diary.exportAll(options),
         stats: () => this.diary.stats(),
+        // 阅读周报（0.88.0）：聚合四份存储，入口只有这一个 —— 客户端不该自己
+        // 并发取四路再拼时间窗口（见 `weeklyReport()` 的说明）。
+        weekly: options => this.weeklyReport(options),
+        // 读后感一键提纲（0.88.0）：材料在书架、落点在日记，所以入口在这里。
+        reflectionOutline: options => this.reflectionOutline(options),
         secretStatus: () => this.diary.secret.status(),
         // ★ 闸门必须**整个对象**递进去：路由层要 peek / allow / setup / unlock / lock
         //   五件事，只传一个「是否解锁」的布尔量就没法完成设置了。
@@ -3652,9 +3659,305 @@ export class RssService {
   }
 
   /** 跨天搜（判据与 `rss_search_articles` / `book_search` 同一条）。 */
+  /**
+   * 跨源检索（0.88.0）：一次查订阅、电子书、论文、日记。
+   *
+   * ★ 为什么要有一个专门的聚合方法，而不是让客户端并发四个请求：
+   *   ① 四路的**判据必须一致**（trim + 小写 + 子串，不切词）。客户端各写一份，
+   *      必然漂成「订阅搜得到、书搜不到」，而两边都"对"；
+   *   ② 「你在这篇下写过几条」这类反查要跨源（文章在订阅里、笔记在日记里），
+   *      客户端拿不到那条内部链路；
+   *   ③ 一路失败不能让整页搜索失败 —— 降级成「这一类这次没搜到（原因）」，
+   *      并**说清是不完整**。四路各自报错的那种「有的组有结果、有的组转圈」，
+   *      用户无法判断到底是没搜到还是坏了。
+   *
+   * @param {{query: string, limit?: number}} request
+   */
+  async searchAll(request = {}) {
+    await this.ready;
+    const query = normalizeQuery(request?.query);
+    const per = Math.min(Math.max(Number(request?.limit) || PER_SOURCE_LIMIT, 1), 10);
+    if (query === '') {
+      return { query: '', ...assembleGroups({ perSource: per }), reason: 'query 是空的' };
+    }
+
+    /** 一路的失败不抛出去，转成「这一路的结果不可用」。 */
+    const settle = async (task) => {
+      try {
+        return { ok: true, value: await task() };
+      } catch (error) {
+        return { ok: false, error };
+      }
+    };
+
+    const [articles, books, papers, diary] = await Promise.all([
+      settle(() => this.searchArticlesDetailed({ query, limit: per })),
+      settle(() => this.searchBookDigests({ query, limit: per })),
+      settle(() => this.papersSearch({ query, limit: per })),
+      settle(() => this.diary.search({ query, limit: per })),
+    ]);
+
+    /*
+     * 四路里的「结果可能不全」各自不同，不能合成一句。
+     * 与 `windowNote()` 同一条纪律：合成一句话等于让用户三选一瞎猜。
+     */
+    const notes = {};
+    if (articles.ok && articles.value?.truncatedScan) notes.article = '已达条目扫描上限，更早的文章没看';
+    if (articles.ok && articles.value?.truncatedBodies && notes.article === undefined) {
+      notes.article = '已达正文预算上限，部分文章只比对了标题与摘要';
+    }
+    if (books.ok && books.value?.truncated) notes.book = '已达本次上限，后面还有';
+    if (diary.ok && diary.value?.truncated) notes.diary = '日记文件很多，只扫了最近的一部分';
+    if (!articles.ok) notes.article = `这次没搜到（${articles.error?.message ?? '未知错误'}）`;
+    if (!books.ok) notes.book = `这次没搜到（${books.error?.message ?? '未知错误'}）`;
+    if (!papers.ok) notes.paper = `这次没搜到（${papers.error?.message ?? '未知错误'}）`;
+    if (!diary.ok) notes.diary = `这次没搜到（${diary.error?.message ?? '未知错误'}）`;
+
+    const assembled = assembleGroups({
+      articles: articles.ok ? (articles.value?.results ?? []) : [],
+      books: books.ok ? (books.value?.hits ?? []) : [],
+      papers: papers.ok ? (papers.value?.hits ?? []) : [],
+      diary: diary.ok ? (diary.value?.hits ?? []) : [],
+      perSource: per,
+      notes,
+      scanned: {
+        articles: articles.ok ? (articles.value?.scanned ?? 0) : 0,
+        books: books.ok ? (books.value?.scanned ?? 0) : 0,
+        papers: papers.ok ? (papers.value?.matched ?? 0) : 0,
+        diary: diary.ok ? (diary.value?.scanned ?? 0) : 0,
+      },
+    });
+
+    /*
+     * 双链：给「订阅」与「书」的命中挂上「你在它下面写过几条」。
+     * ★ 只对**这一屏显示出来的**命中反查（最多 per × 2 个 key）：被折叠掉的
+     *   那几十条不需要徽标 —— 用户看不到它们。
+     * ★ 反查失败**不影响结果本身**：那几个数没有就没有，搜索照样能用。
+     */
+    let groups = assembled.groups;
+    try {
+      const articleKeys = groups.find((group) => group.kind === 'article')?.hits.map((hit) => hit.jump.key).filter(Boolean) ?? [];
+      const bookIds = groups.find((group) => group.kind === 'book')?.hits.map((hit) => hit.jump.bookId).filter(Boolean) ?? [];
+      if (articleKeys.length > 0 || bookIds.length > 0) {
+        const links = await this.diary.linkCounts({ articleKeys, bookIds });
+        groups = attachLinks(groups, links);
+      }
+    } catch {
+      /* 反查是锦上添花：它的失败不该让一次成功的检索变成错误 */
+    }
+
+    return { query, groups, total: assembled.total, empty: assembled.empty, scanned: assembled.scanned };
+  }
+
+  /**
+   * 一键生成读后感提纲（0.88.0）。
+   *
+   * 材料全部来自**本机已有的东西**：逐章解读的要点、用户划过的句子与批注、
+   * 他已经写下的半截正文。刻意不抓原文、不做新的全文分析 —— 那要跑几分钟，
+   * 而用户点这一下的时候人就在编辑框前面等着。
+   *
+   * ★ 材料薄（没做过解读、也没划过线）**不拦**，但回 `thin: true`：
+   *   界面据此说一句「材料不多，提纲会比较泛」，用户可以先去读几章再来。
+   *   直接拒绝的话，第一次用这个功能的人会以为它坏了。
+   *
+   * @param {{bookId: string, draft?: string}} request - `draft` 是编辑框里已有的正文。
+   */
+  async reflectionOutline(request = {}) {
+    await this.ready;
+    const bookId = String(request?.bookId ?? '').trim();
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(bookId)) {
+      const error = new Error(`无效的书籍 id：${bookId}`);
+      error.code = 'BAD_BOOK';
+      throw error;
+    }
+    const book = await this.bookById(bookId).catch(() => null);
+    if (book === null || book === undefined) {
+      const error = new Error('找不到这本书 —— 它可能已经从书单里移走了');
+      error.code = 'BOOK_MISSING';
+      throw error;
+    }
+
+    // 章节结构与要点：有多少拿多少。`readOutline` 对没做过解读的书回 []，
+    // 那不是错误（`outlineReady()` 那条判据已经区分过「没做过」与「做坏了」）。
+    const outline = (await this.digestStore.readOutline(bookId).catch(() => null)) ?? [];
+    const chapters = [];
+    for (const chapter of outline.slice(0, 40)) {
+      const digest = await this.digestStore.readDigest(bookId, chapter.n).catch(() => null);
+      chapters.push({
+        n: chapter.n,
+        title: chapter.title ?? '',
+        // `summary` 是「这一章讲了什么」，`points` 是几条要点。给模型两个都行，
+        // 但 `buildOutlineInput` 的预算是按一条算的 —— 拼起来并截断，别让它自己截。
+        summary: [digest?.summary ?? '', ...(Array.isArray(digest?.points) ? digest.points : [])]
+          .filter((line) => typeof line === 'string' && line.trim() !== '')
+          .join('；'),
+      });
+    }
+
+    const items = await this.annotationStore.list(bookId).catch(() => []);
+    const annotations = (Array.isArray(items) ? items : []).map((item) => ({
+      quote: item.quote ?? '',
+      note: item.note ?? '',
+      page: item.page ?? 0,
+    }));
+
+    const draft = typeof request?.draft === 'string' ? request.draft : '';
+    const result = await generateReflectionOutline(this.ctx, {
+      bookTitle: book.title ?? '',
+      author: book.author ?? '',
+      chapters,
+      annotations,
+      existing: draft,
+    }, { model: this.aiModel() });
+
+    return {
+      ...result,
+      book: { id: bookId, title: book.title ?? '' },
+      // 「材料薄」= 一章要点都没有、也没有划线。只有书名与章节标题时，模型能给的
+      // 只能是比较泛的结构 —— 这一点要让用户看见，而不是让他以为「AI 就这」。
+      thin: chapters.every((chapter) => chapter.summary === '') && annotations.length === 0,
+    };
+  }
+
   async diarySearch(request = {}) {
     await this.ready;
     return await this.diary.search({ query: request?.query, limit: request?.limit });
+  }
+
+  /**
+   * 阅读周报：这一周读了多少、读完哪些、写了什么、划了多少。
+   *
+   * 数据来自**四份互不相干的存储**（`data.json` 的已读与收藏、书单的阅读状态、
+   * 日记的一天一个文件、划线的每书一个 JSON）。合在一处算，是因为用户问的是
+   * 「我这一周干了什么」—— 那是**一个**问题，不该由客户端并发四个请求、
+   * 再自己拼时间窗口：四份数据各自按时区/边界算一遍，拼出来的总数必然对不上。
+   *
+   * ★ 一次返回 `weeks` 周（默认 8），而不是只返回当前这一周：侧栏要列「最近几周 +
+   *   一句话摘要」。让客户端逐周请求的话，切一次视图就是 8 次 HTTP、每次都重新
+   *   扫一遍同一批日记文件。这里扫一次（最多 56 个文件），纯函数算 8 次。
+   *
+   * ★ 日记只算**公开**那半边（与 `scanDays` 的默认一致）。私密条目连条数都不进来：
+   *   周报是一张会被截图分享的东西，「你这周写了 5 天私密日记」本身就是信息。
+   *   要改这条边界，得先有一个「周报能不能含私密」的独立决定。
+   *
+   * @param {{week?: string, weeks?: number}} request - `week` 形如 `2026-W47`；缺省取本机当前时间所在周。
+   */
+  async weeklyReport(request = {}) {
+    await this.ready;
+    const data = this.store.data;
+    const count = Math.min(Math.max(Number(request?.weeks) || 8, 1), 26);
+    const current = weekRange(request?.week ?? Date.now());
+    if (current === null) {
+      const error = new Error(`dsh-npie-reader: 无效的周「${String(request?.week ?? '')}」，要 2026-W47 这种形状`);
+      // 路由层据此回 400 而不是 500：这是**请求不对**，不是插件坏了。
+      error.code = 'BAD_WEEK';
+      throw error;
+    }
+    const ranges = [current];
+    while (ranges.length < count) {
+      const previousStart = new Date(ranges[ranges.length - 1].from);
+      // 用 `setDate` 减 7 天，不要减 `7*86400000`：夏令时那一周会差一小时，
+      // 而 `weekRange` 拿到 23:00 的前一天会算成上一周 —— 于是侧栏里出现两个同样的周。
+      previousStart.setDate(previousStart.getDate() - 7);
+      const previous = weekRange(previousStart);
+      if (previous === null || previous.key === ranges[ranges.length - 1].key) break;
+      ranges.push(previous);
+    }
+
+    // 书单只为了把 id 变成书名。读不出来（还没配书源、书单文件坏了）不该让整页周报失败：
+    // 书名退化成 id，比「周报打不开」好得多。
+    let books = [];
+    try {
+      books = (await this.loadLibrary())?.books ?? [];
+    } catch {
+      books = [];
+    }
+    const bookTitles = books
+      .filter((book) => typeof book?.id === 'string' && book.id !== '')
+      .map((book) => ({ id: book.id, title: book.title ?? book.name ?? '' }));
+
+    // 「已读」只存了 URL 和时间，标题/来源要回填。回填表用**全量**订阅建：
+    // 用户这周读的那篇，很可能已经在源里被新条目挤到后面去了。
+    const entryIndex = new Map();
+    for (const sub of data.subscriptions ?? []) {
+      for (const entry of sub.entries ?? []) {
+        if (typeof entry?.key !== 'string' || entry.key === '') continue;
+        entryIndex.set(entry.key, {
+          title: entry.titleZh || entry.title || entry.url || '',
+          feed: sub.name ?? '',
+          feedId: sub.id ?? '',
+        });
+      }
+    }
+
+    let papers = [];
+    try {
+      papers = (this.paperStore?.list?.({ includeTrashed: false }) ?? []).map((paper) => ({
+        id: paper.id,
+        title: paper.title ?? '',
+        addedAt: Number(paper.addedAt) || 0,
+      }));
+    } catch {
+      papers = [];
+    }
+
+    /*
+     * 日记：只读这几周覆盖到的天，不调 `scanDays()`。
+     * `scanDays` 有 400 个文件的预算闸（它是给「搜全部历史」用的），而近 8 周最多
+     * 56 个文件 —— 走它反而要按文件名排序 + 解析整份目录，还得担心预算截断。
+     * 这里按日期直接点开，缺哪天就是没写（`readDay` 对 ENOENT 回 exists:false）。
+     */
+    const dayMap = new Map();
+    let daysRead = 0;
+    for (const range of ranges) {
+      for (const day of range.days) {
+        if (dayMap.has(day)) continue;
+        const read = await this.diary.read(day).catch(() => null);
+        daysRead += 1;
+        if (read && Array.isArray(read.entries) && read.entries.length > 0) {
+          dayMap.set(day, { date: day, entries: read.entries });
+        }
+      }
+    }
+    const diaryDays = [...dayMap.values()];
+
+    /*
+     * 划线：一次覆盖全部周的窗口。
+     * `recent()` 回 `null` 表示目录读不到（权限 / 盘掉线）—— 与「一条都没划」区分开，
+     * 界面据此说「不知道」，而不是印一个会误导人的 `0`。
+     */
+    const earliest = ranges[ranges.length - 1];
+    const annotations = await this.annotationStore?.recent?.({ from: earliest.from, to: current.to }).catch(() => null);
+
+    const reports = ranges.map((range) => summarizeWeekly({
+      range,
+      read: data.read ?? {},
+      favorites: data.favorites ?? {},
+      entryIndex,
+      states: data.library?.states ?? {},
+      bookTitles,
+      papers,
+      diaryDays,
+      annotations: annotations ?? [],
+      scanned: {
+        subscriptions: (data.subscriptions ?? []).length,
+        entries: entryIndex.size,
+        diaryDays: daysRead,
+        annotationsReadable: annotations !== null,
+      },
+    }));
+
+    return {
+      week: current.key,
+      report: reports[0],
+      recent: reports.map((report) => ({
+        key: report.range.key,
+        label: report.range.shortLabel,
+        range: report.range.label,
+        headline: weeklyHeadline(report),
+        empty: report.empty,
+      })),
+    };
   }
 
   /**
@@ -5047,7 +5350,7 @@ export class RssService {
 // Mark every public method above as Remote-exported.
 {
   const names = [
-    'listChannels', 'listEntries', 'searchArticles', 'getArticle', 'entryMeta', 'getVersionContent',
+    'listChannels', 'listEntries', 'searchArticles', 'searchAll', 'getArticle', 'entryMeta', 'getVersionContent',
     'getTranscript', 'getTranscriptTranslation', 'translateTranscriptBatch',
     'asrStatus', 'prepareAsr', 'startTranscription', 'transcriptionStatus', 'cancelTranscription',
     // 0.84.0：AI 导读 + 平台链接解析（`saveAsrConfig` 在下面设置那一组）。

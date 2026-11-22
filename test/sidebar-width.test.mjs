@@ -3,7 +3,7 @@
  *
  * 用户 2026-11-06：「以目前 RSS 阅读左侧边栏的宽度再增加一些为准，进行统一」。
  * 这条测试同时钉住**数值**和**接线**：
- *   - 数值：默认 340（RSS 原 300 + 40），下限 256 / 上限 520；
+ *   - 数值：默认 380（0.88.0 从 340 再抬，RSS 那一行加到八项）、下限 288 / 上限 520；
  *   - 接线：四个视图都从 `sidebar-width.js` 读、都把 `--npr-list-width` 交给同一套
  *     `.npr-layout` 网格 —— 只改一处常量、漏接一个视图时界面照样会「切一下跳一下」，
  *     而这正是靠肉眼最容易看漏的那类错。
@@ -33,11 +33,11 @@ function fakeStorage(initial = {}) {
 }
 
 describe('共用宽度的数值', () => {
-  it('基准是 RSS 原 300 再增加一些，且不小于原来的下限', () => {
-    assert.equal(SIDEBAR_WIDTH, 340);
-    assert.equal(SIDEBAR_MIN_WIDTH, 256);
+  it('基准比 RSS 原 300 宽两次：0.71.0 → 340，0.88.0 → 380', () => {
+    assert.equal(SIDEBAR_WIDTH, 380);
+    assert.equal(SIDEBAR_MIN_WIDTH, 288);
     assert.equal(SIDEBAR_MAX_WIDTH, 520);
-    assert.ok(SIDEBAR_WIDTH > 300, '没比 RSS 原来宽');
+    assert.ok(SIDEBAR_WIDTH > 340, '没比上一版宽');
   });
 
   it('夹取：低于下限抬到下限、高于上限压到上限、坏值回落基准', () => {
@@ -62,14 +62,14 @@ describe('共用 key 与迁移', () => {
     assert.equal(readSidebarWidth(), 412);
   });
 
-  it('旧 RSS key = 300 时整体抬到 340（不缩窄用户拖宽过的界面）', () => {
+  it('旧 RSS key = 300 时整体抬到基准（不缩窄用户拖宽过的界面）', () => {
     fakeStorage({ 'npr.listWidth': '300' });
     assert.equal(readSidebarWidth(), SIDEBAR_WIDTH);
     fakeStorage({ 'npr.listWidth': '420' });
     assert.equal(readSidebarWidth(), 420);
   });
 
-  it('旧 RSS key = 220 时抬到统一基准 340，不复发窄屏换行', () => {
+  it('旧 RSS key = 220 时抬到统一基准，不复发窄屏换行', () => {
     fakeStorage({ 'npr.listWidth': '220' });
     assert.equal(readSidebarWidth(), SIDEBAR_WIDTH);
     assert.ok(readSidebarWidth() >= SIDEBAR_MIN_WIDTH);
@@ -78,6 +78,27 @@ describe('共用 key 与迁移', () => {
   it('新 key 优先，旧 key 不覆盖用户刚拖过的宽度', () => {
     fakeStorage({ [SIDEBAR_WIDTH_KEY]: '380', 'npr.listWidth': '500' });
     assert.equal(readSidebarWidth(), 380);
+  });
+
+  it('★ 上一版基准 340 会被抬到 380，而且**只抬一次**', () => {
+    // 0.88.0：抬默认值对已经存过值的用户无效，所以配了一次基准版本迁移。
+    const data = fakeStorage({ [SIDEBAR_WIDTH_KEY]: '340' });
+    assert.equal(readSidebarWidth(), SIDEBAR_WIDTH);
+    assert.equal(data.get(SIDEBAR_WIDTH_KEY), String(SIDEBAR_WIDTH));
+    // 抬过之后用户自己拖窄到 300 —— 下一次挂载必须尊重它，不能又顶回 380。
+    data.set(SIDEBAR_WIDTH_KEY, '300');
+    assert.equal(readSidebarWidth(), 300, '迁移在每次挂载都生效 —— 用户拖窄的动作被反复顶回去');
+  });
+
+  it('★ 用户拖宽过（460）时，「抬宽」不会把他缩回 380', () => {
+    fakeStorage({ [SIDEBAR_WIDTH_KEY]: '460' });
+    assert.equal(readSidebarWidth(), 460);
+  });
+
+  it('★ 亲手拖过的宽度会记下版本，下一次挂载不把它抬回去', () => {
+    fakeStorage();
+    assert.equal(saveSidebarWidth(310), 310);
+    assert.equal(readSidebarWidth(), 310, 'save 没记版本 ⇒ 用户拖窄的宽度立刻被抬回基准');
   });
 });
 
