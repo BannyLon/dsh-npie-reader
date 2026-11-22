@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.90.2 — 2026-11-22（本地未发布）
+
+### 按标题导入不再导错论文
+
+用户现场：粘《Language Model Harnesses Can Be Compositional Generalizers》导入，
+进来的却是「Weak-to-Strong Compositional Learning from Generative Models for
+Language-based Object Detection」——后者摘要里恰好有 language / model / compositional，
+被 `searchArxiv` 当成相关结果，旧代码 `return found[0]` 直接把它当成了精确匹配。
+
+- **搜索求召回，导入求精确**，两者判据必须分开。新增 `isTitleExactMatch`：
+  归一化后逐字相同，或**双向实词全覆盖**（输入的词都在候选标题里、候选标题的词
+  也都在输入里）；大小写、标点、复数、`harness/harnesses` 形态差异不算不同。
+  反向对照：只留单向覆盖会把「language model」误命中「Language Models Are
+  Few-Shot Learners」，双向那一半确实在拦。
+- 导入兜底改为取 8 条候选逐条精确比对，**只有指向同一篇才导入**；没有精确匹配
+  就如实报「没找到」，并说明按标题要一字不差、有出入就贴论文页链接。
+  导错比导不到糟：导不到他会换个写法，导错了他会拿错论文写读后感。
+- 导入框提示补一句「论文标题（要和原文一致）」。
+- **alphaXiv 的 `/pdf/` 链接也认了**：用户给的 `https://www.alphaxiv.org/pdf/2611.harness-cg`
+  是有效论文 URL，旧实现只认 `/abs|overview/`，它掉到兜底当标题搜 ⇒ 又导回一篇
+  无关论文，而且**没提示没找到**（最坏的那种：错了却不自知）。现在 `/pdf/` 路径
+  直接走 alphaXiv 页面解析，实测命中正确的那篇。
+
+判据：paper-source 29 项（新增 5 条精确匹配 + 接线 + `/pdf/` 链接），论文相关批次 235 项全过。
+真机联网：粘该标题 → 如实报没找到（不再误导那篇）；粘「attention is all you need」
+→ 精确命中 Attention Is All You Need。
+
 ## 0.90.1 — 2026-11-22
 
 ### 开代理（TUN/fake-ip）时论文导入与搜索全部失败

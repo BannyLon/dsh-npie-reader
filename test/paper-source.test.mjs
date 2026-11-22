@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
-  arxivQueryPlan, normalizeAlphaXivSlug, normalizeArxivId, paperFromAlphaXivHtml,
+  arxivQueryPlan, isTitleExactMatch, normalizeAlphaXivSlug, normalizeArxivId, paperFromAlphaXivHtml,
   queryPhrase, queryTokens, rankArxivResults, tokenCoverage,
 } from '../src/host/paper-source.js';
 import { stripComments } from '../scripts/strip-comments.mjs';
@@ -64,6 +64,11 @@ describe('alphaXiv 链接识别', () => {
     for (const input of [
       'https://www.alphaxiv.org/abs/2611.harness-cg',
       'https://www.alphaxiv.org/abs/2611.harness-cg.pdf',
+      // ★ 用户 2026-11-22 给的**论文 URL** 就是 /pdf/ 这一条 —— 旧实现不认，
+      //   掉到兜底当标题搜，直接导回来一篇无关论文（还没提示没找到）。
+      'https://www.alphaxiv.org/pdf/2611.harness-cg',
+      'https://alphaxiv.org/pdf/2611.harness-cg',
+      'https://www.alphaxiv.org/pdf/2611.harness-cg.pdf',
       'https://alphaxiv.org/abs/2611.harness-cg',
       'https://www.alphaxiv.org/overview/2611.harness-cg',
       'https://www.alphaxiv.org/abs/2611.harness-cg?utm_source=share#comments',
@@ -269,10 +274,55 @@ describe('接线守卫（源码级）', () => {
     assert.match(client, /runImport\(item\.arxivId \|\| item\.doi \|\| item\.url \|\| item\.title\)/);
   });
 
+  it('★ 用户现场：粘《Language Model Harnesses…》绝不能命中 Weak-to-Strong 那篇', () => {
+    // 0.90.2 的真缺陷：旧代码取 searchArxiv 第一名，而那篇的摘要里恰好有
+    // language / model / compositional，于是被当成用户要的那篇导了进来。
+    const input = 'Language Model Harnesses Can Be Compositional Generalizers';
+    const wrong = 'Weak-to-Strong Compositional Learning from Generative Models for Language-based Object Detection';
+    assert.equal(isTitleExactMatch(input, wrong), false,
+      '这篇沾了词的论文必须被拒 —— 导错比导不到糟');
+    assert.equal(isTitleExactMatch(input, input), true, '原样标题当然要命中');
+  });
+
+  it('★ 双向匹配：只认「输入 ⊂ 候选」会把沾词的另一篇放进来', () => {
+    const input = 'language model';
+    const long = 'Language Models Are Few-Shot Learners';
+    // 输入 ⊂ 候选（单向）成立，但候选里有 few-shot / learners 这些输入没说的 ⇒ 拒。
+    assert.equal(isTitleExactMatch(input, long), false,
+      '只做单向覆盖会误命中任意一篇更长的论文');
+    assert.equal(isTitleExactMatch(long, input), false, '反过来也不能命中');
+  });
+
+  it('大小写 / 标点 / 复数 / 书名号不影响同一篇的判定', () => {
+    const title = 'Language Model Harnesses Can Be Compositional Generalizers';
+    assert.equal(isTitleExactMatch(`《${title}》`, title), true, '书名号要剥掉');
+    assert.equal(isTitleExactMatch(title.toLowerCase(), title), true, '大小写不看');
+    assert.equal(isTitleExactMatch(title.replace(/ /g, '  '), title), true, '多空格不看');
+    // harness / harnesses 形态差异要容（sameWord 公共前缀 ≥5）。
+    assert.equal(isTitleExactMatch('Language Model Harness Can Be Compositional Generalizer', title), true);
+  });
+
+  it('副标题 / 漏词 / 多词 ⇒ 不算同一篇（宁可报没找到，也不导错）', () => {
+    const title = 'Attention Is All You Need';
+    assert.equal(isTitleExactMatch('Attention Is All You Need for Translation', title), false, '多了半截副标题');
+    assert.equal(isTitleExactMatch('Attention Is All', title), false, '漏了词');
+    assert.equal(isTitleExactMatch('', title), false);
+    assert.equal(isTitleExactMatch(title, ''), false);
+  });
+
+  it('接线：导入兜底用 isTitleExactMatch 逐条筛，不再取搜索第一名', () => {
+    const src = read('src/host/paper-source.js');
+    assert.match(src, /isTitleExactMatch\(text, item\.title\)/, '没有逐条做精确匹配');
+    assert.doesNotMatch(src, /return found\[0\]/, '又把搜索第一名当成导入结果了');
+    assert.match(src, /标题完全匹配/, '报错没说清「按标题导入要一致」');
+  });
+
   it('两句界面提示都要出现 alphaXiv 这三个字', () => {
     const client = read('src/client/PapersApp.jsx');
     // 导入框：告诉用户「链接」可以粘哪种。
     assert.match(client, /arXiv 编号 \/ 链接、alphaXiv 页面链接、DOI/);
+    // 按标题导入现在要求标题一致 —— 界面得先说清，否则用户粘个简写被拒会一头雾水。
+    assert.match(client, /或者论文标题（要和原文一致）/);
     // 搜索空结果：告诉他下一步该做什么。
     assert.match(client, /只发在 alphaXiv 上（没有 arXiv 编号）的论文不在这里/);
     // 有结果但都不是他要的那篇（粘整句标题的典型处境）也要说这一句，

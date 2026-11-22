@@ -170,7 +170,7 @@ function PaperDialog({ mode, onClose, onImport, onSearch, notify }) {
         <p className="npr-paper-modal-hint">
           {mode === 'search'
             ? '关键词、arXiv 编号、alphaXiv 链接都行。搜到之后点「导入」才会入库。'
-            : 'arXiv 编号 / 链接、alphaXiv 页面链接、DOI，或者论文标题。默认会把开放获取的全文一起下载下来。'}
+            : 'arXiv 编号 / 链接、alphaXiv 页面链接、DOI，或者论文标题（要和原文一致）。默认会把开放获取的全文一起下载下来。'}
         </p>
         <div className="npr-paper-modal-input">
           <input

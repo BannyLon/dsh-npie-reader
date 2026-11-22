@@ -300,6 +300,41 @@ export function tokenCoverage(text, tokens) {
 }
 
 /**
+ * 导入场景下，用户粘的标题与候选标题算不算**同一篇**（0.90.2）。
+ *
+ * ★ 为什么不能复用搜索的判据（`rankArxivResults`）：搜索求「召回」，标题命中全部词
+ *   **或摘要**命中全部词都留下；导入求「精确」，取搜索第一名会把沾了几个词的
+ *   另一篇论文当成用户要的那篇。用户 2026-11-22 的现场：粘
+ *   《Language Model Harnesses Can Be Compositional Generalizers》，导进来的却是
+ *   「Weak-to-Strong Compositional Learning from Generative Models for Language-based
+ *   Object Detection」—— 后者摘要里恰好有 language / model / compositional。
+ *   **导错比导不到糟**：导不到他会换个写法，导错了他会拿着错的论文写读后感。
+ *
+ * ★ 判据：归一化后逐字相同，或**双向**实词全覆盖 —— 输入的每个实词都在候选标题里，
+ *   候选标题的每个实词也都在输入里。双向缺一不可：
+ *   - 只要单向（输入 ⊂ 候选）⇒ 上面那篇 Weak-to-Strong 会因为含有
+ *     language / compositional 而误判成命中；
+ *   - 只要另一向（候选 ⊂ 输入）⇒ 粘「language model」会命中任意一篇标题更长的论文。
+ * ★ 用 `tokenCoverage`（带 `sameWord` 的形态容差）：harness / harnesses 算一个词，
+ *   复数与 -ing 差异不至于把同一篇论文判成两篇。
+ *
+ * @param {string} input 用户粘的标题
+ * @param {string} candidateTitle 候选论文的标题
+ * @returns {boolean}
+ */
+export function isTitleExactMatch(input, candidateTitle) {
+  const a = queryPhrase(input);
+  const b = queryPhrase(candidateTitle);
+  if (a === '' || b === '') return false;
+  if (a === b) return true;
+  const inTokens = queryTokens(input, { max: 30 });
+  const candidateTokens = queryTokens(candidateTitle, { max: 30 });
+  if (inTokens.length === 0 || candidateTokens.length === 0) return false;
+  return tokenCoverage(candidateTitle, inTokens) === 1
+    && tokenCoverage(input, candidateTokens) === 1;
+}
+
+/**
  * 只留「每个词都命中」的结果，并按标题吻合度排序。
  *
  * ★ 这一步才是「不笼统」的关键。arXiv 的 `ti:` / `AND` 只保证这些词**出现过**，
@@ -452,8 +487,11 @@ function metaContents(html, key) {
 /**
  * 认出 alphaXiv 的论文页地址 / slug。
  *
- * 接受 `https://www.alphaxiv.org/abs/2611.harness-cg`、带 `.pdf` 的直链、
- * 带 `?`/`#` 的分享链接，以及**裸 slug**（`2611.harness-cg`）。
+ * 接受 `https://www.alphaxiv.org/abs/2611.harness-cg`、
+ * `https://www.alphaxiv.org/pdf/2611.harness-cg`（0.90.2：**`/pdf/` 也是论文 URL**，
+ * 用户 2026-11-22 现场给的正是这一条 —— 旧实现只认 `/abs|overview/`，它掉到兜底
+ * 当标题搜，又导进了一篇无关论文）、带 `.pdf` 的直链、带 `?`/`#` 的分享链接，
+ * 以及**裸 slug**（`2611.harness-cg`）。
  *
  * ★ 为什么不能把它当 arXiv 编号：alphaXiv 的 slug 形状是「YYMM.可读后缀」，
  *   而 `2611` 这个前缀长得跟 arXiv 的 `YYMM.序号` 一模一样。判据放在**点后面
@@ -466,7 +504,7 @@ export function normalizeAlphaXivSlug(input) {
   const raw = String(input ?? '').trim();
   if (raw === '') return '';
   const stripped = raw
-    .replace(/^https?:\/\/(?:www\.)?alphaxiv\.org\/(?:abs|overview)\//i, '')
+    .replace(/^https?:\/\/(?:www\.)?alphaxiv\.org\/(?:abs|overview|pdf)\//i, '')
     .replace(/[?#].*$/, '')
     .replace(/\.pdf$/i, '')
     .replace(/^\/+/, '')
@@ -703,16 +741,30 @@ export async function resolvePaperInput(raw) {
     throw new Error('这个链接暂时认不出来。目前支持 arXiv 论文页、alphaXiv 论文页和 DOI 链接。');
   }
 
-  // 兜底：把整段当关键词，取第一条。用户粘贴标题时这是最省事的行为。
-  const found = await searchArxiv(text, { limit: 1 });
-  if (found.length === 0) {
+  /**
+   * 兜底：用户粘的是**标题**。这里绝不能取搜索第一名（0.90.2 修的真缺陷）。
+   *
+   * ★ 搜索求召回，导入求精确：粘《Language Model Harnesses Can Be Compositional
+   *   Generalizers》，搜索会返回一篇摘要里沾了 language / model / compositional 的
+   *   「Weak-to-Strong Compositional Learning…」，旧代码取 found[0] 就把它导进来了。
+   *   导错比导不到糟 —— 用户会拿错的论文写读后感，而且很难自查。
+   * ★ 改为：多取几条候选（limit 8），逐条用 `isTitleExactMatch` 双向比对，
+   *   **只有标题与输入指向同一篇才导入**；否则如实报「没找到」。用户手里的标题
+   *   多半略有出入（副标题、大小写、复数），判据用 `sameWord` 容这些形态差异，
+   *   但绝不容「换了另一篇论文」。
+   */
+  const candidates = await searchArxiv(text, { limit: 8 });
+  const exact = candidates.find((item) => isTitleExactMatch(text, item.title));
+  if (exact === undefined) {
     /**
      * ★ 说清「为什么没找到」和「还能怎么办」：论文只在 alphaXiv 上（没有 arXiv
      *   编号）是常见情况，而那句话正好是用户下一步要做的动作。
+     * ★ 顺带告诉用户「按标题导入要一字不差」：他粘的标题可能只是少了个副标题，
+     *   不给这句话他会以为插件搜不到，其实换个写法就能命中。
      */
-    throw new Error(`arXiv 上没有「${text}」。如果这篇只在 alphaXiv 上发表（没有 arXiv 编号），把它的 alphaXiv 页面链接贴进来就行。`);
+    throw new Error(`没有找到标题完全匹配的论文「${text}」。按标题导入需要标题一致（大小写、复数不看）；如果标题有出入，或这篇只在 alphaXiv 上发表（没有 arXiv 编号），把它的论文页链接贴进来最准。`);
   }
-  return found[0];
+  return exact;
 }
 
 /**
