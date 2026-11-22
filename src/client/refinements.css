@@ -3983,7 +3983,17 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
      就再也点不到按钮了。所以它走 `DiaryComposer` 的 `header` 槽位。
    ★ `nowrap + ellipsis`：面板占掉右侧时这行只剩 250 来 px，
      「结构化读后感模板」加按钮会把按钮挤出去。 */
-.npr-diary-tplbar { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; padding-bottom: 9px; border-bottom: 1px solid color-mix(in srgb, var(--npr-fg) 6%, transparent); }
+/*
+ * 模板条 + 「待放入的提纲」卡片（0.89.0）。
+ *
+ * ★ 外面这层 `tplhead` 只做竖向堆叠：模板条一行，待放入卡片一行。
+ *   为什么不把卡片塞进模板条里 —— 那一行是「这一页有哪几种结构」的选择器，
+ *   而卡片是「这一次生成的结果怎么处理」，两件事的时间尺度不同（一个是设置，
+ *   一个是刚发生的事）。混在一行会被当成第四颗模板按钮。
+ * ★ 卡片用虚线描边：它是**还没生效**的东西，与实线的已落盘内容区分开。
+ */
+.npr-diary-tplhead { display: flex; flex-direction: column; gap: 8px; margin: 0 0 4px; }
+.npr-diary-tplbar { display: flex; align-items: center; gap: 8px; margin: 0; padding-bottom: 9px; border-bottom: 1px solid color-mix(in srgb, var(--npr-fg) 6%, transparent); }
 .npr-diary-tplbar-label { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; font-weight: 600; color: color-mix(in srgb, var(--npr-fg) 62%, var(--npr-bg)); }
 .npr-root .npr-diary-tplbtn { flex: 0 0 auto; height: 24px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--npr-fg) 14%, transparent); border-radius: 999px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 11px; cursor: pointer; }
 .npr-root .npr-diary-tplbtn:hover:not(:disabled) { border-color: color-mix(in srgb, var(--npr-fg) 28%, transparent); color: var(--npr-fg); }
@@ -4000,6 +4010,20 @@ button.npr-src-row-name.is-editable:hover { color: var(--npr-accent-strong); }
  */
 .npr-root .npr-diary-tplbtn.is-armed { border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 46%, transparent); color: var(--dsw-alias-state-error-primary); }
 .npr-root .npr-diary-tplbtn.is-armed:hover:not(:disabled) { border-color: var(--dsw-alias-state-error-primary); color: var(--dsw-alias-state-error-primary); }
+/* 待放入卡片里那颗「换成这份」：主操作，加重一档（与「记下来」同一套配色反用）。 */
+.npr-root .npr-diary-tplbtn.is-primary { border-color: transparent; background: color-mix(in srgb, var(--npr-fg) 90%, transparent); color: var(--npr-bg); }
+.npr-root .npr-diary-tplbtn.is-primary:hover:not(:disabled) { background: var(--npr-fg); color: var(--npr-bg); }
+/*
+ * 待放入的提纲（0.89.0）——「生成提纲」碰上已经有字的正文时出现的卡片。
+ *
+ * ★ 说明文字独占一行（`flex: 1 1 100%`）：面板被右侧面板挤窄时（剩 250 来 px），
+ *   一句话加三颗按钮塞不进一行；先让它占满，按钮自动落到第二行，不会被截断。
+ * ★ 三颗按钮一起靠右：左对齐会让它们看起来像正文的一部分（这和编辑器就在下面）。
+ */
+.npr-diary-pending { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px;
+  padding: 9px 10px; border: 1px dashed color-mix(in srgb, var(--npr-fg) 20%, transparent); border-radius: 10px;
+  background: color-mix(in srgb, var(--npr-fg) 4%, transparent); }
+.npr-diary-pending-text { flex: 1 1 100%; font-size: 11.5px; line-height: 1.55; color: color-mix(in srgb, var(--npr-fg) 70%, var(--npr-bg)); }
 /* 危险动作用低饱和文字：「清空」和「记下来」在底栏并排，权重不能接近。 */
 .npr-root .npr-diary-linkish.is-danger:hover { color: #e5484d; }
 /* 「记下来」在读后感里再加一档分量：纸面比别处厚，按钮也要跟上。 */

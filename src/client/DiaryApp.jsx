@@ -80,7 +80,7 @@ import { placeRowMenu } from './row-menu.js';
 import { BookCover } from './BookCover.jsx';
 import { DiaryCalendar } from './DiaryCalendar.jsx';
 import { DiaryComposer } from './DiaryComposer.jsx';
-import { isPristineTemplate, mergeOutlineIntoDraft, needsTemplateConfirm } from './reflection-draft.js';
+import { isPristineSkeleton, mergeOutlineIntoDraft, needsTemplateConfirm, outlinePlacement } from './reflection-draft.js';
 import { formatExt } from './book-cover.js';
 import { ensureStyles } from './ReaderPage.jsx';
 import { ViewSwitch } from './ViewSwitch.jsx';
@@ -424,14 +424,6 @@ const AI_ENTRY_PROMPT = [
 const MODULE_BY_VALUE = new Map(DIARY_MODULES.map((item) => [item.value, item]));
 
 /**
- * 模板里的那几个小标题。
- *
- * ★ 从 `REFLECTION_TEMPLATE` **推出来**，不另抄一份字面量：模板文案改一个字，
- *   两边就对不上，而失败方式是「套用模板」按钮永远显示「未套用」，点一次插一遍。
- */
-const REFLECTION_HEADINGS = REFLECTION_TEMPLATE.split('\n').filter((line) => line.startsWith('## '));
-
-/**
  * 五档心情。灵感与私密两个模块共用。
  *
  * ★ 抽成组件而不是复制两遍：改一次配色就得记得改两处，而「只改了一处」在界面上
@@ -665,6 +657,16 @@ export function DiaryApp({
   /** 名单上的筛选：`all` 全部 / `written` 写过 / `blank` 还没写过。 */
   const [shelfFilter, setShelfFilter] = useState('all');
   const [book, setBook] = useState(null);
+  /**
+   * **此刻**打开的是哪本书（0.89.0）。
+   *
+   * ★ 为什么不用 `book` 的闭包值：`generateOutline()` 里 `await` 之后闭包里的
+   *   `book` 还是点下去那一刻的，读不出「用户在等模型这十几秒里换了书」。
+   *   不判这一下的话，A 书的提纲会写进 B 书的正文（而正文是同一个编辑框，
+   *   用户回来只看到一段莫名其妙的章节提示）。
+   * ★ 用 ref 不用 state：它只被事件回调读，不需要触发重渲染。
+   */
+  const bookIdLive = useRef('');
   const [bookEntries, setBookEntries] = useState({ items: [], busy: false });
   const [annotations, setAnnotations] = useState({ items: [], busy: false, error: '' });
   /**
@@ -701,6 +703,24 @@ export function DiaryApp({
    */
   const [outlineBusy, setOutlineBusy] = useState(false);
   const [outlineError, setOutlineError] = useState('');
+  /**
+   * 上一次落进正文的那份提纲原文（0.89.0）。
+   *
+   * ★ 只用来回答一个问题：「正文现在是不是还停在上一份提纲上、一个字都没加」。
+   *   是的话，再点一次「生成提纲」就是**换一份**（替换），而不是把第二份接在后面。
+   *   用户 2026-11-22 实测的正是后者：连点两次，两份提纲首尾相接，稿纸上一片乱。
+   * ★ 存原文而不是存「上一份是不是提纲」的布尔值：判据靠逐字比较，不靠猜。
+   *   正文被改过（他往提纲里填了半句）⇒ 比较不成立 ⇒ 走「先问」那一条。
+   */
+  const [lastOutline, setLastOutline] = useState('');
+  /**
+   * 生成好了、但正文里有用户写的字 ⇒ 先摆在这里让他选，不直接写正文（0.89.0）。
+   *
+   * ★ 为什么不在生成前就问：这一步要等模型十几秒，先生成完再问才不浪费这一次调用，
+   *   而且用户能看着提纲本身决定「换成这份」还是「接在末尾」。
+   * ★ 空串 = 没有待放入的提纲。
+   */
+  const [pendingOutline, setPendingOutline] = useState('');
   /**
    * 「换成模板」的上膛状态（0.88.0 定稿）。
    *
@@ -852,16 +872,19 @@ export function DiaryApp({
    */
   const insertRef = useRef(null);
   /**
-   * 正文里是否已经带着模板的**全部**小标题。
+   * 正文现在**就是**那份模板、一个字都没加（按钮显示「已套用」并禁用）。
    *
-   * ★ 不用 `refDraft.trim() !== ''` 判断：那样「写了两句话再套模板」和
-   *   「已经套过又点一次」长得一模一样 —— 而后者会把标题**再插一遍**，
-   *   正文里于是出现两套「## 一句话总结」。按钮现在按这个标志变成「已套用」并禁用。
-   * ★ 必须**四个都在**才算（0.88.0）：原来只判「包含 ## 一句话总结」，而模型给的
-   *   提纲里恰好也可能有一节叫「一句话总结」—— 于是提纲落进正文之后，按钮立刻变成
-   *   「已套用」并禁用，用户反而回不到模板（而那时候正是他想恢复结构的时候）。
+   * ★ 0.89.0 从「四个标题都在」改成「逐字全等」：旧判据在两种常见情况下都是错的 ——
+   *   ① 模型给的提纲里恰好有同名一节 ⇒ 提纲落进来，按钮立刻变「已套用」禁用，
+   *      用户反而回不到模板（而他此刻正是想恢复结构）；
+   *   ② 他在模板里填了一句话 ⇒ 四个标题还在，按钮禁用，于是他**永远**没法把模板
+   *      恢复成空白版，只能手动一节一节删。
+   *   全等判据的语义才和按钮一致：「已经是模板了」才叫已套用；填了字的正文是
+   *   「有内容」，此时按钮该显示「换成模板」并走两步确认（`needsTemplateConfirm`）。
+   * ★ 判据与 `outlinePlacement` / `needsTemplateConfirm` 共用同一个函数，
+   *   三处不会各自漂移。
    */
-  const refTemplated = REFLECTION_HEADINGS.every((line) => refDraft.includes(line));
+  const refTemplated = isPristineSkeleton(refDraft, REFLECTION_TEMPLATE);
   /** 中间那张解锁卡。侧栏「那年今日」锁着时把人带到这里（见 `askUnlock`）。 */
   const gateRef = useRef(null);
 
@@ -1088,10 +1111,19 @@ export function DiaryApp({
   async function openBook(target) {
     const finished = finishedOf(target.id);
     setBook({ ...target, readable: finished });
+    bookIdLive.current = target.id;
     setBookEntries({ items: [], busy: true });
     setAnnotations({ items: [], busy: true, error: '' });
     // 模板只在**还没写过**时预填，否则会覆盖用户已经改过的正文。
     setRefDraft((current) => (current.trim() === '' ? REFLECTION_TEMPLATE : current));
+    /*
+     * 换了一本书 ⇒ 上一份提纲与「待放入」的都不再属于当前这本书（0.89.0）。
+     * 正文是同一个编辑框（`refDraft` 不随书切换重置，这是有意的：用户可能正在
+     * 写上一本），所以这里不清正文；但「这份提纲是哪本书的」必须跟着书走，
+     * 否则在 A 书的提纲上连点，会被判成「还是上一份」而替换掉 B 书的内容。
+     */
+    setLastOutline('');
+    setPendingOutline('');
     try {
       const payload = await fetchDiaryBook(target.id);
       setBookEntries({ items: payload.entries ?? [], busy: false });
@@ -1471,46 +1503,79 @@ export function DiaryApp({
     });
     if (!ok) return;
     setRefDraft(REFLECTION_TEMPLATE);
+    // 正文回到空白模板了，上一份提纲与「待放入」的都不再有意义（0.89.0）。
+    setLastOutline('');
+    setPendingOutline('');
     notify?.(`已把《${book.title}》的读后感记下来`);
   }
 
   /**
-   * 生成读后感提纲（0.88.0）。
+   * 生成读后感提纲（0.88.0；0.89.0 改掉「默认追加」）。
    *
-   * ★ **不覆盖**用户已经写的字：正文为空就放进去，非空就接在末尾，并且在提示里
-   *   说清「已接在末尾」。覆盖是不可逆的 —— 用户可能写了三段才想起来点这一下。
-   * ★ 追加时先补 `\n\n`：贴着最后一行接上去的话，Markdown 会把它们并成同一段。
+   * ★ 语义：这是**换骨架**，不是往稿纸上贴一张便条。
+   *   - 正文里一个字都不是他写的（空 / 纯模板 / 纯上一份提纲）⇒ 直接换成这一份；
+   *   - 正文里有他写的字 ⇒ 不写正文，把提纲摆到待放入的卡片上让他选。
+   * ★ 为什么不再默认追加（用户 2026-11-22 报的）：连点两次「生成提纲」得到的是
+   *   两份提纲首尾相接。按钮叫「生成提纲」，点第二次的意思显然是「这份不满意」，
+   *   没人想把两套骨架都留在稿纸上。判据在 `outlinePlacement()`，带单测。
+   * 注意：这段是 `await` 之后才动正文的，`refDraft` 的闭包值可能已经旧了 ——
+   * 但「该不该换」这一步必须用点击那一刻的正文来判断，否则用户打字和模型返回
+   * 之间发生的事会让判据指向另一个结论。真正的写入用 updater 取最新值。
    */
   async function generateOutline() {
     if (outlineBusy) return;
     if (!book?.id) { setOutlineError('先在左边选一本书'); return; }
     setOutlineBusy(true);
     setOutlineError('');
-    /*
-     * 正文还是**原封不动的模板**吗（用户一个字没写）？
-     *
-     * ★ 用户 2026-11-22 的截图：先「套用模板」再「生成提纲」，正文里于是有
-     *   两套结构 —— 模板的「一句话总结 / 核心收获 / 行动指南 / 金句摘录」，
-     *   加上提纲自己的章节，「一句话总结」在屏幕中间出现两次。他的原话是
-     *   「如果同时使用的话，就会让输入框里很乱」。
-     * ★ 那四个空标题里一个字都不是用户写的，所以这种情况**替换**是安全的；
-     *   只要他动过（删了一节、或填了一句话），`isPristineTemplate` 就不再成立，
-     *   走原来的追加 —— 他的字一个都不能少（见 `reflection-draft.js` 文件头）。
-     * ★ 取 `refDraft` 的闭包值而不是在 updater 里判断：`replaceApplied` 要用来选
-     *   提示语，而 updater 必须保持纯、执行时机也不保证。
-     */
-    const replaceApplied = isPristineTemplate(refDraft, REFLECTION_TEMPLATE);
+    const draftAtClick = refDraft;
+    const bookIdAtClick = book.id;
+    const placement = outlinePlacement(draftAtClick, {
+      template: REFLECTION_TEMPLATE,
+      lastOutline,
+    });
     try {
-      const result = await requestReflectionOutline(book.id, refDraft);
+      const result = await requestReflectionOutline(book.id, draftAtClick);
       const outline = String(result?.outline ?? '').trim();
       if (outline === '') throw new Error('模型这次没有给出提纲，可以再点一次');
+      /*
+       * 这十几秒里他换了书 ⇒ 结果作废，不写正文。
+       *
+       * ★ 正文是同一个编辑框（切书不重置），所以「写进去」不会报错，只会悄悄
+       *   把 A 书的提纲放进 B 书的读后感里 —— 而他不会知道是从哪来的。
+       */
+      if (bookIdLive.current !== bookIdAtClick) {
+        notify?.('换书了，刚才生成的那份提纲没有写进正文');
+        return;
+      }
+      setPendingOutline('');
+      if (placement === 'ask') {
+        /*
+         * 正文里有他写的字：不替他决定（替换会删字，追加叠两套结构，两个都错）。
+         * 提纲先摆出来，等他点「换成这份」或「接在末尾」。
+         */
+        setPendingOutline(outline);
+        notify?.('提纲好了 —— 正文里已经有你写的字，选一下怎么放');
+        return;
+      }
       // 「不覆盖已写的字」这条判据在 `mergeOutlineIntoDraft()` 里，带单测
       // （`test/reflection-draft.test.mjs`）—— 它碰的是用户正文，不能只在 JSX 里内联。
-      setRefDraft((current) => mergeOutlineIntoDraft(current, outline, { template: REFLECTION_TEMPLATE }));
+      setRefDraft((current) => mergeOutlineIntoDraft(current, outline, {
+        template: REFLECTION_TEMPLATE,
+        lastOutline,
+      }));
+      setLastOutline(outline);
       // `thin` 是宿主如实报的「材料不多」（没做过逐章解读、也没划过线）。
       // 不说出来的话，用户看到一份比较泛的提纲，会以为这个功能就这水平。
-      if (replaceApplied) {
+      /*
+       * 回执要说清「刚才那一下替换掉的是什么」，因为替换不可撤销：
+       *   - 空正文 ⇒ 只是生成；
+       *   - 空模板 ⇒ 提醒怎么回到四个空标题；
+       *   - 上一份提纲 ⇒ 明确告诉他旧的没了，别去正文里找。
+       */
+      if (isPristineSkeleton(draftAtClick, REFLECTION_TEMPLATE)) {
         notify?.('模板换成了这本书的提纲 —— 想恢复四个空标题，再点「套用模板」');
+      } else if (draftAtClick.trim() !== '') {
+        notify?.(`换了一份新的提纲（上一份已替掉）${result?.thin ? ' · 材料不多，先读几章会更准' : ''}`);
       } else {
         notify?.(result?.thin
           ? '提纲已生成（材料不多，先读几章会更准）'
@@ -1521,6 +1586,35 @@ export function DiaryApp({
     } finally {
       setOutlineBusy(false);
     }
+  }
+
+  /**
+   * 待放入卡片上的三颗按钮（0.89.0）。
+   *
+   * ★ `mode === 'replace'` 会删掉正文里他写的字 —— 但这是**他自己点的**，
+   *   卡片上写着「换成这份」，与「静默替换」是两件事：知情同意之后就不必再确认一次。
+   */
+  function placePendingOutline(mode) {
+    const outline = pendingOutline;
+    if (outline === '') return;
+    setPendingOutline('');
+    if (mode === 'discard') {
+      notify?.('这份提纲没用上，正文没动');
+      return;
+    }
+    if (mode === 'replace') {
+      setRefDraft(`${outline}\n`);
+      setLastOutline(outline);
+      notify?.('正文换成了这份提纲');
+      return;
+    }
+    setRefDraft((current) => `${current.replace(/\s+$/, '')}\n\n${outline}\n`);
+    /*
+     * 接在末尾之后，正文是「他写的 + 提纲」，不再是任何一份骨架 ⇒ 记着这份提纲
+     * 只会让下一次「生成提纲」误以为正文还停在它上面（那样会静默替换掉他写的字）。
+     */
+    setLastOutline('');
+    notify?.('提纲接在正文末尾了');
   }
 
   /**
@@ -1543,6 +1637,7 @@ export function DiaryApp({
     // （`test/reflection-draft.test.mjs`）—— 它守的是「一次点击能删掉多少」。
     if (!needsTemplateConfirm(refDraft, REFLECTION_TEMPLATE)) {
       setRefDraft(REFLECTION_TEMPLATE);
+      setLastOutline('');
       return;
     }
     if (!templateArmed) {
@@ -1550,6 +1645,8 @@ export function DiaryApp({
       return;
     }
     setRefDraft(REFLECTION_TEMPLATE);
+    // 正文已经不是那份提纲了 ⇒ 记着它只会让下一次「生成提纲」误判成「还是上一份」（0.89.0）。
+    setLastOutline('');
     setTemplateArmed(false);
     notify?.('正文换成了四个空标题（原来的内容已替换）');
   }
@@ -3315,44 +3412,74 @@ export function DiaryApp({
                        * 事同级 —— 而「清空」和「记下来」本来就不该同级。
                        */
                       header={(
-                        <div className="npr-diary-tplbar">
-                          <span className="npr-diary-tplbar-label">结构化读后感模板</span>
-                          {/*
-                            生成提纲（0.88.0）。位置在「套用模板」**左边**：两者都会往正文
-                            里放结构，但这一颗会真去读这本书的章节要点与划线，代价高、也更
-                            贴题 —— 挨在一起，让用户一眼看出「模板是空的，提纲是这本书的」。
-                            ★ 两者**不叠加**（0.88.0 定稿）：正文还是没动过的空模板时，
-                              提纲会把它替掉而不是接在末尾 —— 否则屏幕里会出现两套结构
-                              （「一句话总结」出现两次）。判据在 `isPristineTemplate()`。
-                            ★ 生成中显示「正在生成…」而不是只转个圈：这一步可能十几秒，
-                              没有文字的话用户会以为点了没反应。
-                          */}
-                          <button type="button" className="npr-diary-tplbtn" disabled={outlineBusy || !book?.id}
-                            title={outlineBusy
-                              ? '正在读这本书的章节要点和你划过的句子…'
-                              : '按这本书的章节要点与你划过的句子，生成一份能直接往下写的提纲。已经写下的字不会被覆盖；如果正文还是没动过的空模板，提纲会替掉它，不会叠成两套结构。'}
-                            onClick={() => void generateOutline()}>
-                            {outlineBusy ? '正在生成…' : '生成提纲'}
-                          </button>
-                          <button type="button" className={`npr-diary-tplbtn${templateArmed ? ' is-armed' : ''}`}
-                            disabled={refTemplated}
-                            title={refTemplated
-                              ? '正文里已经有这四个小标题了 —— 再点一次会把模板重复插一遍，所以这里禁用了。'
-                              : templateArmed
-                                ? '再点一次：正文里现有的内容会被四个空标题替换掉。改一个字、或者等一下不点，就取消。'
-                                : refDraft.trim() === ''
-                                  ? '把「一句话总结 / 核心收获 / 行动指南 / 金句摘录」四个小标题装进正文。它是通用骨架；「生成提纲」是这本书专属的，点了会把它替掉。'
-                                  : '正文里已经有内容（提纲，或你写的字）。点一下会把正文换成四个空标题 —— 要点两次，第一次只是确认这一步。'}
-                            onClick={applyTemplate}>
-                            {refTemplated ? '已套用' : templateArmed ? '确认替换？' : refDraft.trim() === '' ? '套用模板' : '换成模板'}
-                          </button>
-                          {outlineError !== '' ? (
-                            <span className="npr-diary-tplerr" role="alert">{outlineError}</span>
-                          ) : null}
+                        <div className="npr-diary-tplhead">
+                          <div className="npr-diary-tplbar">
+                            <span className="npr-diary-tplbar-label">结构化读后感模板</span>
+                            {/*
+                              生成提纲（0.88.0；0.89.0 改口径）。位置在「套用模板」**左边**：
+                              两者都会往正文里放结构，但这一颗会真去读这本书的章节要点与划线，
+                              代价高、也更贴题 —— 挨在一起，让用户一眼看出「模板是空的，
+                              提纲是这本书的」。
+                              ★ 它**换骨架，不叠骨架**：正文里一个字都不是他写的（空 / 纯模板 /
+                                纯上一份提纲）就直接换掉；有他写的字就只摆到下面那张卡片上，
+                                由他自己选「换成这份 / 接在末尾」（判据 `outlinePlacement()`）。
+                                用户 2026-11-22 报的正是「连点两次接了两份」。
+                              ★ 生成中显示「正在生成…」而不是只转个圈：这一步可能十几秒，
+                                没有文字的话用户会以为点了没反应。
+                            */}
+                            <button type="button" className="npr-diary-tplbtn" disabled={outlineBusy || !book?.id}
+                              title={outlineBusy
+                                ? '正在读这本书的章节要点和你划过的句子…'
+                                : lastOutline !== '' && refDraft.trim() !== ''
+                                  ? '再生成一份这本书的提纲，替换掉现在正文里的这一份。'
+                                  : '按这本书的章节要点与你划过的句子，生成一份能直接往下写的提纲。正文里如果已经有你写的字，会先摆出来让你选怎么放。'}
+                              onClick={() => void generateOutline()}>
+                              {outlineBusy ? '正在生成…' : (lastOutline !== '' && refDraft.trim() !== '' ? '重新生成' : '生成提纲')}
+                            </button>
+                            <button type="button" className={`npr-diary-tplbtn${templateArmed ? ' is-armed' : ''}`}
+                              disabled={refTemplated}
+                              title={refTemplated
+                                ? '正文现在就是这四个空标题 —— 不用再套一次。'
+                                : templateArmed
+                                  ? '再点一次：正文里现有的内容会被四个空标题替换掉。改一个字、或者等一下不点，就取消。'
+                                  : refDraft.trim() === ''
+                                    ? '把「一句话总结 / 核心收获 / 行动指南 / 金句摘录」四个小标题装进正文。它是通用骨架；「生成提纲」是这本书专属的，点了会把它替掉。'
+                                    : '正文里已经有内容（提纲，或你写的字）。点一下会把正文换成四个空标题 —— 要点两次，第一次只是确认这一步。'}
+                              onClick={applyTemplate}>
+                              {refTemplated ? '已套用' : templateArmed ? '确认替换？' : refDraft.trim() === '' ? '套用模板' : '换成模板'}
+                            </button>
+                            {outlineError !== '' ? (
+                              <span className="npr-diary-tplerr" role="alert">{outlineError}</span>
+                            ) : null}
+                            </div>
+                            {pendingOutline !== '' ? (
+                              /*
+                               * 待放入的提纲（0.89.0）。
+                               *
+                               * ★ 为什么不让它直接落进正文：正文里有他自己写的字。替换会删字，
+                               *   追加会得到两套结构（他抱怨过的那种「很乱」）—— 两个都不能替他选。
+                               * ★ 只给「换成这份 / 接在末尾 / 先不用」三颗，没有第四种。
+                               *   「换成这份」放最左并加重：生成提纲的人八成是想要新骨架。
+                               */
+                              <div className="npr-diary-pending" role="group" aria-label="新生成了一份提纲">
+                                <span className="npr-diary-pending-text">
+                                  提纲好了。正文里已经有你写的字 —— 换成这份，还是接在末尾？
+                                </span>
+                                <button type="button" className="npr-diary-tplbtn is-primary" onClick={() => placePendingOutline('replace')}>换成这份</button>
+                                <button type="button" className="npr-diary-tplbtn" onClick={() => placePendingOutline('append')}>接在末尾</button>
+                                <button type="button" className="npr-diary-tplbtn" onClick={() => placePendingOutline('discard')}>先不用</button>
+                              </div>
+                            ) : null}
                         </div>
                       )}
                       actions={(
-                        <button type="button" className="npr-diary-linkish is-danger" onClick={() => setRefDraft('')}>清空</button>
+                        <button type="button" className="npr-diary-linkish is-danger" onClick={() => {
+                          setRefDraft('');
+                          // 正文清空了，上一份提纲与待放入的也一并作废（0.89.0）：
+                          // 留着的话，下一次「生成提纲」会以为正文还停在那份提纲上。
+                          setLastOutline('');
+                          setPendingOutline('');
+                        }}>清空</button>
                       )}
                     />
                   </section>

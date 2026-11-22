@@ -1744,8 +1744,9 @@ describe('0.44.2：写作区的纸面与区块标签', () => {
   it('「套用模板」不会把模板插第二遍', () => {
     // 0.44.1 及以前：按钮只看「正文空不空」，于是已经套过又点一次，
     // 四个 `##` 会被追加第二遍，正文里出现两套「一句话总结」。
-    assert.match(diary, /const refTemplated = REFLECTION_HEADINGS\.every\(/,
-      '没有判断正文里是否已经有模板骨架（而且必须是**四个都在**，见下一条）');
+    // 0.89.0：判据从「四个标题都在」换成「正文与模板逐字全等」—— 见下一条。
+    assert.match(diary, /const refTemplated = isPristineSkeleton\(refDraft, REFLECTION_TEMPLATE\);/,
+      '没有判断正文是不是原封不动的模板（语义必须是「已经是模板了」才禁用）');
     assert.match(diary, /disabled=\{refTemplated\}/, '已套用时按钮仍然可点');
     assert.match(diary, /\{refTemplated \? '已套用' : templateArmed \? '确认替换？' : refDraft\.trim\(\) === '' \? '套用模板' : '换成模板'\}/,
       '按钮没有反映「已套用 / 确认替换 / 套用 / 换成」四态');
@@ -1777,9 +1778,41 @@ describe('0.44.2：写作区的纸面与区块标签', () => {
     // 「已套用」并禁用，用户反而回不到模板（而那正是他想恢复结构的时候）。
     assert.doesNotMatch(diary, /refTemplated = refDraft\.includes\(/,
       '又退回「只认一个小标题」的判据 —— 提纲里出现同名标题时按钮会误判为已套用');
-    // 标题清单必须从模板推导，不能另抄一份字面量（抄一份就会与模板脱钩）。
-    assert.match(diary, /const REFLECTION_HEADINGS = REFLECTION_TEMPLATE\.split\('\\n'\)\.filter\(/,
-      '标题清单没有从 REFLECTION_TEMPLATE 推导 —— 模板改一个字两边就对不上');
+    // 0.88.0 用「四个标题都在」，0.89.0 也废掉了：他在模板里填一句话，四个标题
+    // 还在，按钮却禁用 —— 于是他永远没法把模板恢复成空白版。
+    assert.doesNotMatch(diary, /refTemplated = REFLECTION_HEADINGS\.every\(/,
+      '又退回「四个标题都在」的判据 —— 填过字的正文会被误判为已套用，模板再也回不去');
+  });
+
+  it('★ 「生成提纲」换骨架，不叠骨架（0.89.0）', () => {
+    // 用户 2026-11-22 的现场：连点两次「生成提纲」，正文里两份提纲首尾相接。
+    // 按钮叫「生成提纲」，点第二次的意思是「这份不满意」，不是「再贴一份上来」。
+    assert.match(diary, /outlinePlacement\(draftAtClick, \{/,
+      '没有走带单测的 placement 判据 —— 替换/追加的分流散在 JSX 里就守不住');
+    assert.match(diary, /if \(placement === 'ask'\)/,
+      '正文里有他写的字时没有先问 —— 直接写进去就是替换（删他的字）或叠两套结构');
+    assert.match(diary, /setPendingOutline\(outline\)/,
+      '生成好的提纲没有摆到「待放入」卡片上');
+    // 「上一份提纲」必须被记住，否则第二次点击会被判成「正文有字」而只弹卡片 ——
+    // 而卡片上只有「换成这份 / 接在末尾」，连点两次的默认路径就没了。
+    assert.match(diary, /const \[lastOutline, setLastOutline\] = useState\(''\)/,
+      '没有记住上一份提纲 —— 连点两次第二次会退化成「先问一句」');
+    assert.match(diary, /lastOutline,\n\s*\}\);/, 'placement 判据没拿到上一份提纲');
+    // 三颗按钮缺一颗都不行：「先不用」是他唯一能「这次白跑了」的出口。
+    for (const label of ['换成这份', '接在末尾', '先不用']) {
+      assert.ok(diary.includes(`>${label}</button>`), `待放入卡片少了「${label}」—— 他没有退路`);
+    }
+    // 等模型的十几秒里他可能换书 —— 正文是同一个编辑框，不判这一下就会把
+    // A 书的提纲写进 B 书的读后感里（不报错，也看不出从哪来的）。
+    assert.match(diary, /bookIdLive\.current !== bookIdAtClick/,
+      '生成期间换书没有作废那次结果 —— 会写进另一本书的正文');
+    assert.match(diary, /bookIdLive\.current = target\.id/, '没有在开书时更新「此刻是哪本」');
+    // 反向对照：不许再有「无条件追加」那条老路径（0.88.0 的调用点就是这个形状）。
+    assert.equal(
+      diary.includes("mergeOutlineIntoDraft(current, outline, { template: REFLECTION_TEMPLATE })"),
+      false,
+      '还留着不带 lastOutline 的旧调用 —— 连点两次照样会接两份',
+    );
   });
 
   it('写作区是一张纸，不是四张卡片', () => {
@@ -1827,8 +1860,10 @@ describe('0.44.2：写作区的纸面与区块标签', () => {
   });
 
   it('主次动作拉开：危险动作用低饱和文字', () => {
-    assert.match(diary, /className="npr-diary-linkish is-danger" onClick=\{\(\) => setRefDraft\(''\)\}>清空/,
-      '「清空」没有标记成危险动作');
+    // 0.89.0：「清空」除了清正文，还要把 lastOutline / pendingOutline 一起作废，
+    // 所以从单行箭头函数变成了块（判据跟着放宽到「这一颗按钮里确实清了正文」）。
+    assert.match(diary, /className="npr-diary-linkish is-danger" onClick=\{\(\) => \{[\s\S]{0,500}?setRefDraft\(''\)[\s\S]{0,500}?\}>清空</,
+      '「清空」没有标记成危险动作（或不再清正文）');
     assert.match(css, /\.npr-diary-linkish\.is-danger:hover \{ color: #e5484d; \}/, '危险动作没有单独的 hover 色');
     assert.match(css, /\.npr-write\[data-variant="reflection"\] \.npr-diary-save \{ height: 32px;/, '「记下来」在读后感里没有加一档分量');
     assert.match(css, /\.npr-root \.npr-diary-tplbtn \{[^}]*border-radius: 999px/, '「套用模板」不是描边胶囊');
