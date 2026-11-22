@@ -490,7 +490,7 @@ PDF 与电子书的顶部胶囊各多一颗「写读后感」：带着**这本�
 
 ### 论文（第四个 tab，0.68.0）
 
-顶部「订阅 / 书 / 论文 / 日记」四选一。按 **arXiv 编号 / DOI / 标题**导入，或直接上传本地 PDF；开放获取的**自动补下载全文**（元数据三级源：arXiv Atom → Crossref → OpenAlex；全文地址取 OpenAlex 的 `best_oa_location.pdf_url`，付费墙内的给 DOI 落地页并提示手动上传）。**速读卡**给标题 / 作者 / venue / 摘要 / 标签 / 进度 —— 先决定要不要读，再打开正文。
+顶部「订阅 / 书 / 论文 / 日记」四选一。按 **arXiv 编号 / alphaXiv 链接 / DOI / 标题**导入，或直接上传本地 PDF；开放获取的**自动补下载全文**（元数据四级源：arXiv Atom → alphaXiv 论文页 → Crossref → OpenAlex；全文地址取 OpenAlex 的 `best_oa_location.pdf_url`，付费墙内的给 DOI 落地页并提示手动上传）。**速读卡**给标题 / 作者 / venue / 摘要 / 标签 / 进度 —— 先决定要不要读，再打开正文。
 
 - **PDF 落盘之后就是一个普通 PDF 书条目**（宿主 `paperAsBook()` 造条目），所以目录、找词、划词、划线、逐章解读、读后感全部**原样复用书架那条链路**，一行阅读器代码都没改。
 - 移入回收站可恢复，**彻底删除才连 PDF 一起删**；回收站里的条目只允许彻底删除，库里的只允许移入回收站。
@@ -499,6 +499,35 @@ PDF 与电子书的顶部胶囊各多一颗「写读后感」：带着**这本�
 - 选中的那一条**一眼看得出来**（强调色底 + 描边 + 左侧 3px 竖条，标题转强调色），不再与 `:hover` 的浅灰混成一个样子。
 - 两处例外是为了不留「点了没有任何事」的死行：回收站里的条目恒可点（要选中才能恢复），读完但**没有本地全文**的也可点（它没有正文可开、也就没有「重新阅读」，锁死连摘要都看不到）
 - **侧栏工具栏最右端有设置齿轮**（0.88.0）：与订阅页是同一颗、同一处。设置页挂在 `ReaderPage` 的三元之外，所以在这里打开、关掉后仍停在论文页。
+
+### 只发在 alphaXiv 上的论文，以及「搜索太笼统」（0.90.0）
+
+arXiv 不是唯一发布渠道：alphaXiv 上有一类论文**没有 arXiv 编号**（页面里 `arxivId`
+为 null，slug 形如 `2611.harness-cg`），它们的 PDF 只在 alphaXiv 上。旧实现只认
+arXiv，于是把这类论文的链接粘进「导入」，得到的是「没找到」—— 而链接明明是能打开的。
+
+- **导入认 alphaXiv 页面链接**：`/abs/<slug>`、带 `.pdf` 的直链、带 `?utm=` 的分享
+  链接、以及裸 slug 都收。解析走页面上的 **Highwire 元标签**（`citation_title` /
+  `citation_author` / `citation_pdf_url` …，Google Scholar 那套公开契约），不解析它的
+  React 序列化数据（`$R[27]={title:…}`，键名随时会变）。
+- **有 arXiv 编号的 alphaXiv 页面改走 arXiv**：页面带 `citation_arxiv_id` 时再查一次
+  arXiv，拿真实的 `published` 日期、分类、`journal_ref`（alphaXiv 的
+  `citation_publication_date` 是它自己录的，实测把 2017 年的 Attention 写成 2023）。
+- **判定顺序**：arXiv → alphaXiv → DOI。反了的话，一个 alphaXiv 链接会被送进
+  Crossref 查一个不存在的 DOI。
+- **「没找到」不再是一句空话**：认不出的 URL 直接说「暂时认不出来，目前支持 arXiv /
+  alphaXiv / DOI」；按标题搜不到时说清「arXiv 上没有，只在 alphaXiv 上的论文把链接
+  贴进导入就行」—— 那句话正是用户下一步要做的动作。
+- **搜索不再拿无关论文充数**：原来第二档是把整句丢进裸 `all:` 多词查询，而 arXiv 对
+  它执行的是**或**语义 —— 实测搜「LANGUAGE MODEL HARNESSES CAN BE COMPOSITIONAL
+  GENERALIZERS」，返回的第一屏是 DeformSmith / WizardLM / Zero-Shot Sign Language，
+  只沾了 language、model、be。现在改两档：**标题短语**（`ti:"…"`）→ **逐词 AND**，
+  并且本地再筛一遍——每个检索词都得在标题里出现（第二档放宽到摘要），
+  整段标题都出现的顶到最前。一个词都命不中的结果**一条都不显示**。
+- **限流与「查无此篇」分开报**：arXiv 回 429/503 时文案是「忙不过来，等几秒再试」
+  （并自动重试一次），不再伪装成「没找到」。
+- alphaXiv 来的论文在列表里显示 `alphaXiv` 而不是一个空的 `arXiv:`；欢迎页多一格
+  来源统计。
 
 ### 页内链接与划词翻译（0.68.0）
 

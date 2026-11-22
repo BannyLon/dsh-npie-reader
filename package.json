@@ -1,6 +1,6 @@
 {
   "name": "dsh-npie-reader",
-  "version": "0.89.0",
+  "version": "0.90.0",
   "description": "澄境 | Limina —— DeepSeek Harness 桌面端的阅读与记录插件。读三种：订阅（RSS / Atom，含 newsletter、播客单集、YouTube 频道）、电子书（PDF 按原版式，EPUB / MOBI / AZW3 / AZW / TXT 重排）、论文（按 arXiv / DOI / 标题导入，速读卡与页级翻译）；记一处：灵感速记、私密加密日记、按书归档的读后感。原文 / 译文 / 对照 / 改写四档、本机或云端朗读并可导出 MP3、播客跟字幕（无字幕可在本机识别）、整本导出 skill 包；25 个 agent 工具。零第三方后端，数据只在本机。",
   "type": "module",
   "engines": {

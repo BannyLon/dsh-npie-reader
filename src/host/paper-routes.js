@@ -15,8 +15,8 @@
  * 路由一览：
  *
  *   GET  /papers                       列表 + 标签 + 计数
- *   POST /papers/search                按关键词查 arXiv（不落库）
- *   POST /papers/import                按 arXiv id / DOI / 链接导入（可顺带下载 PDF）
+ *   POST /papers/search                按关键词 / 编号 / alphaXiv 链接查（不落库）
+ *   POST /papers/import                按 arXiv id / alphaXiv 链接 / DOI / 标题导入（可顺带下载 PDF）
  *   POST /papers/upload                上传本地 PDF（base64）
  *   GET  /papers/:id/bibtex            BibTeX（纯读）
  *   POST /papers/:id/download          给已入库的论文补下载全文
@@ -30,7 +30,7 @@ import { PAPER_API_PREFIX, isPaperId } from '../library.js';
 import { bibtexFor, citeKeyFor } from '../paper-bibtex.js';
 import { isTrustedLocalRequest } from './trust.js';
 import {
-  arxivById, downloadPdf, enrichPaperFields, normalizeArxivId, pdfCandidate, resolvePaperInput, searchArxiv,
+  downloadPdf, enrichPaperFields, pdfCandidate, resolvePaperInput, searchArxiv,
 } from './paper-source.js';
 
 /** 普通请求体上限。 */
@@ -142,13 +142,14 @@ export function makePaperRoutes({ store, log = () => {} }) {
       const body = await readBody(req);
       const query = String(body.q ?? '').trim();
       if (query === '') return fail(res, 400, '搜索词不能为空');
-      // 粘贴 arXiv 编号/链接时直接精确命中，比全文检索可靠得多。
-      const arxivId = normalizeArxivId(query);
-      if (arxivId !== '') {
-        try {
-          return sendJson(res, 200, { ok: true, items: [await arxivById(arxivId)] });
-        } catch { /* 认出来了但 arXiv 没有 ⇒ 继续当关键词搜 */ }
-      }
+      /**
+       * 编号 / alphaXiv 链接的精确命中在 `searchArxiv` 里面（0.90.0 收拢的）。
+       *
+       * ★ 这里原来先自己认 arXiv 编号、认不出再当关键词 —— 于是「alphaXiv 链接」
+       *   一路走到关键词检索，把整条 URL 丢给 arXiv 全文检索，必然 0 条。
+       *   判定只留一份：路由不再猜，`searchArxiv` 里那三种输入（编号 / alphaXiv /
+       *   自由词）是同一个函数决定的，界面和 Agent 工具才不会各说各话。
+       */
       const items = await searchArxiv(query, { limit: Math.min(30, Number(body.limit) || 20) });
       return sendJson(res, 200, { ok: true, items });
     }

@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.90.0 — 2026-11-22
+
+### alphaXiv 链接能导进来了；搜索不再拿无关论文充数
+
+用户现场：`https://www.alphaxiv.org/abs/2611.harness-cg` 粘进「导入」回「没找到」，
+在「搜索 arXiv」里贴 slug、贴完整链接也都是「没搜到」；而按标题搜时，返回的是一屏
+完全无关的论文（DeformSmith / WizardLM / Zero-Shot Sign Language…）。三个症状两个根因。
+
+**一、arXiv 不是唯一渠道（导入）**
+
+那篇论文**没有 arXiv 编号** —— 页面里写着 `arxivId:null`，是 alphaXiv 自己发的，
+slug 是 `2611.harness-cg`（形状跟 arXiv 的 `YYMM.序号` 只差「点后面是字母还是数字」）。
+旧实现只认 arXiv，于是这类论文永远导不进来，而它们恰恰只能在 alphaXiv 上拿到。
+
+- **认 alphaXiv 页面链接**：`/abs/<slug>`、`.pdf` 直链、带 `?utm=` 的分享链接、裸 slug。
+  元数据取页面的 **Highwire 标签**（`citation_title` / `citation_author` /
+  `citation_pdf_url` / `citation_arxiv_id`），那是给索引器看的公开契约，
+  比它的 React 序列化数据（`$R[27]={…}`）稳得多。
+- **页面带 `citation_arxiv_id` 就改走 arXiv**：拿真实的发表日期、分类、`journal_ref`
+  （alphaXiv 的 `citation_publication_date` 是它自己录的，实测把 2017 年的
+  「Attention Is All You Need」写成 2023/8/2）；arXiv 抽风才退用页面元数据。
+- **判定顺序 arXiv → alphaXiv → DOI**，且**认不出的 URL 不再当关键词**：
+  以前 `all:"https://…"` 必然 0 条，用户只看到「没找到」，既不知道该换什么词，
+  也不知道自己给的东西根本没被理解。
+- PDF 直链实测 2.9 MB、`%PDF-1.5`，下载链路原样复用；这类论文在列表里标 `alphaXiv`。
+
+**二、`all:` 多词是「或」，不是「与」（搜索）**
+
+旧实现的第二档把整句丢进裸 `all:`，arXiv 对它的执行是**或**语义 —— 这就是用户说的
+「太笼统、太模糊」。现在两档：**标题短语** `ti:"…"` → **逐词 `AND`**，
+并在本地按检索词再筛一遍（每个词都要命中标题；第二档放宽到摘要），
+整段标题都出现的顶到最前，一个词都命不中的**一条都不显示**。
+另：429/503 是限流，文案改成「忙不过来，等几秒再试」并自动重试一次，不再伪装成「查无此篇」。
+
+判据：新增 `test/paper-source.test.mjs` 23 项（链接识别、页面解析、查询计划、筛选排序、
+接线）；把筛选条件去掉 / 把 `ti:` 改回裸 `all:` ⇒ **4 条立刻变红**。
+
 ## 0.89.0 — 2026-11-22
 
 ### 「生成提纲」是换骨架，不是往稿纸上再贴一张

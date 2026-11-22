@@ -891,7 +891,7 @@ export function createToolDefinitions(service) {
         const page = await service.papersList({
           tag: args.tag, status: args.status, query: args.query, limit: args.limit,
         });
-        if (page.total === 0) return '论文库还是空的。用户可以在插件的「论文」页按 arXiv 编号 / DOI 导入，或者直接上传本地 PDF。';
+        if (page.total === 0) return '论文库还是空的。用户可以在插件的「论文」页按 arXiv 编号 / alphaXiv 链接 / DOI 导入，或者直接上传本地 PDF。';
         if (page.papers.length === 0) {
           return `库里 ${page.total} 篇，但没有符合当前条件的。换个标签或去掉筛选再试。`;
         }
@@ -919,7 +919,7 @@ export function createToolDefinitions(service) {
     }),
     defineTool({
       name: TOOL_NAMES.paperSearch,
-      description: 'Full-text search INSIDE the local paper library (title / abstract / personal note / tags). Returns the paper id plus a snippet around the match. This searches what is stored locally, not the internet — to find NEW papers use paper_import, which resolves an arXiv id / DOI / title against arXiv.',
+      description: 'Full-text search INSIDE the local paper library (title / abstract / personal note / tags). Returns the paper id plus a snippet around the match. This searches what is stored locally, not the internet — to find NEW papers use paper_import, which resolves an arXiv id / alphaXiv link / DOI / title against arXiv.',
       parameters: {
         query: { type: 'string', description: 'Text to look for (case-insensitive substring; Chinese needs no word segmentation).', required: true },
         limit: { type: 'number', description: 'Max hits (default 20, cap 100).' },
@@ -947,9 +947,9 @@ export function createToolDefinitions(service) {
     }),
     defineTool({
       name: TOOL_NAMES.paperImport,
-      description: 'Add ONE paper to the local library from an arXiv id / arXiv link / DOI / paper title, and (by default) download its open-access PDF. Returns the paper id and whether the full text actually landed. Paid/publisher PDFs cannot be downloaded — report that honestly and tell the user to upload the file themselves. Existing papers are merged, not duplicated.',
+      description: 'Add ONE paper to the local library from an arXiv id / arXiv link / alphaXiv page link / DOI / paper title, and (by default) download its open-access PDF. Returns the paper id and whether the full text actually landed. Paid/publisher PDFs cannot be downloaded — report that honestly and tell the user to upload the file themselves. Existing papers are merged, not duplicated.',
       parameters: {
-        input: { type: 'string', description: 'arXiv id (2401.00001), arXiv/DOI URL, DOI (10.xxxx/...), or a title to search.', required: true },
+        input: { type: 'string', description: 'arXiv id (2401.00001), arXiv / alphaXiv / DOI URL, DOI (10.xxxx/...), or a title to search. alphaXiv links matter for papers that were never posted to arXiv — they have no arXiv id, so only that link can resolve them.', required: true },
         download: { type: 'boolean', description: 'Download the open-access PDF when the metadata is known (default true). Set false to only add metadata.' },
       },
       output: {

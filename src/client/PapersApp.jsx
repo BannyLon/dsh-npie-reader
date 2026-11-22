@@ -59,6 +59,18 @@ function formatBytes(bytes) {
 }
 
 /**
+ * 列表行第二行「来源」那一格：期刊优先，其次 arXiv 编号，最后才退到来源名。
+ *
+ * ★ alphaXiv 上有**没有 arXiv 编号**的论文（0.90.0 才开始收）。旧的那一行只认
+ *   `arxivId`，这类论文于是显示成「2026 · —」，看起来像元数据没抓到；写出来源名
+ *   至少能解释「为什么它没有编号」。
+ */
+function paperOriginLabel(paper) {
+  if (paper.arxivId) return `arXiv ${paper.arxivId}`;
+  return paper.source === 'alphaxiv' ? 'alphaXiv' : '';
+}
+
+/**
  * 一条论文列表行。
  *
  * ★ 结构是「`div` 里两个 `button`」，不是「一个 `button` 装下所有东西」：
@@ -88,7 +100,7 @@ export function PaperRow({ paper, states, active, trash, onSelect, onRestart }) 
         onClick={() => onSelect(paper)}>
         <span className="npr-paper-row-title">{paper.title}</span>
         <span className="npr-paper-row-meta">
-          {[paper.year || '', paper.venue || (paper.arxivId ? `arXiv ${paper.arxivId}` : '')].filter(Boolean).join(' · ') || '—'}
+          {[paper.year || '', paper.venue || paperOriginLabel(paper)].filter(Boolean).join(' · ') || '—'}
         </span>
         <span className="npr-paper-row-foot">
           {/* ★ 状态与进度是**一句**（「在读 · 1/33 页」），与电子书同一个写法；
@@ -157,8 +169,8 @@ function PaperDialog({ mode, onClose, onImport, onSearch, notify }) {
         </div>
         <p className="npr-paper-modal-hint">
           {mode === 'search'
-            ? '关键词、arXiv 编号都行。搜到之后点「导入」才会入库。'
-            : 'arXiv 编号 / 链接、DOI，或者论文标题。默认会把开放获取的全文一起下载下来。'}
+            ? '关键词、arXiv 编号、alphaXiv 链接都行。搜到之后点「导入」才会入库。'
+            : 'arXiv 编号 / 链接、alphaXiv 页面链接、DOI，或者论文标题。默认会把开放获取的全文一起下载下来。'}
         </p>
         <div className="npr-paper-modal-input">
           <input
@@ -172,22 +184,43 @@ function PaperDialog({ mode, onClose, onImport, onSearch, notify }) {
         </div>
         {error !== '' && <p className="npr-paper-error">{error}</p>}
         {mode === 'search' && searched && results.length === 0 && busy === '' && (
-          <p className="npr-paper-modal-hint">没搜到。换个关键词，或者直接把 arXiv 编号贴进「导入」。</p>
+          /* ★ 别只说「没搜到」：只在 alphaXiv 上发表（没有 arXiv 编号）的论文
+             永远不会出现在这里，而用户手里那条链接正好能导进来。这句话就是
+             他下一步要做的动作。 */
+          <p className="npr-paper-modal-hint">
+            没搜到。只发在 alphaXiv 上（没有 arXiv 编号）的论文不在这里 —— 把它的页面链接贴进「导入」就行。
+          </p>
         )}
         {results.length > 0 && (
-          <ul className="npr-paper-results">
-            {results.map((item) => (
-              <li key={item.key}>
-                <div className="npr-paper-result-main">
-                  <span className="npr-paper-result-title">{item.title}</span>
-                  <span className="npr-paper-result-meta">
-                    {[item.year || '', authorLine(item.authors)].filter(Boolean).join(' · ')}
-                  </span>
-                </div>
-                <button type="button" className="npr-paper-ghost" onClick={() => void runImport(item.arxivId || item.doi || item.title)}>导入</button>
-              </li>
-            ))}
-          </ul>
+          <>
+            <ul className="npr-paper-results">
+              {results.map((item) => (
+                <li key={item.key}>
+                  <div className="npr-paper-result-main">
+                    <span className="npr-paper-result-title">{item.title}</span>
+                    <span className="npr-paper-result-meta">
+                      {[item.year || '', authorLine(item.authors)].filter(Boolean).join(' · ')}
+                    </span>
+                  </div>
+                  {/* ★ 按 id → DOI → 页面地址 的顺序交给导入：alphaXiv 上「没有 arXiv
+                      编号」的论文只有页面地址认得出来，而导它的标题会重新搜一遍
+                      arXiv，结果还是 0 条。 */}
+                  <button type="button" className="npr-paper-ghost" onClick={() => void runImport(item.arxivId || item.doi || item.url || item.title)}>导入</button>
+                </li>
+              ))}
+            </ul>
+            {/*
+             * 粘了一整句标题（≥3 个词）却只看到「相关的」那一屏时，最可能的处境是
+             * 「这篇不在 arXiv 上」—— 而不会有人从一屏差不多的论文里猜出这一点。
+             * ★ 只在标题长度像标题时才多说这一句：搜 `harness` 这种单位、词本来
+             *   就该有一堆结果，这时候提醒反而是噪音。
+             */}
+            {input.trim().split(/\s+/).filter(Boolean).length >= 3 && (
+              <p className="npr-paper-modal-hint">
+                没有要的那篇？只发在 alphaXiv 上（没有 arXiv 编号）的论文搜不到 —— 把它的页面链接贴进「导入」就行。
+              </p>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -397,8 +430,9 @@ export function PapersApp({ reading, onExit, notify, api, SessionProvider, rende
     const bySource = (value) => papers.filter((paper) => paper.source === value).length;
     return {
       arxiv: bySource('arxiv'),
+      alphaxiv: bySource('alphaxiv'),
       doi: bySource('doi'),
-      local: papers.length - bySource('arxiv') - bySource('doi'),
+      local: papers.length - bySource('arxiv') - bySource('alphaxiv') - bySource('doi'),
       withFile: papers.filter((paper) => paper.file !== null).length,
       /**
        * 「已在读」必须与「在读」筛**同一口径**（= 未开始 + 在读）。
@@ -1040,6 +1074,7 @@ export function PapersApp({ reading, onExit, notify, api, SessionProvider, rende
                 <div className="npr-welcome-keys">
                   {[
                     ...(welcomeStats.arxiv > 0 ? [['arXiv', `${welcomeStats.arxiv} 篇`]] : []),
+                    ...(welcomeStats.alphaxiv > 0 ? [['alphaXiv', `${welcomeStats.alphaxiv} 篇`]] : []),
                     ...(welcomeStats.doi > 0 ? [['DOI', `${welcomeStats.doi} 篇`]] : []),
                     ...(welcomeStats.local > 0 ? [['本地', `${welcomeStats.local} 篇`]] : []),
                     ['有全文', `${welcomeStats.withFile} 篇`],
@@ -1061,6 +1096,8 @@ export function PapersApp({ reading, onExit, notify, api, SessionProvider, rende
                   selected.year || '',
                   selected.venue || '',
                   selected.arxivId ? `arXiv:${selected.arxivId}` : '',
+                  // alphaXiv 上「没有 arXiv 编号」的那类：不写出来源，这一行只剩年份。
+                  !selected.arxivId && selected.source === 'alphaxiv' ? 'alphaXiv' : '',
                   selected.doi ? `DOI ${selected.doi}` : '',
                 ].filter(Boolean).join(' · ') || '来源信息待补'}
               </p>
