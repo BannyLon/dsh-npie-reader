@@ -626,50 +626,77 @@
   --npr-set-line-soft: color-mix(in srgb, var(--npr-fg) 6.5%, var(--npr-bg));
   --npr-set-sunken: color-mix(in srgb, #000 5.5%, var(--npr-bg));
   --npr-set-field: color-mix(in srgb, #000 3%, var(--npr-bg));
+  /* ── coss 几何（2026-11-23）──
+     coss ui 的圆角不是「随手一个数」，而是三层语义：卡片 `--radius-2xl`（16）、
+     容器 `--radius-xl`（12）、控件 `--radius-lg`（10）。三档之外不再出现第四个圆角，
+     这是它看上去「整」的原因。我们保留本仓既有的 16 外框，把内部按这三档收拢。
+     ★ 环（focus ring）在 coss 里是**输入框 3px、按钮 2px + 1px 偏移**，不是同一条：
+       输入框要盖住边框本身（`has-focus-visible:border-ring` + `ring-[3px]`），
+       按钮只做外环。这里照抄这个差别 —— 统一成 2px 会让输入框获得焦点时
+       像「边框变粗了一点」，看不出是聚焦。
+     ★ 环色用 fg 混 14%：coss 用 `ring-ring/24` 叠在 `--input` 上，等效灰度接近这个值；
+       直接写死颜色会在深色主题下变成一圈亮边。 */
+  --npr-set-radius-lg: 16px;
+  --npr-set-radius: 12px;
+  --npr-set-radius-ctl: 10px;
+  --npr-set-ring-input: color-mix(in srgb, var(--npr-fg) 14%, transparent);
+  --npr-set-ring-btn: color-mix(in srgb, var(--npr-fg) 18%, transparent);
   width: min(1040px, 100%); height: min(860px, 100%);
-  border: 1px solid var(--npr-set-line); border-radius: 16px;
+  border: 1px solid var(--npr-set-line); border-radius: var(--npr-set-radius-lg);
   background: var(--npr-bg);
-  box-shadow: 0 30px 80px -24px rgba(0,0,0,.30), 0 2px 8px rgba(0,0,0,.04);
+  box-shadow: 0 28px 72px -28px rgba(0,0,0,.28), 0 1px 3px rgba(0,0,0,.05);
 }
-.npr-settings-backdrop { background: color-mix(in srgb, #101014 42%, transparent); }
+.npr-settings-backdrop { background: color-mix(in srgb, #0b0b0f 46%, transparent); }
 
 /* 抬头：印章 + 标题 + 品牌。原先「澄境 | Limina │ 插件设置」里那条竖线把
    「产品名」和「这一屏的名字」摆成了并列关系，两种字号还一样大。 */
-.npr-settings-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 18px 14px 20px; border-bottom: 1px solid var(--npr-set-line-soft); }
+.npr-settings-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px 16px 15px 20px; border-bottom: 1px solid var(--npr-set-line-soft); }
 .npr-settings-title { display: flex; align-items: center; gap: 11px; min-width: 0; }
 /* 印章用**界面无衬线**而不是宋体：宋体在 16px 下「澄」的横画只有 1px，
    在深色底上会糊成一团灰，第一眼像「字形坏了」。无衬线 600 在 28px 的块里
-   笔画完整，也仍然是「一块墨、一个字」的形态。 */
-.npr-settings-seal { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 8px; background: var(--npr-fg); color: var(--npr-bg); font-family: system-ui, -apple-system, "PingFang SC", sans-serif; font-size: 16px; font-weight: 600; line-height: 1; }
+   笔画完整，也仍然是「一块墨、一个字」的形态。
+   ★ 圆角跟控件档（10）而不是卡片档：它是与标题同排的一个「控件」，不是一块卡。 */
+.npr-settings-seal { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: var(--npr-set-radius-ctl); background: var(--npr-fg); color: var(--npr-bg); font-family: system-ui, -apple-system, "PingFang SC", sans-serif; font-size: 16px; font-weight: 600; line-height: 1; }
 .npr-settings-title > div { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.npr-settings-head strong { font-size: 14px; font-weight: 600; letter-spacing: 0; line-height: 1.3; }
+.npr-settings-head strong { font-size: 14px; font-weight: 600; letter-spacing: -.005em; line-height: 1.3; }
 .npr-settings-head .npr-settings-brand { font-size: 11px; letter-spacing: .02em; color: var(--npr-muted); }
-.npr-settings-head .npr-icon { flex: none; width: 28px; height: 28px; padding: 5px; border-radius: 7px; color: var(--npr-muted); }
+/* 关闭按钮：coss 的 ghost icon button 是 32×32 / radius-10 / hover 换 `accent` 底。
+   原先 28×28 / radius-7 且没有 hover 底色 —— 鼠标移上去毫无反馈。 */
+.npr-settings-head .npr-icon { flex: none; width: 30px; height: 30px; padding: 6px; border-radius: var(--npr-set-radius-ctl); color: var(--npr-muted); transition: background-color .12s ease, color .12s ease; }
+.npr-settings-head .npr-icon:hover { background: color-mix(in srgb, var(--npr-fg) 6%, transparent); color: var(--npr-fg); }
+.npr-settings-head .npr-icon:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--npr-set-ring-btn); }
 
-.npr-settings-body { display: grid; grid-template-columns: 218px minmax(0,1fr); flex: 1; min-height: 0; }
+.npr-settings-body { display: grid; grid-template-columns: 224px minmax(0,1fr); flex: 1; min-height: 0; }
 
-/* 左栏：中间灰底 + 白色「浮起的选中块」。
+/* 左栏：coss 的 sidebar list —— 轨道比内容淡一档，选中项是**浮起的一张白卡**。
    ★ 0.66 的第一版在选中块左边画过一条 2px 墨线（`left:-12px`，想让它贴住面板边）。
      真机截图里那条线落在**面板圆角外**，看着像一道划痕 —— 选中态已经由
-     「白块浮在灰底上 + 字重 600 + 图标不透明」三件事说清了，不需要第四个信号。 */
-.npr-settings-tabs { display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 18px 12px 14px; border: 0; border-right: 1px solid var(--npr-set-line); background: var(--npr-set-sunken); }
-.npr-settings-nav-caption { padding: 0 10px 10px; color: var(--npr-muted); font-size: 10.5px; font-weight: 500; letter-spacing: .16em; }
-.npr-settings-tabs button { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
-.npr-settings-tabs button svg { flex: none; opacity: .8; }
-.npr-settings-tabs button:hover { background: color-mix(in srgb, var(--npr-fg) 4.5%, transparent); color: var(--npr-fg); }
-.npr-settings-tabs button[aria-current=page] { background: var(--npr-bg); color: var(--npr-fg); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 0 0 1px var(--npr-set-line-soft); }
+     「白块浮在灰底上 + 字重 600 + 图标不透明」三件事说清了，不需要第四个信号。
+   ★ coss 的活跃项是三件事同时发生：底色抬到 card、加 1px 边、加 `shadow-xs`。
+     只做底色会显得「一块补丁」；带上边与阴影才有「浮起」的层级。
+   ★ 轨道底色降到 3%：coss 的 muted 轨道比正文底色只深一点点，深色主题下
+     叠黑会让侧栏变成一条明显的深色带，所以深色时改用 fg 叠加（见下面 data-theme 兜底）。 */
+.npr-settings-tabs { display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 16px 10px 12px; border: 0; border-right: 1px solid var(--npr-set-line); background: color-mix(in srgb, var(--npr-fg) 3.2%, var(--npr-bg)); }
+.npr-settings-nav-caption { padding: 0 8px 8px; color: var(--npr-muted); font-size: 11px; font-weight: 500; letter-spacing: .08em; }
+.npr-settings-tabs button { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 10px; border: 1px solid transparent; border-radius: var(--npr-set-radius-ctl); background: transparent; color: var(--npr-muted); font: inherit; font-size: 13px; text-align: left; cursor: pointer; transition: background-color .12s ease, color .12s ease; }
+.npr-settings-tabs button svg { flex: none; opacity: .78; }
+.npr-settings-tabs button:hover { background: color-mix(in srgb, var(--npr-fg) 5%, transparent); color: var(--npr-fg); }
+.npr-settings-tabs button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--npr-set-ring-btn); }
+.npr-settings-tabs button[aria-current=page] { background: var(--npr-bg); color: var(--npr-fg); font-weight: 600; border-color: var(--npr-set-line-soft); box-shadow: 0 1px 2px rgba(0,0,0,.05); }
 .npr-settings-tabs button[aria-current=page] svg { opacity: 1; }
-.npr-settings-nav-foot { display: grid; gap: 3px; margin-top: auto; padding: 14px 10px 4px; border-top: 1px solid var(--npr-set-line-soft); color: var(--npr-muted); font-size: 10.5px; line-height: 1.5; letter-spacing: .02em; }
+.npr-settings-nav-foot { display: grid; gap: 3px; margin-top: auto; padding: 14px 8px 4px; border-top: 1px solid var(--npr-set-line-soft); color: var(--npr-muted); font-size: 10.5px; line-height: 1.5; letter-spacing: .02em; }
 .npr-settings-nav-foot strong { color: color-mix(in srgb, var(--npr-fg) 62%, var(--npr-bg)); font-weight: 500; font-variant-numeric: tabular-nums; }
 
-.npr-settings-content { min-width: 0; padding: 32px clamp(24px, 4.2%, 44px) 40px; background: var(--npr-bg); }
+.npr-settings-content { min-width: 0; padding: 28px clamp(22px, 4%, 40px) 36px; background: var(--npr-bg); }
 /* 正文列定宽 760：滑杆在这个宽度下每 10px 约 2.5px 的量程变化，再宽就变成
    「拖了半屏才动一格」。这也是版式上的取舍 —— 设置项不该铺满 800px。
    ★ 680 那一版在 1032 的面板里右侧会留下 64px 死白，每条分组细线都短一截，
-     看着像没画完；760 之后列宽正好等于内容区可用宽度，细线落在外边距上。 */
-.npr-settings-content > section { display: flex; flex-direction: column; gap: 26px; width: min(100%, 760px); }
-.npr-settings-intro { margin: 0; }
-.npr-settings-intro h2 { margin: 0 0 6px; font-size: 22px; font-weight: 600; letter-spacing: -.01em; line-height: 1.25; }
+     看着像没画完；760 之后列宽正好等于内容区可用宽度，细线落在外边距上。
+   ★ 卡与卡的间距从 26 收到 18：卡片有了真边框之后，26 的间隙会让一屏只剩两张卡，
+     而 coss 的卡片组间距（`gap-4` = 16）本来就比无边框时代更紧。 */
+.npr-settings-content > section { display: flex; flex-direction: column; gap: 18px; width: min(100%, 760px); }
+.npr-settings-intro { margin: 0 0 2px; }
+.npr-settings-intro h2 { margin: 0 0 6px; font-size: 20px; font-weight: 600; letter-spacing: -.015em; line-height: 1.3; }
 .npr-settings-intro p { margin: 0; max-width: 46em; color: var(--npr-muted); font-size: 12.5px; line-height: 1.7; }
 
 /* ── 样张：这一屏的「证据」──
@@ -679,7 +706,7 @@
      `overflow:hidden` 兜住极端情况，但 240 装得下两行 32px/2.4 —— 正常取值不会裁字。
    ★ 纸色取 `THEMES`（与阅读页同一份），`auto` 时不注入内联色，改用**虚线边**：
      虚线 = 「这一档不是固定的纸，跟着宿主走」，与主题块里那枚虚线的语义同源。 */
-.npr-specimen { display: flex; flex-direction: column; gap: 14px; min-height: 156px; max-height: 240px; margin: 0; padding: 18px 22px 20px; overflow: hidden; border: 1px solid var(--npr-set-line); border-radius: 10px; background: var(--npr-bg); }
+.npr-specimen { display: flex; flex-direction: column; gap: 14px; min-height: 156px; max-height: 240px; margin: 0; padding: 18px 22px 20px; overflow: hidden; border: 1px solid var(--npr-set-line); border-radius: var(--npr-set-radius); background: var(--npr-bg); box-shadow: 0 1px 2px rgba(0,0,0,.03); }
 .npr-specimen.is-auto { border-style: dashed; }
 .npr-specimen-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; font-size: 10px; line-height: 1.5; letter-spacing: .04em; opacity: .52; }
 .npr-specimen-meta span:first-child { letter-spacing: .24em; }
@@ -688,12 +715,18 @@
 .npr-specimen-body p { margin: 0; text-wrap: pretty; }
 .npr-specimen-tail { margin-top: .35em; opacity: .62; }
 
-/* 卡片改成「一段」而不是「一个框」：白底上再加白卡只会多出一圈灰边。
-   块与块之间用一条细线分隔，间距交给上层的 gap（26px）。 */
-.npr-settings-card { padding: 0; border: 0; border-radius: 0; background: none; }
-.npr-settings-card + .npr-settings-card { border-top: 1px solid var(--npr-set-line-soft); }
+/* 卡片：coss 的 `rounded-2xl border bg-card shadow-xs/5`。
+   ★ 0.66 时代把卡片做成「一段而不是一个框」（无边框、只留分节细线），理由是
+     「白底上再加白卡只会多出一圈灰边」。换成 coss 之后这条前提变了：coss 的
+     卡片底色与正文底色**本身就是同一色**，靠 1px 边 + 极浅投影定形，不是靠色差。
+     所以边框回来了，但底色不抬 —— 不做成「浅灰卡」，那才会脏。
+   ★ 不对 `+ .npr-settings-card` 再画分隔线：卡与卡之间已经有 18px 间隙与各自
+     的边框，再加一条线就是两道边夹着一道缝（0.66 之前踩过，见上面的注释）。
+   ★ padding 20 而不是 coss 的 24：设置项本身是「两行文字 + 一个控件」的密度，
+     24 会把一张卡撑到需要滚动才能看全三行。 */
+.npr-settings-card { padding: 20px; border: 1px solid var(--npr-set-line); border-radius: var(--npr-set-radius-lg); background: var(--npr-bg); box-shadow: 0 1px 2px rgba(0,0,0,.03); }
 .npr-settings-card-head { display: flex; flex-direction: column; gap: 5px; margin-bottom: 16px; }
-.npr-settings-content .npr-settings-card h3 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0; }
+.npr-settings-content .npr-settings-card h3 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -.005em; }
 .npr-settings-card-head p, .npr-settings-hint { margin: 0; color: var(--npr-muted); font-size: 12px; line-height: 1.7; }
 
 /* 分组小标题：字距拉开的 10.5px 微标 + 一条自动拉满的细线。
@@ -716,12 +749,16 @@
 .npr-settings-reading-card .npr-reading-setting-check .npr-switch { grid-column: 3; justify-self: end; }
 
 /* 下拉框：原生箭头（一枚 9px 灰三角，且随系统缩放漂移）换成自己画的 7px 折角。
-   `appearance:none` 之后必须自己补右边 32px 的内边距，否则长字体名会压到箭头上。 */
+   `appearance:none` 之后必须自己补右边 32px 的内边距，否则长字体名会压到箭头上。
+   ★ coss 的输入框是 36 高 / 圆角 10 / 聚焦时**边框换成 ring 色并加 3px 环**。
+     我们保留 34→36 的抬升：34 高在中文 12.5px 下上下只剩 4px 余量，看着像被压扁；
+     coss 自己也是 `h-9 sm:h-8`，桌面端 32 但它的字号是 14 —— 我们的 12.5 配 36 才是同一比例。 */
 .npr-set-field { position: relative; display: block; min-width: 0; max-width: 320px; }
 .npr-set-field.is-select::after { content: ''; position: absolute; right: 12px; top: 50%; width: 6px; height: 6px; margin-top: -5px; border-right: 1.4px solid var(--npr-muted); border-bottom: 1.4px solid var(--npr-muted); transform: rotate(45deg); pointer-events: none; }
-.npr-set-field :is(select, input) { width: 100%; height: 34px; padding: 0 12px; border: 1px solid var(--npr-set-line); border-radius: 8px; background: var(--npr-set-field); color: var(--npr-fg); font: inherit; font-size: 12.5px; }
+.npr-set-field :is(select, input) { width: 100%; height: 36px; padding: 0 12px; border: 1px solid var(--npr-set-line); border-radius: var(--npr-set-radius-ctl); background: var(--npr-set-field); color: var(--npr-fg); font: inherit; font-size: 12.5px; transition: border-color .12s ease, box-shadow .12s ease; }
 .npr-set-field select { padding-right: 32px; appearance: none; -webkit-appearance: none; cursor: pointer; }
-.npr-set-field :is(select, input):focus-visible { outline: none; border-color: color-mix(in srgb, var(--npr-fg) 45%, var(--npr-bg)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--npr-fg) 7%, transparent); }
+.npr-set-field :is(select, input):hover:not(:disabled) { border-color: color-mix(in srgb, var(--npr-fg) 20%, var(--npr-bg)); }
+.npr-set-field :is(select, input):focus-visible { outline: none; border-color: color-mix(in srgb, var(--npr-fg) 38%, var(--npr-bg)); box-shadow: 0 0 0 3px var(--npr-set-ring-input); }
 
 /* 滑杆：轨道 3px、已填充段用墨色、滑块是**空心**圆点。
    ★ 原先是系统控件（4px 实心黑轨 + 16px 实心黑点），一屏两条，比标题还抢眼。
@@ -752,14 +789,24 @@
    这里只留它自己的「按内容定宽」。
    ★ 0.44.5 之前它自带走 28px / 5px / 11px、底色用 `--npr-bg-2`、选中块用
      `--dsw-alias-bg-base` —— 那是三套数字之外的第四套，只是没被圈进截图。 */
-.npr-segmented { display: inline-flex; width: max-content; max-width: 100%; }
+/* 设置里的分段器（版心宽度 / 默认版本 / 订阅状态）：coss 的 segmented control ——
+   灰槽 + 白色浮起块，槽 2px 内缩、块 8 圆角。
+   ★ 只在设置页内覆写（`.npr-settings-page` 前缀）：书架页与日记页的分段器
+     是另一套（26 高、无边框那套），一起改会把「换页」与「筛列表」两个层级的
+     尺寸差抹平 —— 那不是这次要动的东西。
+   ★ 槽高 = 28 + 2×2 + 2×1 = 34，比全局那档（32）高 2px：设置页里它是整行唯一的
+     控件，32 在一排 36 高的输入框旁边会显得矮一截。 */
+.npr-settings-page .npr-segmented { display: inline-flex; gap: 2px; width: max-content; max-width: 100%; padding: 2px; border: 1px solid var(--npr-set-line-soft); border-radius: var(--npr-set-radius-ctl); background: color-mix(in srgb, var(--npr-fg) 5.5%, var(--npr-bg)); flex-shrink: 0; }
 /* 版心宽度是 5 个纯数字按钮（`ReadingAppearance`）。这类「一排小方块」在窄面板里
-   必须**整组换行**，不能把右侧数值列挤掉。`.npr-segmented` 默认 `flex-shrink: 0`
+   必须**整组换行**，不能把右侧数值列挤掉。全局那条给的是 `flex-shrink: 0`
    + `width: max-content`，不补这一条就永远不折行（0.84.7）。 */
-.npr-segmented.npr-width-options { flex-wrap: wrap; width: auto; }
+.npr-settings-page .npr-segmented.npr-width-options { flex-wrap: wrap; width: auto; }
 /* 版心宽度那几个是数字（28 / 32 / 36 …），按内容定宽会一枚窄一枚宽，
    视觉上像没对齐 —— 给一个下限，让它们等宽。 */
-.npr-segmented button { min-width: 37px; }
+.npr-settings-page .npr-segmented button { min-width: 37px; height: 28px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 12px; font-weight: 400; white-space: nowrap; cursor: pointer; transition: background-color .12s ease, color .12s ease; }
+.npr-settings-page .npr-segmented button:hover { background: color-mix(in srgb, var(--npr-fg) 6%, transparent); color: var(--npr-fg); }
+.npr-settings-page .npr-segmented button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--npr-set-ring-btn); }
+.npr-settings-page .npr-segmented button[aria-pressed=true] { background: var(--npr-bg); color: var(--npr-fg); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.07); }
 .npr-settings-reading-card .npr-segmented { grid-column: 2 / 4; justify-self: start; }
 
 /* ── 纸色：7 枚「一小页纸」，每枚里一个「文」字 ──
@@ -773,8 +820,12 @@
 .npr-theme-options button { display: grid; gap: 6px; min-width: 0; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--npr-muted); font: inherit; font-size: 10.5px; cursor: pointer; }
 .npr-theme-options button:hover { color: var(--npr-fg); }
 .npr-theme-options button[aria-pressed=true] { color: var(--npr-fg); font-weight: 600; }
-.npr-theme-swatch { display: grid; place-items: center; height: 46px; border: 1px solid var(--npr-set-line-soft); border-radius: 8px; font-family: "Songti SC", Georgia, serif; font-size: 17px; line-height: 1; transition: box-shadow .12s ease; }
-.npr-theme-options button[aria-pressed=true] .npr-theme-swatch { box-shadow: 0 0 0 2px var(--npr-bg), 0 0 0 3.5px var(--npr-fg); }
+.npr-theme-swatch { display: grid; place-items: center; height: 44px; border: 1px solid var(--npr-set-line-soft); border-radius: var(--npr-set-radius-ctl); font-family: "Songti SC", Georgia, serif; font-size: 17px; line-height: 1; transition: box-shadow .12s ease; }
+/* 选中态：coss 的 `ring-2 ring-offset-2` —— 先垫一圈与底色同色的空隙，再画墨环。
+   这样无论纸是白是黑，环都落在卡片底色上，七枚的强弱一致。 */
+.npr-theme-options button[aria-pressed=true] .npr-theme-swatch { box-shadow: 0 0 0 2px var(--npr-bg), 0 0 0 4px var(--npr-fg); }
+.npr-theme-options button:focus-visible { outline: none; }
+.npr-theme-options button:focus-visible .npr-theme-swatch { box-shadow: 0 0 0 2px var(--npr-bg), 0 0 0 4px var(--npr-set-ring-btn); }
 .npr-theme-label { text-align: center; }
 /* 「跟随应用」用虚线边：虚线表示「这一档不是固定的纸，是跟着宿主走」。
    七枚里只有它是虚线，于是它既是选项也是一个自解释的图例。 */
@@ -783,13 +834,26 @@
    一条设置读起来像「两个不相干的东西」。改成整行通栏，左缘与 label 对齐 ——
    标签和值占第一行，滑杆占第二行，这是设置项最常见的读法。 */
 .npr-reading-settings .npr-reading-setting input[type=range] { grid-column: 1 / -1; margin-top: 2px; }
+/* 开关：几何照 coss —— 轨道 = 拇指 + 2（高）、拇指 × 2 − 2（宽），拇指 2px 内缩，
+   所以行程 = 宽 − 高 + 2。coss 的关态用 `bg-input`（一层浅灰），不是描边；
+   开态用 `bg-primary`，我们这里就是品牌强调色。
+   ★ 按下的那一刻拇指横向拉长 10%（coss 的 `active:scale-x-110`）：这是唯一
+     能让人确认「点击被接收」的即时反馈 —— 开关没有 press 态，点下去到状态翻转
+     之间会有一段视觉真空。 */
 .npr-switch { position: relative; display: inline-flex; align-items: center; cursor: pointer; }
 .npr-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-.npr-switch span { display: block; width: 34px; height: 20px; border-radius: 999px; background: var(--npr-border-strong); transition: background .15s; }
-.npr-switch span::after { content: ''; display: block; width: 16px; height: 16px; margin: 2px; border-radius: 50%; background: var(--npr-bg); box-shadow: 0 1px 2px rgba(0,0,0,.18); transition: transform .15s; }
+.npr-switch span { display: block; width: 36px; height: 20px; border-radius: 999px; background: color-mix(in srgb, var(--npr-fg) 20%, var(--npr-bg)); transition: background-color .18s ease; }
+.npr-switch span::after { content: ''; display: block; width: 16px; height: 16px; margin: 2px; border-radius: 50%; background: var(--npr-bg); box-shadow: 0 1px 2px rgba(0,0,0,.18); transform-origin: left center; transition: transform .16s cubic-bezier(.4,0,.2,1); }
 .npr-switch input:checked + span { background: var(--npr-accent-strong); }
-.npr-switch input:checked + span::after { transform: translateX(14px); }
-.npr-switch input:focus-visible + span { outline: 1px solid var(--npr-accent-strong); outline-offset: 2px; }
+.npr-switch input:checked + span::after { transform: translateX(16px); }
+.npr-switch:active span::after { transform: scaleX(1.1); }
+.npr-switch:active input:checked + span::after { transform: translateX(16px) scaleX(1.1); transform-origin: right center; }
+.npr-switch input:focus-visible + span { outline: none; box-shadow: 0 0 0 2px var(--npr-bg), 0 0 0 4px var(--npr-set-ring-btn); }
+@media (prefers-reduced-motion: reduce) {
+  .npr-switch span, .npr-switch span::after { transition: none; }
+  .npr-switch:active span::after, .npr-switch:active input:checked + span::after { transform: none; }
+  .npr-switch:active input:checked + span::after { transform: translateX(16px); }
+}
 /* ── 卡片内部的「行列表」──
    ★ 原先每张卡各自带 `margin-top + padding-top + border-top`，四张卡就画四条横线；
      现在只有一层 `.npr-set-list > * + *`。多一层会在两行之间出现两条平行细线
@@ -802,21 +866,28 @@
 /* 「翻译用哪个模型」：说明在左、下拉框在右。窄容器下换行堆叠，别把 select 压成一条缝。 */
 .npr-settings-model-row { display: grid; grid-template-columns: minmax(0,1fr) minmax(190px,280px); align-items: center; gap: 16px; }
 .npr-settings-model-row .npr-set-field { max-width: none; }
-.npr-ai-model { width: 100%; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--npr-set-line); border-radius: 8px; background: var(--npr-set-field); color: var(--npr-fg); font: inherit; font-size: 12px; }
+.npr-ai-model { width: 100%; min-width: 0; height: 36px; padding: 0 10px; border: 1px solid var(--npr-set-line); border-radius: var(--npr-set-radius-ctl); background: var(--npr-set-field); color: var(--npr-fg); font: inherit; font-size: 12px; transition: border-color .12s ease, box-shadow .12s ease; }
+.npr-ai-model:hover:not(:disabled) { border-color: color-mix(in srgb, var(--npr-fg) 20%, var(--npr-bg)); }
+.npr-ai-model:focus-visible { outline: none; border-color: color-mix(in srgb, var(--npr-fg) 38%, var(--npr-bg)); box-shadow: 0 0 0 3px var(--npr-set-ring-input); }
 .npr-ai-model:disabled { opacity: .55; }
 .npr-settings-source-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 /* 「服务地址 / API Key」那一块（订阅管理、朗读共用）原来用宿主 hover 令牌当底色，
    在设置页里显得像一张**套在卡片里的卡片**。改成「凹面」：与环境同一套中间灰，
    只靠一条细边和一点内边距把它从正文里分出来。 */
-.npr-settings-page .npr-service { margin: 0; padding: 14px 16px; border: 1px solid var(--npr-set-line-soft); border-radius: 10px; background: var(--npr-set-sunken); }
+.npr-settings-page .npr-service { margin: 0; padding: 16px; border: 1px solid var(--npr-set-line-soft); border-radius: var(--npr-set-radius); background: var(--npr-set-sunken); }
 .npr-settings-page .npr-service-lead, .npr-settings-page .npr-service-note { font-size: 11.5px; }
 .npr-settings-source-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-.npr-settings-source-actions button { display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 9px; border: 1px solid var(--npr-border); border-radius: 7px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 11px; cursor: pointer; }
-.npr-settings-source-actions button:hover { background: var(--npr-hover); }
-.npr-settings-import { padding: 15px; margin-bottom: 14px; border: 1px solid var(--npr-border); border-radius: 9px; background: var(--npr-bg-2); }
+/* 次级按钮（outline）：coss 是 `h-8 px-3 rounded-lg border bg-background shadow-xs`。
+   这里把字体抬到 11.5 / 500 —— 11px 常规在中文里笔画会断，而它在窄窗口里
+   还要跟「我的订阅 · N 个源」挤在同一行。 */
+.npr-settings-source-actions button { display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 10px; border: 1px solid var(--npr-set-line); border-radius: var(--npr-set-radius-ctl); background: transparent; color: var(--npr-fg); font: inherit; font-size: 11.5px; font-weight: 500; cursor: pointer; transition: background-color .12s ease, border-color .12s ease; }
+.npr-settings-source-actions button:hover { background: color-mix(in srgb, var(--npr-fg) 5%, transparent); border-color: color-mix(in srgb, var(--npr-fg) 16%, var(--npr-bg)); }
+.npr-settings-source-actions button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--npr-set-ring-btn); }
+.npr-settings-import { padding: 15px; margin-bottom: 14px; border: 1px solid var(--npr-set-line-soft); border-radius: var(--npr-set-radius); background: var(--npr-set-sunken); }
 .npr-settings-content .npr-opml-import { display: grid; gap: 9px; border: 0; padding: 0; }
 .npr-opml-import legend { padding: 0 0 8px; font-size: 12px; font-weight: 600; }
-.npr-opml-import input, .npr-opml-import textarea { width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--npr-border); border-radius: 7px; background: var(--npr-bg); color: var(--npr-fg); font: inherit; font-size: 12px; }
+.npr-opml-import input, .npr-opml-import textarea { width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--npr-set-line); border-radius: var(--npr-set-radius-ctl); background: var(--npr-bg); color: var(--npr-fg); font: inherit; font-size: 12px; }
+.npr-opml-import :is(input, textarea):focus-visible { outline: none; border-color: color-mix(in srgb, var(--npr-fg) 38%, var(--npr-bg)); box-shadow: 0 0 0 3px var(--npr-set-ring-input); }
 .npr-opml-import input[type=file] { border-style: dashed; }
 .npr-opml-import .npr-btn { width: max-content; }
 .npr-opml-results { max-height: 200px; overflow: auto; }
@@ -836,29 +907,34 @@
 .npr-settings-about-slogan span { display: block; margin-top: 2px; font-size: 11px; letter-spacing: .05em; color: var(--npr-muted); }
 .npr-settings-about-card > p.npr-settings-about-slogan + p { margin-top: 12px; }
 .npr-settings-links { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
-.npr-settings-links a { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 11px; border: 1px solid var(--npr-border); border-radius: 8px; color: var(--npr-fg); font-size: 12px; text-decoration: none; }
-.npr-settings-links a:hover { background: var(--npr-hover); text-decoration: none; }
+.npr-settings-links a { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--npr-set-line); border-radius: var(--npr-set-radius-ctl); color: var(--npr-fg); font-size: 12px; text-decoration: none; transition: background-color .12s ease, border-color .12s ease; }
+.npr-settings-links a:hover { background: color-mix(in srgb, var(--npr-fg) 5%, transparent); border-color: color-mix(in srgb, var(--npr-fg) 16%, var(--npr-bg)); text-decoration: none; }
+.npr-settings-links a:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--npr-set-ring-btn); }
 /* 保存条与内容之间必须有一条线：原先它只是一块同色白带，内容滚到它下面时
    看起来像被裁掉，而不是「到底了」。按钮宽度改回内容宽（86px 是给两个字留的，
    四个字时反而挤），并把「保存中…」的宽度变化吃掉 —— 否则点一下按钮会缩。 */
-.npr-settings-footer { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 60px; padding: 12px 22px; border-top: 1px solid var(--npr-set-line-soft); background: var(--npr-bg); }
+.npr-settings-footer { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 60px; padding: 12px 20px; border-top: 1px solid var(--npr-set-line-soft); background: var(--npr-bg); }
 .npr-settings-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--npr-muted); font-size: 11.5px; }
-.npr-settings-footer button { flex: none; min-width: 92px; height: 34px; padding: 0 16px; border: 0; border-radius: 8px; background: var(--npr-fg); color: var(--npr-bg); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+/* 主按钮：coss 的 `bg-primary text-primary-foreground h-8 rounded-lg shadow-xs`
+   —— 高度 34→32、圆角 8→10、padding 收到 14。禁用态用 coss 的 `opacity-64`
+   而不是 .45：.45 在浅色底上几乎看不见字，用户会当成「按钮坏了」。 */
+.npr-settings-footer button { flex: none; min-width: 92px; height: 32px; padding: 0 14px; border: 0; border-radius: var(--npr-set-radius-ctl); background: var(--npr-fg); color: var(--npr-bg); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.10); transition: background-color .12s ease, box-shadow .12s ease; }
 .npr-settings-footer button:hover:not(:disabled) { background: color-mix(in srgb, var(--npr-fg) 88%, var(--npr-bg)); }
-.npr-settings-footer button:disabled { opacity: .45; cursor: default; box-shadow: none; }
+.npr-settings-footer button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--npr-bg), 0 0 0 4px var(--npr-set-ring-btn); }
+.npr-settings-footer button:disabled { opacity: .64; cursor: default; box-shadow: none; }
 
 /* Manage feeds as a searchable list, with actions only where they are useful. */
 .npr-subscriptions { display: block !important; }
 .npr-subscriptions-toolbar { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
-.npr-subscriptions-search { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: 42px; padding: 0 12px; border: 1px solid var(--npr-border); border-radius: 8px; color: var(--npr-muted); }
-.npr-subscriptions-search:focus-within { border-color: color-mix(in srgb, var(--npr-fg) 34%, var(--npr-border)); }
+.npr-subscriptions-search { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: 42px; padding: 0 12px; border: 1px solid var(--npr-set-line); border-radius: var(--npr-set-radius-ctl); color: var(--npr-muted); background: var(--npr-set-field); transition: border-color .12s ease, box-shadow .12s ease; }
+.npr-subscriptions-search:focus-within { border-color: color-mix(in srgb, var(--npr-fg) 38%, var(--npr-bg)); box-shadow: 0 0 0 3px var(--npr-set-ring-input); }
 .npr-subscriptions-search input { min-width: 0; flex: 1; height: 100%; border: 0; outline: 0; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; }
 .npr-root .npr-settings-page .npr-subscriptions-search input:focus-visible { outline: none; box-shadow: none; border: 0; }
 .npr-subscriptions-selection { display: flex; justify-content: space-between; align-items: center; padding: 8px 0 4px; color: var(--npr-muted); font-size: 11px; }
 .npr-subscriptions-selection button { border: 0; background: transparent; color: var(--npr-muted); padding: 3px 0; font: inherit; cursor: pointer; }
 .npr-subscriptions-selection button:hover { color: var(--npr-fg); }
 .npr-subscriptions-list { max-height: 310px; overflow-y: auto; }
-.npr-subscription-row { display: flex; align-items: center; gap: 10px; min-height: 64px; padding: 8px 2px; border-bottom: 1px solid var(--npr-border); }
+.npr-subscription-row { display: flex; align-items: center; gap: 10px; min-height: 62px; padding: 8px 2px; border-bottom: 1px solid var(--npr-set-line-soft); }
 .npr-subscription-row input[type=checkbox] { accent-color: var(--npr-fg); }
 .npr-subscription-avatar { flex: 0 0 31px; width: 31px; height: 31px; display: grid; place-items: center; border-radius: 8px; background: var(--npr-bg-2); font-size: 13px; font-weight: 600; }
 .npr-subscription-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
@@ -887,7 +963,7 @@
 .npr-tip { position: fixed; z-index: 90; transform: translate(-50%, -100%); display: grid; gap: 2px; width: max-content; max-width: 240px; padding: 6px 9px; border-radius: 7px; background: var(--npr-fg); color: var(--npr-bg); font-size: 11px; line-height: 1.45; text-align: center; white-space: nowrap; pointer-events: none; box-shadow: 0 6px 18px rgba(0,0,0,.18); }
 .npr-tip em { font-style: normal; white-space: normal; opacity: .72; font-size: 10px; }
 .npr-subscriptions-empty { padding: 36px 8px; color: var(--npr-muted); text-align: center; font-size: 12px; }
-.npr-subscriptions-batch { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px; margin: 8px 0; border: 1px solid var(--npr-border); border-radius: 8px; background: var(--npr-bg-2); }
+.npr-subscriptions-batch { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px; margin: 8px 0; border: 1px solid var(--npr-set-line-soft); border-radius: var(--npr-set-radius-ctl); background: var(--npr-set-sunken); }
 .npr-subscriptions-batch strong { margin-right: 4px; font-size: 11px; }
 .npr-subscriptions-batch label { display: flex; align-items: center; gap: 5px; min-width: 150px; flex: 1; padding: 0 7px; border: 1px solid var(--npr-border); border-radius: 6px; background: var(--npr-bg); }
 .npr-subscriptions-batch input { width: 100%; height: 28px; border: 0; outline: 0; background: transparent; color: var(--npr-fg); font-size: 11px; }
@@ -896,10 +972,10 @@
 .npr-subscriptions-batch button.icon { width: 28px; justify-content: center; padding: 0; }
 .npr-subscriptions-confirm { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px; border: 1px solid var(--npr-border); border-radius: 7px; font-size: 11px; }
 .npr-subscription-editor-backdrop { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 20px; background: rgba(0,0,0,.35); }
-.npr-subscription-editor { display: grid; gap: 16px; width: min(430px, 100%); max-height: min(600px,90vh); overflow: auto; padding: 22px; border: 1px solid var(--npr-border); border-radius: 13px; background: var(--dsw-alias-bg-base); box-shadow: 0 18px 54px rgba(0,0,0,.17); color: var(--npr-fg); }
+.npr-subscription-editor { display: grid; gap: 16px; width: min(430px, 100%); max-height: min(600px,90vh); overflow: auto; padding: 22px; border: 1px solid var(--npr-set-line); border-radius: var(--npr-set-radius-lg); background: var(--dsw-alias-bg-base); box-shadow: 0 18px 54px rgba(0,0,0,.17); color: var(--npr-fg); }
 .npr-subscription-editor > div:first-child { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
 .npr-subscription-editor label { display: grid; gap: 4px; color: var(--npr-muted); font-size: 11px; }
-.npr-subscription-editor input, .npr-subscription-editor textarea { width: 100%; min-height: 42px; padding: 10px 12px; border: 1px solid var(--npr-border); border-radius: 8px; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; }
+.npr-subscription-editor input, .npr-subscription-editor textarea { width: 100%; min-height: 42px; padding: 10px 12px; border: 1px solid var(--npr-set-line); border-radius: var(--npr-set-radius-ctl); background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; }
 .npr-root .npr-subscription-editor :is(input,textarea):focus-visible { outline: 0; box-shadow: none; border-color: var(--dsw-alias-label-secondary); }
 .npr-subscription-editor textarea { resize: vertical; line-height: 1.5; }
 .npr-subscription-editor p { margin: 0; color: var(--npr-muted); font-size: 12px; line-height: 1.5; }
@@ -909,19 +985,19 @@
 .npr-subscription-editor-hint { margin: -2px 0 0; color: var(--npr-muted); font-size: 11px; line-height: 1.6; }
 /* 补全历史的样例清单：最多露 5 条，标题单行省略，日期右对齐且不换行。 */
 .npr-backfill-sample { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; max-height: 176px; overflow-y: auto; }
-.npr-backfill-sample li { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 7px 9px; border: 1px solid var(--npr-border); border-radius: 7px; background: var(--npr-bg-2); color: var(--npr-fg); font-size: 11px; }
+.npr-backfill-sample li { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 7px 9px; border: 1px solid var(--npr-set-line-soft); border-radius: 8px; background: var(--npr-set-sunken); color: var(--npr-fg); font-size: 11px; }
 .npr-backfill-sample li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .npr-backfill-sample li small { flex: 0 0 auto; color: var(--npr-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .npr-group-manager { margin-top: 20px; }
 .npr-group-heading { display: flex; justify-content: space-between; padding: 0 2px 8px; font-size: 12px; }
 .npr-group-heading span, .npr-group-row small { color: var(--npr-muted); font-size: 11px; }
-.npr-group-row { display: flex; align-items: center; gap: 9px; min-height: 40px; border-top: 1px solid var(--npr-border); color: var(--npr-fg); font-size: 12px; }
+.npr-group-row { display: flex; align-items: center; gap: 9px; min-height: 40px; border-top: 1px solid var(--npr-set-line-soft); color: var(--npr-fg); font-size: 12px; }
 .npr-group-row span { flex: 1; }
 .npr-group-row button, .npr-prompt-row button { display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 7px; background: transparent; color: var(--npr-muted); cursor: pointer; }
 .npr-group-row button:hover, .npr-prompt-row button:hover { background: var(--npr-hover); color: var(--npr-fg); }
-.npr-prompt-add { display: inline-flex; align-items: center; gap: 5px; height: 36px; padding: 0 12px; border: 1px solid var(--npr-border); border-radius: 8px; background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; cursor: pointer; }
-.npr-prompt-add:hover { background: var(--npr-hover); }
-.npr-prompt-row { display: flex; align-items: center; gap: 3px; min-height: 58px; border-top: 1px solid var(--npr-border); }
+.npr-prompt-add { display: inline-flex; align-items: center; gap: 5px; height: 34px; padding: 0 12px; border: 1px solid var(--npr-set-line); border-radius: var(--npr-set-radius-ctl); background: transparent; color: var(--npr-fg); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; transition: background-color .12s ease, border-color .12s ease; }
+.npr-prompt-add:hover { background: color-mix(in srgb, var(--npr-fg) 5%, transparent); border-color: color-mix(in srgb, var(--npr-fg) 16%, var(--npr-bg)); }
+.npr-prompt-row { display: flex; align-items: center; gap: 3px; min-height: 58px; border-top: 1px solid var(--npr-set-line-soft); }
 .npr-prompt-row > div { display: grid; gap: 4px; flex: 1; min-width: 0; }
 .npr-prompt-row strong { font-size: 12px; }
 .npr-prompt-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--npr-muted); font-size: 11px; }
