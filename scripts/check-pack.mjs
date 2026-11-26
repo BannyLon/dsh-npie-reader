@@ -54,6 +54,14 @@ const flags = new Set(process.argv.slice(2));
 /** 一次打包约 30 秒（205 个文件，`npm pack` 自己就要这么久）—— 这条检查本来就慢。 */
 const PACK_TIMEOUT = 5 * 60 * 1000;
 
+/**
+ * DSH Plugin Manager 详情页的运行时展示资源。
+ * 它们虽然在 docs/ 下，但不是给人读的文档源，而是 `meta.detail` 在包内指向、
+ * 由宿主直接渲染的文件：缺一份，详情页就显示「文件缺失 + Retry」。
+ * 具名登记，不放宽整个 docs/。
+ */
+const DETAIL_ASSETS = new Set(['docs/DETAIL.md', 'docs/DETAIL.zh.md', 'docs/preview.svg']);
+
 const toPosix = (p) => p.split(sep).join('/');
 const md5 = (text) => createHash('md5').update(text).digest('hex');
 const sample = (list, n = 3) => (list.length <= n ? list.join(', ') : `${list.slice(0, n).join(', ')} …（共 ${list.length}）`);
@@ -214,15 +222,38 @@ async function main() {
     const addEntry = (value) => {
       if (typeof value === 'string') entries.add(value.replace(/^\.\//, ''));
     };
+    // 入口可能是 glob（0.92.0 起 `./locale/*.json` 也在 exports 里）。glob 不能当
+    // 字面文件名去比对，否则 locale 真打进包了守卫仍报「入口点名的文件不在包里」。
+    // 只对**包内已有的文件**做展开：既认 glob，又不放宽「必须真的在包里」这条牙。
+    const expandEntry = (rel) => {
+      if (!rel.includes('*')) return [rel];
+      const escaped = rel.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+      const matcher = new RegExp(`^${escaped}$`);
+      return packedList.filter((candidate) => matcher.test(candidate));
+    };
     addEntry(pkg.main);
     for (const value of Object.values(pkg.exports ?? {})) {
       if (value && typeof value === 'object') for (const inner of Object.values(value)) addEntry(inner);
       else addEntry(value);
     }
     addEntry(pkg.dsh?.bundle?.patch);
-    const missingEntries = [...entries].filter((rel) => !packed.has(rel));
+    // 0.92.0：详情页文件只在 locale 的 `meta.detail` 里点名，不在 exports 里。
+    // 若不登记进入口检查，删掉 files 里的 DETAIL.md 守卫照样全绿 —— 安慰剂。
+    // 从两份 locale 里把 detail 路径读出来，纳入同一套「必须在包里」判据。
+    for (const localeFile of ['locale/en.json', 'locale/zh.json']) {
+      if (!existsSync(join(root, localeFile))) continue;
+      const locale = JSON.parse(readFileSync(join(root, localeFile), 'utf8'));
+      const detail = locale?.meta?.detail;
+      if (typeof detail === 'string' && !detail.startsWith('/') && !detail.includes('..')) {
+        addEntry(detail);
+      }
+    }
+    // preview.svg 由 DETAIL 文档引用，同样必须随包；不在 exports 里，单独登记。
+    for (const asset of DETAIL_ASSETS) addEntry(asset);
+    const resolvedEntries = new Set([...entries].flatMap(expandEntry));
+    const missingEntries = [...resolvedEntries].filter((rel) => !packed.has(rel));
     if (missingEntries.length > 0) err(`入口点名的文件不在包里：${missingEntries.join(', ')}`);
-    else ok(`入口文件齐：${[...entries].join(' / ')}`);
+    else ok(`入口文件齐：${[...resolvedEntries].join(' / ')}`);
 
     // ★ `build.mjs` 只 `mkdirSync(lib)`、**不清理** lib：旧产物会一直留在盘上。
     //   入口没点名的 lib 文件 = 旧构建残留，会被一起发出去（用户永远加载不到它）。
@@ -236,7 +267,10 @@ async function main() {
       [(rel) => rel.startsWith('scripts/'), '开发脚本'],
       [(rel) => rel.startsWith('node_modules/'), '依赖'],
       [(rel) => rel.startsWith('retired/'), '下线数据'],
-      [(rel) => rel.startsWith('docs/'), '文档源'],
+      // 0.92.0：这三份不是「文档源」，而是 DSH Plugin Manager 详情页的**运行时展示资源**。
+      // `meta.detail` 指向包内文档，`npm pack` 必须带上它们，否则详情页显示「文件缺失 + Retry」。
+      // 只豁免这三份具名文件；docs/ 下其它文件仍属文档源，不许进包。
+      [(rel) => rel.startsWith('docs/') && !DETAIL_ASSETS.has(rel), '文档源'],
       [(rel) => rel.startsWith('shots/'), '截图'],
       [(rel) => rel.startsWith('assets/'), '素材'],
       [(rel) => rel.startsWith('shared/'), '共享类型'],
@@ -275,6 +309,11 @@ async function main() {
       // 上游「中文独立博客」目录的内容已内联进 client.js，但**署名义务还在** ⇒ 它的
       // LICENSE 必须随包。这条不是「顺手留着的垃圾」。
       if (rel === 'vendor/chinese-independent-blogs/LICENSE') return '上游目录署名';
+      if (DETAIL_ASSETS.has(rel)) return '详情页展示资源';
+      // 0.92.0：Plugin Manager 在**激活插件前**读 locale 的名称/描述/详情路径与图标。
+      // 它们是展示元数据，不是文档源，也不进 bundle，属于必须随包发布的文件。
+      if (rel.startsWith('locale/') && rel.endsWith('.json')) return '展示元数据（locale）';
+      if (rel === 'icon.svg') return '展示元数据（图标）';
       if (rel.startsWith('vendor/')) return '运行时';
       if (rel.startsWith('lib/')) return '运行时';
       if (rel === 'src/host/ocr-vision.js') return '运行时';
@@ -417,6 +456,20 @@ async function selfCheck() {
         pkg.files = [...pkg.files, 'src/data/*.json'];
       },
       expect: /src\/data/,
+    },
+    {
+      name: '去掉 files 里的 "docs/DETAIL.zh.md"（详情页会缺中文文件）',
+      apply: (pkg) => {
+        pkg.files = pkg.files.filter((item) => item !== 'docs/DETAIL.zh.md');
+      },
+      expect: /入口点名的文件不在包里/,
+    },
+    {
+      name: '把 "../../etc/passwd" 写进 exports（包外路径不该被当成入口放过）',
+      apply: (pkg) => {
+        pkg.exports = { ...(pkg.exports ?? {}), './escape': '../../etc/passwd' };
+      },
+      expect: /入口点名的文件不在包里/,
     },
   ];
 

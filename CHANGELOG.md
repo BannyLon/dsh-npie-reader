@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.92.0 — 2026-11-26
+
+> 基线 commit `3d9d396`（v0.91.0）。本版为**发布元数据版**：不改功能代码，不改周报状态（维持撤下）。
+
+### 补齐插件详情页与展示资源
+
+用户拍板：升 0.92.0、补详情页、周报维持撤下、GitHub 与 npm 同发。
+
+- `package.json` 的 `exports` 与 `files` 补齐 `locale/*.json`、`icon.svg`（0.91.0 之后一直在工作区、未提交）；再补 `docs/DETAIL.md`、`docs/DETAIL.zh.md`、`docs/preview.svg`。不补的后果：Plugin Manager 读不到名称、描述与图标，详情页回退 README 或报缺失。
+- `locale/zh.json`、`locale/en.json` 加 `meta.detail`，分别指向 `docs/DETAIL.zh.md`、`docs/DETAIL.md`；`meta.title`/`meta.description` 保留 0.91.0 原文。
+- 新增 `docs/preview.svg`：640×300、无 `<text>`、无外链、无脚本、无 `foreignObject`，中英文详情页共用，深浅色可读。画的是「读三种、记一处」的抽象示意，不塞截图、不做假页面。
+- `docs/DETAIL.md`、`docs/DETAIL.zh.md` 各只放一行图片引用；功能与用法仍在 `meta.description`，符合 dsh-doc 详情页规范。
+
+### 打包守卫同步加牙（防止这次改动变成安慰剂）
+
+- `scripts/check-pack.mjs`：`exports` 里的 glob（如 `./locale/*.json`）现在按包内实际文件展开，不再误报「入口点名的文件不在包里」。
+- 详情页文件只在 `meta.detail` 点名、不在 `exports` 里；旧守卫删掉 `DETAIL.zh.md` 仍全绿（实测）。现把两份 locale 的 `meta.detail` 与三份展示资源纳入「必须在包里」判据。
+- 给 `icon.svg`、`locale/*.json`、`DETAIL*` 补上分类归属；`docs/` 其它文件仍禁止进包。
+- `--self-check` 加两条反向对照：删 `DETAIL.zh.md`、把包外路径写进 `exports`，守卫都必须变红。实测 5/5 变异体全部被抓到。
+
+### 周报维持撤下
+
+按用户 2026-11-22 决定：接口保留、界面不挂。`WeeklyReport.jsx` 仍无生产调用点，esbuild 继续 tree-shake，本次不改。
+
+### 清理与发布
+
+- 公开前清除 `.workbuddy/`（会话记忆不属于插件源码）。提交按文件 add，不用 `git add -A`。
+- 顺序：本地全量验证 → commit + tag `v0.92.0` → push GitHub → npm publish → 查 registry versions 确认落地（0.91.0 教训：不能只信 `+ pkg@ver` 输出）。
+
+### 判据
+
+- 契约守卫 `check-host-contract.mjs --strict`：8 OK / 0 ERROR。
+- 全量测试 `npm test`：4351/4351 通过。
+- 打包守卫 `check-pack.mjs`：14 项全过 / 211 文件；`--self-check`：5/5 有牙。
+- `npm pack --dry-run`：211 文件，6 个新增/补声明资源全部在包内。
+
 ## 0.91.0 — 2026-11-23
 
 ### 设置页换成 coss 的视觉语言

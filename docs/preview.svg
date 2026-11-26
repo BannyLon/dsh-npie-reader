@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="300" viewBox="0 0 640 300" role="img" aria-label="Limina reader: three reads, one place to keep notes">
+  <defs>
+    <linearGradient id="npr-preview-paper" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FDFBF9"/>
+      <stop offset="1" stop-color="#F3EFEA"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="300" rx="24" fill="url(#npr-preview-paper)"/>
+  <rect x="32" y="36" width="284" height="228" rx="16" fill="none" stroke="#F9771D" stroke-width="2"/>
+  <rect x="324" y="36" width="284" height="228" rx="16" fill="none" stroke="#1C1C1B" stroke-width="2" opacity=".35"/>
+  <circle cx="66" cy="70" r="10" fill="#F9771D"/>
+  <rect x="86" y="62" width="92" height="16" rx="8" fill="#1C1C1B" opacity=".55"/>
+  <rect x="56" y="102" width="236" height="16" rx="8" fill="#1C1C1B" opacity=".28"/>
+  <rect x="56" y="130" width="180" height="16" rx="8" fill="#1C1C1B" opacity=".22"/>
+  <rect x="56" y="158" width="212" height="16" rx="8" fill="#1C1C1B" opacity=".22"/>
+  <rect x="56" y="192" width="92" height="44" rx="10" fill="#F9771D" opacity=".16"/>
+  <rect x="158" y="192" width="92" height="44" rx="10" fill="#F9771D" opacity=".16"/>
+  <rect x="260" y="192" width="32" height="44" rx="10" fill="#F9771D" opacity=".16"/>
+  <circle cx="358" cy="70" r="10" fill="#1C1C1B" opacity=".55"/>
+  <rect x="378" y="62" width="92" height="16" rx="8" fill="#1C1C1B" opacity=".45"/>
+  <rect x="348" y="102" width="236" height="16" rx="8" fill="#1C1C1B" opacity=".22"/>
+  <rect x="348" y="130" width="150" height="16" rx="8" fill="#1C1C1B" opacity=".22"/>
+  <rect x="348" y="158" width="206" height="16" rx="8" fill="#1C1C1B" opacity=".22"/>
+  <path d="M348 198 h236 M348 224 h168" stroke="#1C1C1B" stroke-width="3" stroke-linecap="round" opacity=".3"/>
+  <circle cx="566" cy="232" r="12" fill="#F9771D"/>
+</svg>
